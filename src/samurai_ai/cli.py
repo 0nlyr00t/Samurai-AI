@@ -1,0 +1,158 @@
+import argparse
+import json
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from samurai_ai.config import default_database_path
+from samurai_ai.domain.operations import (
+    Operation,
+    OperationMode,
+    OperationStatus,
+    OperationTransitionError,
+)
+from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
+from samurai_ai.services.operations import OperationNotFoundError, OperationService
+from samurai_ai.storage.database import Database
+from samurai_ai.storage.operations import OperationConflictError, OperationRepository
+from samurai_ai.tui.app import SamuraiApp
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="samurai")
+    parser.add_argument("--db", type=Path, help="Path to the Samurai SQLite database")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    subcommands = parser.add_subparsers(dest="command")
+
+    operation = subcommands.add_parser("operation", help="Manage operations")
+    operation_commands = operation.add_subparsers(dest="operation_command", required=True)
+
+    create = operation_commands.add_parser("create", help="Create an operation")
+    create.add_argument("name")
+    create.add_argument("--mode", choices=[mode.value for mode in OperationMode], required=True)
+    create.add_argument("--objective", default="")
+    create.add_argument("--include", action="append", dest="includes", required=True)
+    create.add_argument("--exclude", action="append", dest="excludes", default=[])
+
+    operation_commands.add_parser("list", help="List operations")
+
+    show = operation_commands.add_parser("show", help="Show an operation")
+    show.add_argument("operation_id")
+    show.add_argument("--events", action="store_true")
+
+    transition = operation_commands.add_parser("transition", help="Change operation status")
+    transition.add_argument("operation_id")
+    transition.add_argument("status", choices=[status.value for status in OperationStatus])
+
+    scope = subcommands.add_parser("scope", help="Evaluate operation scope")
+    scope_commands = scope.add_subparsers(dest="scope_command", required=True)
+    check = scope_commands.add_parser("check", help="Check a target against operation scope")
+    check.add_argument("operation_id")
+    check.add_argument("target")
+
+    tui = subcommands.add_parser("tui", help="Open the terminal interface")
+    tui.add_argument("--operation", dest="operation_id")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    service = _make_service(args.db)
+
+    try:
+        if args.command == "operation":
+            return _handle_operation(args, service)
+        if args.command == "scope":
+            decision = service.check_scope(args.operation_id, args.target)
+            if args.json_output:
+                _print_json(decision.model_dump(mode="json"))
+            else:
+                action = "ALLOW" if decision.allowed else "DENY"
+                print(f"{action} {decision.target}: {decision.detail}")
+            return 0 if decision.allowed else 1
+
+        SamuraiApp(service, getattr(args, "operation_id", None)).run()
+        return 0
+    except (
+        OperationNotFoundError,
+        OperationTransitionError,
+        OperationConflictError,
+        ScopeValidationError,
+        ValidationError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _handle_operation(args: argparse.Namespace, service: OperationService) -> int:
+    if args.operation_command == "create":
+        scope = ScopeContract(includes=tuple(args.includes), excludes=tuple(args.excludes))
+        operation = service.create(args.name, OperationMode(args.mode), scope, args.objective)
+        _emit_operation(operation, args.json_output)
+        return 0
+
+    if args.operation_command == "list":
+        operations = service.list_all()
+        if args.json_output:
+            _print_json([operation.model_dump(mode="json") for operation in operations])
+        else:
+            for operation in operations:
+                print(
+                    f"{operation.id}\t{operation.mode.value}\t{operation.status.value}\t"
+                    f"{operation.name}"
+                )
+        return 0
+
+    if args.operation_command == "show":
+        operation = service.get(args.operation_id)
+        if args.json_output:
+            payload = operation.model_dump(mode="json")
+            if args.events:
+                payload["events"] = [
+                    event.model_dump(mode="json") for event in service.events(operation.id)
+                ]
+            _print_json(payload)
+        else:
+            _print_operation(operation)
+            if args.events:
+                for event in service.events(operation.id):
+                    print(
+                        f"{event.id}\t{event.created_at.isoformat()}\t{event.event_type}\t"
+                        f"{json.dumps(event.payload, ensure_ascii=False)}"
+                    )
+        return 0
+
+    operation = service.transition(args.operation_id, OperationStatus(args.status))
+    _emit_operation(operation, args.json_output)
+    return 0
+
+
+def _make_service(database_path: Path | None) -> OperationService:
+    path = database_path or default_database_path()
+    return OperationService(OperationRepository(Database(path)))
+
+
+def _emit_operation(operation: Operation, json_output: bool) -> None:
+    if json_output:
+        _print_json(operation.model_dump(mode="json"))
+    else:
+        _print_operation(operation)
+
+
+def _print_operation(operation: Operation) -> None:
+    print(f"{operation.id}\t{operation.mode.value}\t{operation.status.value}\t{operation.name}")
+    if operation.objective:
+        print(f"objective: {operation.objective}")
+    print(f"scope: {', '.join(operation.scope.includes)}")
+    if operation.scope.excludes:
+        print(f"excludes: {', '.join(operation.scope.excludes)}")
+
+
+def _print_json(payload: object) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def run() -> None:
+    raise SystemExit(main())
