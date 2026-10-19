@@ -6,7 +6,9 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.config import default_database_path
+from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.operations import (
     Operation,
     OperationMode,
@@ -14,8 +16,10 @@ from samurai_ai.domain.operations import (
     OperationTransitionError,
 )
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
+from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.storage.database import Database
+from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.tui.app import SamuraiApp
 
@@ -54,18 +58,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     tui = subcommands.add_parser("tui", help="Open the terminal interface")
     tui.add_argument("--operation", dest="operation_id")
+
+    register_kernel_commands(subcommands)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    service = _make_service(args.db)
+    operation_service, kernel_service = _make_services(args.db)
 
     try:
+        kernel_result = handle_kernel_command(args, kernel_service)
+        if kernel_result is not None:
+            return kernel_result
         if args.command == "operation":
-            return _handle_operation(args, service)
+            return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
-            decision = service.check_scope(args.operation_id, args.target)
+            decision = operation_service.check_scope(args.operation_id, args.target)
             if args.json_output:
                 _print_json(decision.model_dump(mode="json"))
             else:
@@ -73,20 +82,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"{action} {decision.target}: {decision.detail}")
             return 0 if decision.allowed else 1
 
-        SamuraiApp(service, getattr(args, "operation_id", None)).run()
+        SamuraiApp(
+            operation_service,
+            kernel_service,
+            getattr(args, "operation_id", None),
+        ).run()
         return 0
     except (
         OperationNotFoundError,
         OperationTransitionError,
         OperationConflictError,
         ScopeValidationError,
+        KernelError,
         ValidationError,
+        json.JSONDecodeError,
+        OSError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
 
-def _handle_operation(args: argparse.Namespace, service: OperationService) -> int:
+def _handle_operation(
+    args: argparse.Namespace,
+    service: OperationService,
+    kernel: KernelService,
+) -> int:
     if args.operation_command == "create":
         scope = ScopeContract(includes=tuple(args.includes), excludes=tuple(args.excludes))
         operation = service.create(args.name, OperationMode(args.mode), scope, args.objective)
@@ -124,14 +144,20 @@ def _handle_operation(args: argparse.Namespace, service: OperationService) -> in
                     )
         return 0
 
-    operation = service.transition(args.operation_id, OperationStatus(args.status))
+    operation = kernel.transition_operation(
+        args.operation_id,
+        OperationStatus(args.status),
+    )
     _emit_operation(operation, args.json_output)
     return 0
 
 
-def _make_service(database_path: Path | None) -> OperationService:
+def _make_services(database_path: Path | None) -> tuple[OperationService, KernelService]:
     path = database_path or default_database_path()
-    return OperationService(OperationRepository(Database(path)))
+    database = Database(path)
+    operations = OperationService(OperationRepository(database))
+    kernel = KernelService(operations, KernelRepository(database))
+    return operations, kernel
 
 
 def _emit_operation(operation: Operation, json_output: bool) -> None:
