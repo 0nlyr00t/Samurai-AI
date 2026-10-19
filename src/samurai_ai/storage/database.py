@@ -39,7 +39,97 @@ BEGIN
 END;
 """
 
-_MIGRATIONS: tuple[tuple[int, str], ...] = ((1, _MIGRATION_1),)
+_MIGRATION_2 = """
+CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    approved INTEGER NOT NULL,
+    is_current INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS plans_operation_id
+ON plans(operation_id, created_at, id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS plans_single_current
+ON plans(operation_id) WHERE is_current = 1;
+
+CREATE TABLE IF NOT EXISTS approvals (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    task_id TEXT,
+    risk_class TEXT NOT NULL,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS approvals_operation_id
+ON approvals(operation_id, status, id);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    requirement TEXT,
+    task_id TEXT,
+    gate_id TEXT,
+    finding_id TEXT,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS artifacts_operation_id
+ON artifacts(operation_id, id);
+
+CREATE INDEX IF NOT EXISTS artifacts_task_requirement
+ON artifacts(operation_id, task_id, requirement);
+
+CREATE INDEX IF NOT EXISTS artifacts_gate_requirement
+ON artifacts(operation_id, gate_id, requirement);
+
+CREATE INDEX IF NOT EXISTS artifacts_finding_id
+ON artifacts(finding_id);
+
+CREATE TRIGGER IF NOT EXISTS artifacts_no_update
+BEFORE UPDATE ON artifacts
+BEGIN
+    SELECT RAISE(ABORT, 'artifacts are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_no_delete
+BEFORE DELETE ON artifacts
+BEGIN
+    SELECT RAISE(ABORT, 'artifacts are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS findings (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    status TEXT NOT NULL,
+    duplicate_of TEXT,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS findings_operation_id
+ON findings(operation_id, status, id);
+"""
+
+_MIGRATIONS: tuple[tuple[int, str], ...] = ((1, _MIGRATION_1), (2, _MIGRATION_2))
 
 
 class Database:

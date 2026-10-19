@@ -45,30 +45,37 @@ uv run samurai tui
 
 ## 3. Текущее состояние
 
-Завершен **Этап 0 — Walking Skeleton**:
+Завершен **Этап 0 — Walking Skeleton** и **Этап 1 core — Operation Kernel**:
 
 - четыре режима операций и проверяемые lifecycle transitions;
 - include/exclude scope для domain, wildcard, URL origins и IP/CIDR;
-- IDNA, IPv4/IPv6, deny by default и приоритет exclusions;
-- SQLite migrations, operations и append-only events;
-- optimistic concurrency для обновления операции;
-- CLI и базовый Textual TUI;
-- 29 unit/integration/CLI/TUI tests;
-- ruff, strict mypy, package build и CLI smoke проходят успешно.
+- plans, tasks, dependencies, stage gates и artifact requirements;
+- approvals R0–R4: R0/R1 auto-approved, R2/R3 требуют решения, R4 auto-rejected;
+- immutable evidence artifacts с SHA-256 и файловым хранилищем;
+- findings workflow `candidate → validating → validated / false-positive / duplicate → reported`;
+- policy-gated operation transitions;
+- SQLite migrations v1/v2, append-only events и optimistic concurrency;
+- kernel CLI и read-only TUI views;
+- 54 unit/integration/CLI/TUI tests;
+- ruff, strict mypy и CLI E2E проходят успешно.
 
-LLM, MCP и внешнее выполнение security-инструментов еще не реализованы. Не показывать эти возможности как готовые и не имитировать AI-работу.
+LLM, MCP и внешнее выполнение security-инструментов еще не реализованы. Snapshots/reconcile/fork еще не реализованы и запланированы отдельным recovery-срезом перед Tool Execution. Не показывать эти возможности как готовые.
 
 ## 4. Карта репозитория
 
 - `src/samurai_ai/domain/operations.py` — Operation, OperationMode, OperationStatus и переходы.
 - `src/samurai_ai/domain/scope.py` — ScopeContract и детерминированные решения.
+- `src/samurai_ai/domain/kernel.py` — PlanTask, StageGate, OperationPlan, Approval, Artifact и Finding.
 - `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
+- `src/samurai_ai/storage/kernel.py` — KernelRepository для plans/approvals/artifacts/findings.
 - `src/samurai_ai/services/operations.py` — сервисный сценарий операций.
-- `src/samurai_ai/cli.py` — CLI entry point и команды.
+- `src/samurai_ai/services/kernel.py` — KernelService, policy preconditions и summary.
+- `src/samurai_ai/cli.py` — CLI entry point и общие команды.
+- `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
 - `src/samurai_ai/tui/app.py` — TUI без доменной логики в обработчиках.
-- `tests/unit` — чистое доменное ядро и scope edge cases.
-- `tests/integration` — SQLite, recovery, append-only и CLI.
+- `tests/unit` — чистое доменное ядро и scope/kernel edge cases.
+- `tests/integration` — SQLite, recovery, append-only, CLI и kernel E2E.
 - `tests/tui` — клавиатурный TUI smoke через `run_test`.
 
 ## 5. Текущая семантика scope
@@ -79,23 +86,60 @@ LLM, MCP и внешнее выполнение security-инструменто�
 - URL rules поддерживают только HTTP(S) origins; path-level rules пока отклоняются.
 - Domain/IP rules могут применяться к HTTP(S) URL targets.
 - Невалидная цель дает `INVALID_TARGET` и `allowed=False`.
-- DNS resolution, redirect и network egress enforcement относятся к следующему этапу исполнения, а не к текущему парсеру.
+- DNS resolution, redirect и network egress enforcement относятся к Tool Execution, а не к текущему парсеру.
 
-## 6. Следующий этап — Operation Kernel
+## 6. Kernel CLI и plan definition
 
-Реализовывать вертикальными срезами с тестами:
+Plan создается из JSON-файла:
 
-1. Добавить доменные модели Plan, Task, Dependency, StageGate и artifact requirements.
-2. Добавить RiskClass R0–R4, Approval и отдельный policy engine; не делегировать approvals модели.
-3. Добавить Evidence/Artifact и Findings workflow: `Candidate → Validating → Validated / False Positive / Duplicate → Reported`.
-4. Расширить migrations и repositories; сохранить append-only события и optimistic concurrency.
-5. Реализовать snapshots/reconcile: после crash действие с неизвестным внешним результатом не повторять автоматически.
-6. Добавить Plan/Tasks/Approvals/Evidence/Findings панели в TUI только после появления реальных сервисов.
-7. Проверить, что gate нельзя закрыть без обязательных артефактов, а finding нельзя опубликовать без доказательств.
+```json
+{
+  "title": "Authorized lab plan",
+  "tasks": [
+    {
+      "id": "recon",
+      "title": "Map the service",
+      "risk_class": "r1",
+      "depends_on": [],
+      "required_artifacts": ["service-map"]
+    }
+  ],
+  "gates": [
+    {
+      "id": "recon-complete",
+      "name": "Recon is complete",
+      "required_artifacts": ["service-proof"]
+    }
+  ]
+}
+```
 
-Подробные acceptance criteria — в `md/development-plan.md`.
+Основные команды:
 
-## 7. Инварианты и правила изменений
+```bash
+samurai plan create <operation-id> plan.json
+samurai plan show|approve <operation-id>
+samurai task start|complete <operation-id> <task-id>
+samurai gate pass <operation-id> <gate-id>
+samurai artifact add|list <operation-id> ...
+samurai finding create|list|attach|validate|report ...
+samurai approval request|list|approve|reject ...
+```
+
+TUI read-only команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/status`, `/scope`.
+
+## 7. Следующий этап — Recovery Hardening и Tool Execution
+
+Сначала завершить Stage 1b:
+
+1. Operation snapshots и controlled restore points.
+2. Reconcile in-flight actions после crash/restart; действие с неизвестным внешним результатом не повторять автоматически.
+3. Operation fork/resume без копирования секретов и без потери audit trail.
+4. Diff для изменений scope/plan и operator-facing recovery report.
+
+Затем начинать Stage 2: tool registry, async process manager, sandbox, egress policy, MCP, secrets redaction и prompt-injection defenses. Подробные acceptance criteria — в `md/development-plan.md`.
+
+## 8. Инварианты и правила изменений
 
 - Не ослаблять scope и не переносить enforcement только в prompts.
 - Не выполнять сетевые или деструктивные действия в unit/integration tests.
@@ -106,7 +150,7 @@ LLM, MCP и внешнее выполнение security-инструменто�
 - Для любого bug fix сначала добавить воспроизводящий тест.
 - Комментарии и документацию обновлять вместе с поведением.
 
-## 8. Definition of Done для каждого этапа
+## 9. Definition of Done для каждого этапа
 
 ```bash
 uv run pytest
@@ -122,7 +166,7 @@ uv build
 - не допускать непроверенные findings в отчеты и секреты в экспорт;
 - обновить `md/development-plan.md` и этот handoff, если изменились статус или правила работы.
 
-## 9. Git и безопасность credentials
+## 10. Git и безопасность credentials
 
 - Основная ветка: `main`.
 - Не использовать force push для обычной синхронизации.

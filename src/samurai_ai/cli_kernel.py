@@ -1,0 +1,305 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from samurai_ai.domain.kernel import (
+    Approval,
+    ApprovalStatus,
+    Artifact,
+    ArtifactKind,
+    Finding,
+    FindingSeverity,
+    OperationPlan,
+    PlanTask,
+    RiskClass,
+    StageGate,
+)
+from samurai_ai.services.kernel import KernelService
+
+
+def register_kernel_commands(
+    subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    plan = subcommands.add_parser("plan", help="Manage operation plans")
+    plan_commands = plan.add_subparsers(dest="plan_command", required=True)
+    plan_create = plan_commands.add_parser("create", help="Create the current plan from JSON")
+    plan_create.add_argument("operation_id")
+    plan_create.add_argument("plan_file", type=Path)
+    plan_show = plan_commands.add_parser("show", help="Show the current plan")
+    plan_show.add_argument("operation_id")
+    plan_approve = plan_commands.add_parser("approve", help="Approve the current plan")
+    plan_approve.add_argument("operation_id")
+
+    task = subcommands.add_parser("task", help="Manage plan tasks")
+    task_commands = task.add_subparsers(dest="task_command", required=True)
+    task_start = task_commands.add_parser("start", help="Start a pending task")
+    task_start.add_argument("operation_id")
+    task_start.add_argument("task_id")
+    task_complete = task_commands.add_parser("complete", help="Complete an in-progress task")
+    task_complete.add_argument("operation_id")
+    task_complete.add_argument("task_id")
+
+    gate = subcommands.add_parser("gate", help="Manage stage gates")
+    gate_commands = gate.add_subparsers(dest="gate_command", required=True)
+    gate_pass = gate_commands.add_parser("pass", help="Pass a gate after evidence checks")
+    gate_pass.add_argument("operation_id")
+    gate_pass.add_argument("gate_id")
+
+    artifact = subcommands.add_parser("artifact", help="Manage evidence artifacts")
+    artifact_commands = artifact.add_subparsers(dest="artifact_command", required=True)
+    artifact_add = artifact_commands.add_parser("add", help="Register a text artifact")
+    artifact_add.add_argument("operation_id")
+    artifact_add.add_argument(
+        "--kind", choices=[kind.value for kind in ArtifactKind], required=True
+    )
+    artifact_add.add_argument("--text", required=True)
+    artifact_add.add_argument("--summary", default="")
+    artifact_add.add_argument("--requirement")
+    artifact_add.add_argument("--task", dest="task_id")
+    artifact_add.add_argument("--gate", dest="gate_id")
+    artifact_add.add_argument("--finding", dest="finding_id")
+    artifact_list = artifact_commands.add_parser("list", help="List artifacts")
+    artifact_list.add_argument("operation_id")
+
+    finding = subcommands.add_parser("finding", help="Manage findings")
+    finding_commands = finding.add_subparsers(dest="finding_command", required=True)
+    finding_create = finding_commands.add_parser("create", help="Create a candidate finding")
+    finding_create.add_argument("operation_id")
+    finding_create.add_argument("title")
+    finding_create.add_argument(
+        "--severity", choices=[severity.value for severity in FindingSeverity], default="info"
+    )
+    finding_create.add_argument("--summary", default="")
+    finding_create.add_argument("--remediation", default="")
+    finding_list = finding_commands.add_parser("list", help="List findings")
+    finding_list.add_argument("operation_id")
+    finding_attach = finding_commands.add_parser("attach", help="Attach evidence to a finding")
+    finding_attach.add_argument("finding_id")
+    finding_attach.add_argument("artifact_id")
+    finding_validate = finding_commands.add_parser("validate", help="Validate a finding")
+    finding_validate.add_argument("finding_id")
+    finding_report = finding_commands.add_parser("report", help="Mark a finding as reported")
+    finding_report.add_argument("finding_id")
+    finding_false_positive = finding_commands.add_parser(
+        "false-positive", help="Mark a finding as false positive"
+    )
+    finding_false_positive.add_argument("finding_id")
+    finding_duplicate = finding_commands.add_parser(
+        "duplicate", help="Mark a finding as duplicate"
+    )
+    finding_duplicate.add_argument("finding_id")
+    finding_duplicate.add_argument("original_id")
+
+    approval = subcommands.add_parser("approval", help="Manage approvals")
+    approval_commands = approval.add_subparsers(dest="approval_command", required=True)
+    approval_request = approval_commands.add_parser("request", help="Request action approval")
+    approval_request.add_argument("operation_id")
+    approval_request.add_argument("--action", required=True)
+    approval_request.add_argument(
+        "--risk", choices=[risk.value for risk in RiskClass], required=True
+    )
+    approval_request.add_argument("--task", dest="task_id")
+    approval_request.add_argument("--reason", default="")
+    approval_request.add_argument("--requested-by", default="operator")
+    approval_list = approval_commands.add_parser("list", help="List approvals")
+    approval_list.add_argument("operation_id")
+    approval_list.add_argument("--pending", action="store_true")
+    approval_approve = approval_commands.add_parser("approve", help="Approve a pending request")
+    approval_approve.add_argument("approval_id")
+    approval_approve.add_argument("--actor", default="operator")
+    approval_reject = approval_commands.add_parser("reject", help="Reject a pending request")
+    approval_reject.add_argument("approval_id")
+    approval_reject.add_argument("--actor", default="operator")
+
+
+def handle_kernel_command(args: argparse.Namespace, kernel: KernelService) -> int | None:
+    if args.command == "plan":
+        return _handle_plan(args, kernel)
+    if args.command == "task":
+        plan = (
+            kernel.start_task(args.operation_id, args.task_id)
+            if args.task_command == "start"
+            else kernel.complete_task(args.operation_id, args.task_id)
+        )
+        _emit(plan, args.json_output)
+        return 0
+    if args.command == "gate":
+        _emit(kernel.pass_gate(args.operation_id, args.gate_id), args.json_output)
+        return 0
+    if args.command == "artifact":
+        return _handle_artifact(args, kernel)
+    if args.command == "finding":
+        return _handle_finding(args, kernel)
+    if args.command == "approval":
+        return _handle_approval(args, kernel)
+    return None
+
+
+def _handle_plan(args: argparse.Namespace, kernel: KernelService) -> int:
+    if args.plan_command == "create":
+        title, tasks, gates = _load_plan_definition(args.plan_file)
+        plan = kernel.create_plan(args.operation_id, title, tasks, gates)
+        _emit(plan, args.json_output)
+        return 0
+    if args.plan_command == "show":
+        current_plan = kernel.get_current_plan(args.operation_id)
+        if current_plan is None:
+            raise ValueError(f"operation {args.operation_id} has no current plan")
+        if args.json_output:
+            _print_json(current_plan.model_dump(mode="json"))
+        else:
+            _print_plan(current_plan)
+        return 0
+    _emit(kernel.approve_plan(args.operation_id), args.json_output)
+    return 0
+
+
+def _handle_artifact(args: argparse.Namespace, kernel: KernelService) -> int:
+    if args.artifact_command == "add":
+        artifact = kernel.register_artifact(
+            args.operation_id,
+            ArtifactKind(args.kind),
+            args.text,
+            summary=args.summary,
+            requirement=args.requirement,
+            task_id=args.task_id,
+            gate_id=args.gate_id,
+            finding_id=args.finding_id,
+            created_by="operator",
+        )
+        _emit(artifact, args.json_output)
+        return 0
+    artifacts = kernel.kernel.list_artifacts(args.operation_id)
+    if args.json_output:
+        _print_json([artifact.model_dump(mode="json") for artifact in artifacts])
+    else:
+        for artifact in artifacts:
+            links = ",".join(
+                value
+                for value in (
+                    f"task={artifact.task_id}" if artifact.task_id else "",
+                    f"gate={artifact.gate_id}" if artifact.gate_id else "",
+                    f"finding={artifact.finding_id}" if artifact.finding_id else "",
+                )
+                if value
+            )
+            print(
+                f"{artifact.id}\t{artifact.kind.value}\t{artifact.requirement or '-'}\t"
+                f"{links or '-'}\t{artifact.summary or artifact.path}"
+            )
+    return 0
+
+
+def _handle_finding(args: argparse.Namespace, kernel: KernelService) -> int:
+    if args.finding_command == "create":
+        finding = kernel.create_finding(
+            args.operation_id,
+            args.title,
+            FindingSeverity(args.severity),
+            summary=args.summary,
+            remediation=args.remediation,
+        )
+    elif args.finding_command == "list":
+        findings = kernel.kernel.list_findings(args.operation_id)
+        if args.json_output:
+            _print_json([finding.model_dump(mode="json") for finding in findings])
+        else:
+            for finding in findings:
+                print(
+                    f"{finding.id}\t{finding.severity.value}\t{finding.status.value}\t"
+                    f"{finding.title}"
+                )
+        return 0
+    elif args.finding_command == "attach":
+        finding = kernel.attach_evidence(args.finding_id, args.artifact_id)
+    elif args.finding_command == "validate":
+        finding = kernel.validate_finding(args.finding_id)
+    elif args.finding_command == "report":
+        finding = kernel.mark_reported(args.finding_id)
+    elif args.finding_command == "false-positive":
+        finding = kernel.mark_false_positive(args.finding_id)
+    else:
+        finding = kernel.mark_duplicate(args.finding_id, args.original_id)
+    _emit(finding, args.json_output)
+    return 0
+
+
+def _handle_approval(args: argparse.Namespace, kernel: KernelService) -> int:
+    if args.approval_command == "request":
+        approval = kernel.request_approval(
+            args.operation_id,
+            args.action,
+            RiskClass(args.risk),
+            task_id=args.task_id,
+            reason=args.reason,
+            requested_by=args.requested_by,
+        )
+    elif args.approval_command == "list":
+        approvals = kernel.kernel.list_approvals(
+            args.operation_id,
+            status=ApprovalStatus.PENDING if args.pending else None,
+        )
+        if args.json_output:
+            _print_json([approval.model_dump(mode="json") for approval in approvals])
+        else:
+            for approval in approvals:
+                print(
+                    f"{approval.id}\t{approval.risk_class.value}\t{approval.status.value}\t"
+                    f"{approval.action}"
+                )
+        return 0
+    elif args.approval_command == "approve":
+        approval = kernel.approve(args.approval_id, args.actor)
+    else:
+        approval = kernel.reject(args.approval_id, args.actor)
+    _emit(approval, args.json_output)
+    return 0
+
+
+def _load_plan_definition(path: Path) -> tuple[str, list[PlanTask], list[StageGate]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("plan definition must be a JSON object")
+    title = payload.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("plan definition requires a non-empty title")
+    tasks_payload = payload.get("tasks", [])
+    gates_payload = payload.get("gates", [])
+    if not isinstance(tasks_payload, list) or not isinstance(gates_payload, list):
+        raise ValueError("plan definition fields 'tasks' and 'gates' must be lists")
+    tasks = [PlanTask.model_validate(item) for item in tasks_payload]
+    gates = [StageGate.model_validate(item) for item in gates_payload]
+    return title, tasks, gates
+
+
+_EmitModel = OperationPlan | Approval | Artifact | Finding
+
+
+def _emit(model: _EmitModel, json_output: bool) -> None:
+    if json_output:
+        _print_json(model.model_dump(mode="json"))
+    elif isinstance(model, OperationPlan):
+        _print_plan(model)
+    else:
+        print(model)
+
+
+def _print_plan(plan: OperationPlan) -> None:
+    approved = "approved" if plan.approved else "not-approved"
+    print(f"{plan.id}\t{approved}\t{plan.title}")
+    for task in plan.tasks:
+        dependencies = ",".join(task.depends_on) or "-"
+        requirements = ",".join(task.required_artifacts) or "-"
+        print(
+            f"task\t{task.id}\t{task.status.value}\t{task.risk_class.value}\t"
+            f"deps={dependencies}\tartifacts={requirements}\t{task.title}"
+        )
+    for gate in plan.gates:
+        requirements = ",".join(gate.required_artifacts) or "-"
+        print(f"gate\t{gate.id}\t{gate.status.value}\tartifacts={requirements}\t{gate.name}")
+
+
+def _print_json(payload: object) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))

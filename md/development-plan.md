@@ -2,11 +2,13 @@
 
 ## Текущий статус
 
-**Этап 0 завершен:** задокументированы BRD/roadmap, реализованы домен операций, scope policy, SQLite persistence, append-only events, CLI и базовый TUI. Проверки: 29 tests, ruff, strict mypy, wheel/sdist build и изолированный CLI smoke — успешно.
+**Этап 0 завершен:** BRD/roadmap, домен операций, scope policy, SQLite persistence, append-only events, CLI и базовый TUI.
 
-Текущие ограничения соответствуют Walking Skeleton: LLM и внешнее выполнение инструментов еще не подключены; URL scope rules поддерживают только origins без path-level правил; TUI работает с реальным состоянием операции, но не имитирует AI-функции будущих этапов.
+**Этап 1 core завершен:** plans/tasks/dependencies, stage gates, approvals R0–R4, immutable evidence artifacts, findings workflow, policy-gated operation transitions, SQLite migration v2, kernel CLI и read-only TUI views. Проверки: 54 tests, ruff, strict mypy и CLI E2E — успешно.
 
-Следующий рабочий этап — **Этап 1, Operation Kernel**.
+Текущие ограничения: LLM, MCP и внешнее выполнение инструментов еще не подключены; snapshots/reconcile/fork отложены до recovery-среза перед Tool Execution; URL scope rules поддерживают только origins; evidence content пока считается доверенным текстом оператора.
+
+Следующий рабочий этап — **Этап 1b, Recovery Hardening**, затем **Этап 2, Tool Execution и безопасность**.
 
 ## 1. Архитектурный курс
 
@@ -58,11 +60,22 @@
 - Evidence/artifact store и findings workflow.
 - Расширение TUI: план, задачи, approvals, evidence и findings.
 
-### Acceptance
+### Acceptance для завершенного core
 
-- Crash/restart не теряет операцию и не повторяет действие с неизвестным внешним результатом.
-- Нельзя закрыть gate или опубликовать finding без требуемых доказательств.
-- Любое изменение scope/plan версионируется и видно как diff.
+- Gate нельзя пройти без required artifacts.
+- Finding нельзя validate/report без существующего evidence.
+- Operation нельзя перевести в execution с pending approval или неутвержденным планом.
+- Operation нельзя завершить с unfinished tasks или candidate/validating findings.
+- SQLite v1 корректно мигрируется в v2; plan/approval/artifact/finding и events восстанавливаются после перезапуска.
+
+### Этап 1b — Recovery Hardening
+
+- Operation snapshots и controlled restore points.
+- Reconcile in-flight actions после crash/restart; действие с неизвестным внешним результатом не повторяется автоматически.
+- Operation fork/resume без копирования секретов и без потери audit trail.
+- Diff для изменений scope/plan и operator-facing recovery report.
+
+Этап 1b должен быть завершен до подключения внешнего Tool Execution.
 
 ## 4. Этап 2 — Tool Execution и безопасность
 
