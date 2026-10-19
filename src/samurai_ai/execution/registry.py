@@ -41,9 +41,20 @@ class ToolAdapter(Protocol):
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput: ...
 
 
+class DynamicToolResolver(Protocol):
+    def resolve(self, tool_id: str) -> ToolAdapter | None: ...
+
+    def definitions(self) -> list[ToolDefinition]: ...
+
+
 class ToolRegistry:
-    def __init__(self, adapters: Iterable[ToolAdapter] = ()) -> None:
+    def __init__(
+        self,
+        adapters: Iterable[ToolAdapter] = (),
+        dynamic_resolver: DynamicToolResolver | None = None,
+    ) -> None:
         self._adapters: dict[tuple[str, int], ToolAdapter] = {}
+        self._dynamic_resolver = dynamic_resolver
         for adapter in adapters:
             self.register(adapter)
 
@@ -58,6 +69,14 @@ class ToolRegistry:
         self._adapters[key] = adapter
 
     def get(self, tool_id: str, version: int | None = None) -> ToolAdapter:
+        if tool_id.startswith("mcp."):
+            if version is not None and version != 1:
+                raise ToolNotFoundError(f"tool not found: {tool_id} v{version}")
+            if self._dynamic_resolver is not None:
+                adapter = self._dynamic_resolver.resolve(tool_id)
+                if adapter is not None:
+                    return adapter
+            raise ToolNotFoundError(f"tool not found: {tool_id}")
         versions = sorted(v for (registered_id, v) in self._adapters if registered_id == tool_id)
         if not versions:
             raise ToolNotFoundError(f"tool not found: {tool_id}")
@@ -68,10 +87,13 @@ class ToolRegistry:
         return adapter
 
     def definitions(self) -> list[ToolDefinition]:
-        return [
+        static = [
             adapter.definition
             for _, adapter in sorted(self._adapters.items(), key=lambda item: item[0])
         ]
+        if self._dynamic_resolver is not None:
+            return static + self._dynamic_resolver.definitions()
+        return static
 
     def validate_params(
         self, definition: ToolDefinition, params: dict[str, Any]
@@ -120,7 +142,7 @@ class ToolRegistry:
             raise ToolValidationError(
                 f"http tool {definition.id} must declare network_access=True"
             )
-        if definition.kind != ToolKind.HTTP and definition.network_access:
+        if definition.kind not in (ToolKind.HTTP, ToolKind.MCP) and definition.network_access:
             raise ToolValidationError(
                 f"non-http tool {definition.id} cannot declare network_access=True"
             )
@@ -362,13 +384,15 @@ class SandboxExecTool:
         )
 
 
-def default_registry() -> ToolRegistry:
+def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
     return ToolRegistry(
-        adapters=(LocalEchoTool(), ProcessExecTool(), HttpFetchTool(), SandboxExecTool())
+        adapters=(LocalEchoTool(), ProcessExecTool(), HttpFetchTool(), SandboxExecTool()),
+        dynamic_resolver=dynamic_resolver,
     )
 
 
 __all__ = [
+    "DynamicToolResolver",
     "HttpFetchTool",
     "LocalEchoTool",
     "ProcessExecTool",

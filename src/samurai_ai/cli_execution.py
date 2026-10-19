@@ -59,7 +59,7 @@ def handle_execution_command(
                 )
         return 0
     if args.tool_command == "run":
-        params = _parse_params(args.params)
+        params = parse_tool_params(args.params)
         try:
             result = execution.run_tool(
                 args.operation_id,
@@ -86,14 +86,14 @@ def handle_execution_command(
                     file=sys.stderr,
                 )
             return 2
-        _emit_result(result, args.json_output)
+        emit_tool_result(result, args.json_output)
         return 0 if result.run.exit_code == 0 else 1
     run = execution.get_run(args.run_id)
     _emit_run(run, args.json_output)
     return 0
 
 
-def _parse_params(pairs: list[str]) -> dict[str, Any]:
+def parse_tool_params(pairs: list[str]) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for pair in pairs:
         key, separator, raw_value = pair.partition("=")
@@ -107,7 +107,7 @@ def _parse_params(pairs: list[str]) -> dict[str, Any]:
     return params
 
 
-def _emit_result(result: ToolResult, json_output: bool) -> None:
+def emit_tool_result(result: ToolResult, json_output: bool) -> None:
     if json_output:
         _print_json(result.model_dump(mode="json"))
         return
