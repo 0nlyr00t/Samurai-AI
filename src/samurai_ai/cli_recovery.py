@@ -4,6 +4,7 @@ import argparse
 import json
 
 from samurai_ai.domain.recovery import OperationSnapshot, PlanDiff, RecoveryReport
+from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import SettingsService
 
@@ -39,6 +40,7 @@ def handle_recovery_command(
     args: argparse.Namespace,
     recovery: RecoveryService,
     settings: SettingsService,
+    execution: ToolExecutionService,
 ) -> int | None:
     if args.command == "operation" and getattr(args, "operation_command", None) == "fork":
         operation = recovery.fork_operation(args.operation_id, name=args.name)
@@ -59,8 +61,9 @@ def handle_recovery_command(
     if args.command == "snapshot":
         return _handle_snapshot(args, recovery)
     if args.command == "reconcile":
+        marked_runs = execution.reconcile_runs(args.operation_id)
         report = recovery.reconcile_operation(args.operation_id)
-        _emit_report(report, args.json_output)
+        _emit_report(report, args.json_output, marked_runs)
         return 0
     if args.command == "lang":
         return _handle_lang(args, settings)
@@ -148,11 +151,18 @@ def _emit_diff(diff: PlanDiff, json_output: bool) -> None:
             print(f"{section}.{field}: {values}")
 
 
-def _emit_report(report: RecoveryReport, json_output: bool) -> None:
+def _emit_report(
+    report: RecoveryReport,
+    json_output: bool,
+    marked_runs: list[str],
+) -> None:
     if json_output:
-        _print_json(report.model_dump(mode="json"))
+        payload = report.model_dump(mode="json")
+        payload["tool_runs_marked_failed"] = marked_runs
+        _print_json(payload)
         return
     print(f"actions-marked-unknown: {', '.join(report.actions_marked_unknown) or '-'}")
+    print(f"tool-runs-marked-failed: {', '.join(marked_runs) or '-'}")
     print(f"resumable-tasks: {', '.join(report.resumable_tasks) or '-'}")
     print(f"pending-approvals: {', '.join(report.pending_approvals) or '-'}")
 

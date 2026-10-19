@@ -7,11 +7,13 @@ from textual.widgets import Input, RichLog, Static
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.storage.database import Database
+from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.recovery import RecoveryRepository
@@ -26,6 +28,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     settings = SettingsService(recovery_repository)
     settings.set_locale("en")
     recovery = RecoveryService(service, kernel, recovery_repository)
+    execution = ToolExecutionService(service, kernel, recovery, ToolRunRepository(database))
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -59,9 +62,10 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         "Run active lab probe",
         RiskClass.R2,
     )
+    tool_result = execution.run_tool(operation.id, "local.echo", {"text": "hello tui"})
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, operation.id)
+        app = SamuraiApp(service, kernel, settings, recovery, execution, operation.id)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             header = app.query_one("#operation-header", Static)
@@ -94,6 +98,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/findings", finding.id),
                     ("/evidence", artifact.id),
                     ("/approvals", approval.id),
+                    ("/tools", "local.echo"),
+                    ("/runs", tool_result.run.id),
                 ):
                     command_input.value = command
                     await pilot.press("enter")

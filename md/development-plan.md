@@ -4,11 +4,13 @@
 
 **Этап 0 завершен:** BRD/roadmap, домен операций, scope policy, SQLite persistence, append-only events, CLI и базовый TUI.
 
-**Этап 1 завершен:** Operation Kernel и Recovery Hardening. Реализованы plans/tasks/gates, approvals R0–R4, immutable evidence, findings workflow, snapshots/restore/fork, recovery actions reconcile, plan/scope diff, SQLite migrations v1–v3, kernel/recovery CLI, TUI и RU/EN first-run localization. Проверки: 76 tests, ruff, strict mypy и CLI/TUI E2E — успешно.
+**Этап 1 завершен:** Operation Kernel и Recovery Hardening. Реализованы plans/tasks/gates, approvals R0–R4, immutable evidence, findings workflow, snapshots/restore/fork, recovery actions reconcile, plan/scope diff, SQLite migrations v1–v3, kernel/recovery CLI, TUI и RU/EN first-run localization.
 
-Текущие ограничения: LLM, MCP и внешнее выполнение инструментов еще не подключены; restore создает новую операцию и не копирует artifact content/findings/approvals; URL scope rules поддерживают только origins; полная локализация будущих CLI error messages обязательна для новых строк.
+**Этап 2a завершен:** Managed Tool Execution Core. Реализованы versioned tool registry, `local.echo`, `process.exec` без shell, `http.fetch` через scope broker, async ProcessManager, approval-gated execution, recovery integration, redaction, prompt-injection warnings, SQLite v4, tool CLI и TUI. Проверки: 124 tests, ruff, strict mypy и CLI/TUI E2E — успешно.
 
-Следующий рабочий этап — **Этап 2, Tool Execution и безопасность**.
+Текущие ограничения: Docker sandbox, MCP, persistent secrets vault и полный egress enforcement для произвольных процессов относятся к Stage 2b; HTTP broker снижает DNS/redirect риск, но сохраняет DNS TOCTOU; `process.exec` не имеет сетевого доступа и допускает только allowlisted executables.
+
+Следующий рабочий этап — **Этап 2b, Isolation and Protocol Expansion**.
 
 ## 1. Архитектурный курс
 
@@ -88,20 +90,30 @@
 
 ## 4. Этап 2 — Tool Execution и безопасность
 
-### Объем
+### Завершенный Stage 2a — Managed Tool Execution Core
 
-- Versioned tool registry, native adapters, MCP stdio/HTTP, deferred schemas и health checks.
-- Async process manager: background, cancel, timeout, resource limits, circuit breaker.
-- Docker sandbox и network egress policy; повторная scope-проверка DNS/redirect.
-- Secrets vault/redaction, trust model для project-level MCP/playbooks.
-- Защита от prompt injection и маркировка недоверенного контента.
+- Versioned fail-closed tool registry и static native adapters.
+- Async ProcessManager без shell, с timeout, cancel, output limits и circuit breaker.
+- `local.echo`, `process.exec` без network access и `http.fetch` GET/HEAD через scope broker.
+- Approval-gated execution R0–R4 и проверка `--approval-id`.
+- RecoveryAction для каждого run, crash reconcile без retry и SQLite v4.
+- Redaction секретов, immutable output artifacts и prompt-injection warnings.
 
-### Acceptance
+### Acceptance для Stage 2a
 
-- Out-of-scope и injected instructions блокируются детерминированно.
-- Секреты не попадают в экспорт.
-- Остановка задачи завершает дочерние процессы и сохраняет диагностику.
-- Сбой инструмента не приводит к неограниченным повторам.
+- Out-of-scope URL, excluded DNS address и out-of-scope redirect блокируются.
+- R2/R3 не исполняются без approved approval.
+- Секреты не попадают в artifacts/events; tool output помечается `untrusted-external`.
+- Timeout/cancel завершают процессную группу; circuit breaker не выполняет retry.
+- Tool run, recovery action, approval и artifacts восстанавливаются после перезапуска.
+
+### Stage 2b — Isolation and Protocol Expansion
+
+- Docker sandbox profiles с resource/network constraints и signed allowlist.
+- Настоящий egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU.
+- MCP stdio/HTTP, deferred schemas, health checks и trust model.
+- Persistent secrets vault и per-operation secret scoping.
+- Расширенный набор security tools с отдельным threat review.
 
 ## 5. Этап 3 — LLM и оркестрация
 

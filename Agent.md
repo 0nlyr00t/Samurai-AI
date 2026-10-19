@@ -45,25 +45,27 @@ uv run samurai tui
 
 ## 3. Текущее состояние
 
-Завершен **Этап 0 — Walking Skeleton**, **Этап 1 core — Operation Kernel** и **Этап 1b — Recovery Hardening**:
+Завершены **Этап 0**, **Этап 1/1b** и **Этап 2a — Managed Tool Execution Core**:
 
 - четыре режима операций и проверяемые lifecycle transitions;
 - include/exclude scope для domain, wildcard, URL origins и IP/CIDR;
 - plans, tasks, dependencies, stage gates и artifact requirements;
-- approvals R0–R4: R0/R1 auto-approved, R2/R3 требуют решения, R4 auto-rejected;
-- immutable evidence artifacts с SHA-256 и файловым хранилищем;
+- approvals R0–R4 и approval-gated tool execution;
+- immutable evidence artifacts с SHA-256 и redaction;
 - findings workflow `candidate → validating → validated / false-positive / duplicate → reported`;
-- immutable operation snapshots и безопасный restore в новую операцию;
-- operation fork без копирования artifact content, findings или approvals;
-- recovery actions и reconcile in-flight → `unknown` без retry;
-- plan/scope diff;
-- SQLite migrations v1–v3, append-only events и optimistic concurrency;
-- kernel/recovery CLI и TUI;
+- snapshots/restore/fork, recovery actions reconcile и plan/scope diff;
+- versioned fail-closed tool registry;
+- `local.echo`, `process.exec` без shell/network и `http.fetch` GET/HEAD через scope broker;
+- async ProcessManager с timeout, cancel, output limits и circuit breaker;
+- DNS/redirect scope revalidation для HTTP tool;
+- recovery action и SQLite v4 `tool_runs` для каждого execution;
+- prompt-injection warnings и `untrusted-external` trust label;
+- kernel/recovery/tool CLI и локализованный TUI;
 - RU/EN first-run выбор языка, persisted locale и `/lang`;
-- 76 unit/integration/CLI/TUI tests;
+- 124 unit/integration/CLI/TUI tests;
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-LLM, MCP и внешнее выполнение security-инструментов еще не реализованы. Следующий этап — Stage 2, Tool Execution и безопасность.
+LLM, MCP, Docker sandbox, persistent secrets vault и полный egress enforcement еще не реализованы. Следующий этап — Stage 2b, Isolation and Protocol Expansion.
 
 ## 4. Карта репозитория
 
@@ -71,21 +73,26 @@ LLM, MCP и внешнее выполнение security-инструменто�
 - `src/samurai_ai/domain/scope.py` — ScopeContract и детерминированные решения.
 - `src/samurai_ai/domain/kernel.py` — PlanTask, StageGate, OperationPlan, Approval, Artifact и Finding.
 - `src/samurai_ai/domain/recovery.py` — RecoveryAction, OperationSnapshot, RecoveryReport и diff.
+- `src/samurai_ai/domain/execution.py` — ToolDefinition, ToolRun, redactor и injection scanner.
+- `src/samurai_ai/execution/` — static registry, ProcessManager и HTTP egress broker.
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
-- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v3.
+- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v4.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
 - `src/samurai_ai/storage/kernel.py` — KernelRepository для plans/approvals/artifacts/findings.
 - `src/samurai_ai/storage/recovery.py` — snapshots, recovery actions и app settings.
+- `src/samurai_ai/storage/execution.py` — ToolRunRepository и recovery-compatible runs.
 - `src/samurai_ai/services/operations.py` — сервисный сценарий операций.
 - `src/samurai_ai/services/kernel.py` — KernelService, policy preconditions и summary.
 - `src/samurai_ai/services/recovery.py` — snapshots/restore/fork/reconcile/diff.
 - `src/samurai_ai/services/settings.py` — persisted locale и `SAMURAI_LANG`.
+- `src/samurai_ai/services/execution.py` — approval-gated managed tool execution.
 - `src/samurai_ai/cli.py` — CLI entry point и общие команды.
 - `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
 - `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
+- `src/samurai_ai/cli_execution.py` — tool list/run/show команды.
 - `src/samurai_ai/tui/app.py` — локализованный TUI без доменной логики в обработчиках.
-- `tests/unit` — чистое доменное ядро и scope/kernel/recovery edge cases.
-- `tests/integration` — SQLite, recovery, append-only, CLI и kernel E2E.
+- `tests/unit` — чистое доменное ядро и scope/kernel/recovery/execution edge cases.
+- `tests/integration` — SQLite, recovery, process/http broker, CLI и kernel E2E.
 - `tests/tui` — клавиатурный TUI и i18n smoke через `run_test`.
 
 ## 5. Текущая семантика scope
@@ -137,23 +144,25 @@ samurai approval request|list|approve|reject ...
 samurai snapshot create|list|show|restore ...
 samurai operation fork <operation-id> [--name]
 samurai reconcile <operation-id>
+samurai tool list
+samurai tool run <operation-id> <tool-id> --param key=value [--approval-id <id>]
+samurai tool show <run-id>
 samurai lang [ru|en]
 ```
 
-TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/lang`, `/status`, `/scope`.
+TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/lang`, `/status`, `/scope`.
 
-## 7. Следующий этап — Tool Execution и безопасность
+## 7. Следующий этап — Isolation and Protocol Expansion
 
-Stage 1b завершен: snapshots/restore/fork, reconcile, plan/scope diff и RU/EN localization работают и покрыты тестами.
+Stage 2a завершен: managed registry, process manager, HTTP scope broker, approvals, recovery, redaction и injection marking работают и покрыты тестами.
 
-Следующий вертикальный срез — Stage 2:
+Следующий вертикальный срез — Stage 2b:
 
-1. Versioned tool registry и native adapters с risk/capability metadata.
-2. Async process manager: background, cancel, timeout, resource limits, circuit breaker.
-3. Docker sandbox и network egress policy; повторная scope-проверка DNS/redirect.
-4. MCP stdio/HTTP, deferred schemas, health checks и trust model.
-5. Secrets vault/redaction и prompt-injection defenses.
-6. Интеграция in-flight tool actions с recovery journal.
+1. Docker sandbox profiles с resource/network constraints и signed allowlist.
+2. Egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU.
+3. MCP stdio/HTTP, deferred schemas, health checks и trust model.
+4. Persistent secrets vault и per-operation secret scoping.
+5. Расширенный набор security tools с отдельным threat review.
 
 На Stage 3 добавить расширяемый model registry для frontier APIs и first-class Ollama/local provider; playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
 

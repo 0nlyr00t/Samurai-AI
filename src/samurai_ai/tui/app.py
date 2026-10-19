@@ -7,6 +7,7 @@ from textual.widgets import Button, Input, RichLog, Static
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
 from samurai_ai.domain.operations import Operation
 from samurai_ai.i18n import Translator
+from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.recovery import RecoveryService
@@ -101,6 +102,7 @@ class SamuraiApp(App[None]):
         kernel: KernelService,
         settings: SettingsService,
         recovery: RecoveryService,
+        execution: ToolExecutionService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -108,6 +110,7 @@ class SamuraiApp(App[None]):
         self.kernel = kernel
         self.settings = settings
         self.recovery = recovery
+        self.execution = execution
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -210,6 +213,12 @@ class SamuraiApp(App[None]):
             return
         if name == "/snapshots":
             self._show_snapshots()
+            return
+        if name == "/tools":
+            self._show_tools()
+            return
+        if name == "/runs":
+            self._show_runs()
             return
         if name == "/reconcile":
             self._show_reconcile()
@@ -393,11 +402,50 @@ class SamuraiApp(App[None]):
                 f"{snapshot.created_at.isoformat()}"
             )
 
+    def _show_tools(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        definitions = self.execution.list_tools()
+        if not definitions:
+            journal.write("[tools] " + self.translator.t("tools.empty"))
+            return
+        for definition in definitions:
+            network = (
+                self.translator.t("tools.network")
+                if definition.network_access
+                else self.translator.t("tools.no-network")
+            )
+            journal.write(
+                f"[tool] {definition.id} | v{definition.version} | {definition.kind.value} | "
+                f"risk={definition.risk_class.value} | {network} | {definition.description}"
+            )
+
+    def _show_runs(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[runs] " + self.translator.t("status.no-operation"))
+            return
+        runs = self.execution.list_runs(self.operation.id)
+        if not runs:
+            journal.write("[runs] " + self.translator.t("runs.empty"))
+            return
+        for run in runs:
+            artifacts = ",".join(
+                artifact_id
+                for artifact_id in (run.stdout_artifact_id, run.stderr_artifact_id)
+                if artifact_id
+            ) or "-"
+            warnings = ",".join(run.injection_warnings) or "-"
+            journal.write(
+                f"[run] {run.id} | {run.tool_id} v{run.tool_version} | {run.status.value} | "
+                f"trust={run.trust.value} | warnings={warnings} | artifacts={artifacts}"
+            )
+
     def _show_reconcile(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
             journal.write("[reconcile] " + self.translator.t("status.no-operation"))
             return
+        marked_runs = self.execution.reconcile_runs(self.operation.id, actor="operator")
         report = self.recovery.reconcile_operation(self.operation.id, actor="operator")
         none = self.translator.t("list.none")
         journal.write(
@@ -405,6 +453,7 @@ class SamuraiApp(App[None]):
             + self.translator.t(
                 "reconcile.report",
                 actions=", ".join(report.actions_marked_unknown) or none,
+                runs=", ".join(marked_runs) or none,
                 tasks=", ".join(report.resumable_tasks) or none,
                 approvals=", ".join(report.pending_approvals) or none,
             )
