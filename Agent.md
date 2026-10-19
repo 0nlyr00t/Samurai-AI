@@ -18,7 +18,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## 2. Быстрый старт
 
-Требования: Python 3.12+, uv. Docker понадобится на этапе Tool Execution.
+Требования для разработки: Python 3.12+, uv. Docker понадобится на этапе Tool Execution. Целевая поставка продукта — standalone per-platform `samurai` executable/installer без Python/uv; optional Docker, MCP servers, security tools и Ollama определяются health checks.
 
 ```bash
 git clone https://github.com/0nlyr00t/Samurai-AI.git
@@ -137,7 +137,7 @@ TUI read-only команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/eviden
 3. Operation fork/resume без копирования секретов и без потери audit trail.
 4. Diff для изменений scope/plan и operator-facing recovery report.
 
-Затем начинать Stage 2: tool registry, async process manager, sandbox, egress policy, MCP, secrets redaction и prompt-injection defenses. Подробные acceptance criteria — в `md/development-plan.md`.
+Затем начинать Stage 2: tool registry, async process manager, sandbox, egress policy, MCP, secrets redaction и prompt-injection defenses. На Stage 3 добавить расширяемый model registry для frontier APIs и first-class Ollama/local provider; playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
 
 ## 8. Инварианты и правила изменений
 

@@ -98,14 +98,17 @@
 
 ### Объем
 
-- Provider abstraction, минимум два провайдера, structured outputs, retry/fallback и бюджеты.
-- Planner/Executor/Parser/Verifier.
+- Provider abstraction и versioned model registry: OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock, DeepSeek, xAI, Qwen, Moonshot/Kimi, Mistral, OpenRouter и OpenAI-compatible endpoints.
+- Ollama как first-class local provider: health check, model discovery, явный local data route и offline-friendly degradation.
+- Capability negotiation для tools/function calling, structured outputs, streaming, vision и context limits; playbook не должен зависеть от vendor-specific API.
+- Planner/Executor/Parser/Verifier, structured outputs, retry/fallback и бюджеты.
 - Shared blackboard, изолированные контексты подагентов, наследование разрешений и ограничение рекурсии.
 - Отображение маршрута данных, стоимости и потребления контекста.
 
 ### Acceptance
 
-- Один playbook работает на двух провайдерах без изменения policy и evidence format.
+- Один playbook работает минимум на двух разных API-семействах и одной локальной Ollama-модели без изменения policy и evidence format.
+- Неподдерживаемая capability обнаруживается до запуска и переводит задачу в понятный fallback/block, а не в silent failure.
 - Модель не может изменить состояние вне разрешенных команд и схем.
 - Бюджет останавливает или переводит операцию в ожидание без потери состояния.
 
@@ -136,6 +139,7 @@
 - Свежий private holdout; Cybench/NYU как дополнительные наборы; XBOW только как историческая регрессия.
 - Метрики solve/validation rate, subtasks, cost, wall time, interventions, invalid actions и false positives.
 - Fault injection, prompt-injection suite, soak/performance tests, migration/backup/restore tests.
+- Standalone per-platform executable/installer без Python/uv для core harness; smoke-тест бинарного артефакта на чистой машине.
 - Подписанные релизы, воспроизводимые сборки и политика совместимости.
 - P2 отдельно: RBAC/SSO, distributed runners, air-gapped models и командная работа.
 
