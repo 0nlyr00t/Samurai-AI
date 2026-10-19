@@ -61,10 +61,9 @@ class SandboxProfile(BaseModel):
     @field_validator("network_mode")
     @classmethod
     def validate_network_mode(cls, value: str) -> str:
-        if value != "none":
+        if value not in ("none", "scoped"):
             raise SandboxProfileError(
-                f"sandbox network_mode {value!r} is not supported yet; only 'none' "
-                "is allowed until the egress proxy lands"
+                f"sandbox network_mode must be 'none' or 'scoped': {value!r}"
             )
         return value
 
