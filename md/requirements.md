@@ -121,7 +121,7 @@ Samurai AI объединяет дисциплину DSH, инструмента
 
 ### Модели, агенты и инструменты
 
-- **FR-06 — Model Router [MVP].** Несколько провайдеров и отдельные модели для planner, executor, parser, verifier. Отображаются стоимость, контекст и маршрут данных.
+- **FR-06 — Model Router [MVP].** Несколько провайдеров и отдельные модели для planner, executor, parser, verifier. Отображаются стоимость, контекст и маршрут данных. Provider layer должен поддерживать расширяемый реестр моделей и capability negotiation: OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock, DeepSeek, xAI, Qwen, Moonshot/Kimi, Mistral, OpenRouter и OpenAI-compatible endpoints. Локальные модели через Ollama поддерживаются как first-class provider с health check, model discovery и явным индикатором локального маршрута данных; LM Studio/vLLM подключаются через OpenAI-compatible интерфейс.
 - **FR-07 — Tool Registry [MVP].** Каждый инструмент имеет capabilities, схемы ввода/вывода, версию, risk class, timeout, resource limits и требования к окружению.
 - **FR-08 — Native Adapters и MCP [MVP].** Локальные адаптеры и MCP stdio/HTTP, allowlist, health check, диагностика и отложенная загрузка описаний инструментов.
 - **FR-09 — Sandbox и Process Manager [MVP].** Изолированное выполнение с ограничениями CPU/RAM/диска/сети, background tasks, pause, stop, timeout и логи без блокировки TUI.
@@ -219,6 +219,7 @@ PLAN | ASK | R1 PASSIVE | TASKS:2 | COST:0.84 | /help
 ## 9. Нефункциональные требования
 
 - Linux и macOS в MVP; Windows через WSL2.
+- Целевая поставка — самостоятельный per-platform `samurai` executable/installer без установленных Python/uv. uv используется только для разработки; optional security tools, Docker, MCP servers и Ollama определяются health checks и не являются обязательными для запуска core harness.
 - Local-first; внешняя отправка данных всегда обозначена.
 - Запуск TUI без сетевых вызовов до 3 секунд; ввод доступен во время выполнения.
 - До 10 000 активов и 100 000 событий на операцию с пагинацией.
