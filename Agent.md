@@ -45,7 +45,7 @@ uv run samurai tui
 
 ## 3. Текущее состояние
 
-Завершены **Этап 0**, **Этап 1/1b** и **Этап 2a — Managed Tool Execution Core**:
+Завершены **Этап 0**, **Этап 1/1b**, **Этап 2a — Managed Tool Execution Core** и **Этап 2b — Isolation and Protocol Expansion** (4 из 5 пунктов; расширенный набор security tools отложен до threat review):
 
 - четыре режима операций и проверяемые lifecycle transitions;
 - include/exclude scope для domain, wildcard, URL origins и IP/CIDR;
@@ -182,17 +182,11 @@ MCP: схемы инструментов импортируются только
 
 TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/secrets`, `/lang`, `/status`, `/scope`.
 
-## 7. Следующий этап — Isolation and Protocol Expansion
+## 7. Следующий этап — LLM и оркестрация (Этап 3)
 
-Stage 2a завершен: managed registry, process manager, HTTP scope broker, approvals, recovery, redaction и injection marking работают и покрыты тестами.
+Stage 2b завершен (4 из 5 пунктов): secrets vault, Docker sandbox, scoped egress proxy с DNS pinning и MCP работают и покрыты тестами. Остался отложенный пункт 5 — расширенный набор security tools, который вводится только после отдельного threat review (может выполняться параллельно с Этапом 3).
 
-Следующий вертикальный срез — Stage 2b:
-
-1. ~~Docker sandbox profiles с resource/network constraints и signed allowlist~~ (done: `sandbox.exec`, HMAC-signed static profiles, network none, fail-closed preflight).
-2. ~~Egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU~~ (done: pinned-IP broker, per-run scoped egress proxy для `sandbox.scoped@v1`; известное ослабление на Docker Desktop задокументировано в разделе 3).
-3. ~~MCP stdio/HTTP, deferred schemas, health checks и trust model~~ (done: minimal JSON-RPC client, stdio+HTTP transports, `mcp.<server>.<tool>` R2 tools через ToolExecutionService, trust untrusted-external).
-4. ~~Persistent secrets vault и per-operation secret scoping~~ (done: AES-256-GCM, SQLite v5, CLI/TUI, placeholder resolution в tool execution).
-5. Расширенный набор security tools с отдельным threat review.
+Следующий вертикальный срез — Этап 3:
 
 На Stage 3 добавить расширяемый model registry для frontier APIs и first-class Ollama/local provider; playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
 
