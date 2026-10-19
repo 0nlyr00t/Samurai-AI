@@ -1,5 +1,7 @@
 import asyncio
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from samurai_ai.domain.execution import ApprovalRequiredError, ToolRunStatus
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessManager
+from samurai_ai.execution.registry import SandboxExecTool, ToolRegistry
 from samurai_ai.execution.sandbox import (
     DockerSandboxRunner,
     get_profile,
@@ -68,3 +71,78 @@ def test_sandbox_exec_runs_in_docker(tmp_path: Path, monkeypatch: pytest.MonkeyP
     )
     assert result.run.status == ToolRunStatus.COMPLETED
     assert result.stdout.strip() == "hello from sandbox"
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        body = b"scoped-docker-ok"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def test_scoped_sandbox_egress_through_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    profile = get_profile("sandbox.scoped@v1")
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: load_master_key(vault_key_path()),
+        egress_allowed_ports=frozenset({80, 443, 18999}),
+    )
+    if not asyncio.run(runner.docker_available()):
+        pytest.skip("docker daemon is not available")
+    if not asyncio.run(runner.image_present(profile.image)):
+        pytest.skip(f"sandbox image not pulled: {profile.image}")
+
+    server = HTTPServer(("127.0.0.1", 18999), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+        database = Database(tmp_path / "scoped-docker.db")
+        service = OperationService(OperationRepository(database))
+        kernel = KernelService(service, KernelRepository(database))
+        recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+        execution = ToolExecutionService(
+            service,
+            kernel,
+            recovery,
+            ToolRunRepository(database),
+            registry=ToolRegistry(adapters=(SandboxExecTool(runner),)),
+        )
+        operation = service.create(
+            "Scoped docker lab",
+            OperationMode.CTF_HTB,
+            ScopeContract(includes=("localhost",)),
+        )
+        params = {
+            "profile": profile.id,
+            "executable": "wget",
+            "args": ["-q", "-O-", "-T", "10", "http://localhost:18999/"],
+        }
+        with pytest.raises(ApprovalRequiredError) as caught:
+            execution.run_tool(operation.id, "sandbox.exec", params)
+        kernel.approve(caught.value.approval_id, decided_by="operator")
+        result = execution.run_tool(
+            operation.id, "sandbox.exec", params, approval_id=caught.value.approval_id
+        )
+        assert result.run.status == ToolRunStatus.COMPLETED
+        assert result.stdout.strip() == "scoped-docker-ok"
+
+        events = service.events(operation.id)
+        completed = [e for e in events if e.event_type == "tool.run.completed"]
+        egress = completed[0].payload.get("egress", [])
+        assert egress and egress[0]["verdict"] == "allowed"
+        assert egress[0]["host"] == "localhost"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

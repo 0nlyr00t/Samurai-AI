@@ -12,6 +12,7 @@ from samurai_ai.domain.sandbox import (
     sign_profiles,
     verify_profiles,
 )
+from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.sandbox import (
     SANDBOX_PROFILES,
@@ -87,10 +88,11 @@ def test_profile_requires_digest_pinned_image() -> None:
 
 
 def test_profile_network_mode_fail_closed() -> None:
-    for bad in ("scoped", "bridge", "host"):
-        with pytest.raises(ValidationError, match="only 'none'"):
+    for bad in ("bridge", "host", "Scoped"):
+        with pytest.raises(ValidationError, match="'none' or 'scoped'"):
             make_profile(network_mode=bad)
     assert make_profile().network_mode == "none"
+    assert make_profile(network_mode="scoped").network_mode == "scoped"
 
 
 def test_canonical_payload_is_deterministic_and_order_independent() -> None:
@@ -198,9 +200,12 @@ def test_run_executes_full_argv_via_manager(tmp_path: Path) -> None:
     sign_default(tmp_path)
     runner, fake = make_runner(tmp_path)
     profile = get_profile("sandbox.default@v1")
-    result = runner.run(profile, "run_xyz", "echo", ["hello sandbox"])
+    outcome = runner.run(profile, "run_xyz", "echo", ["hello sandbox"])
+    result = outcome.result
     assert result.exit_code == 0
     assert result.stdout == "hello"
+    assert outcome.proxy_token is None
+    assert outcome.egress_events == ()
     run_calls = [call for call in fake.calls if call[:2] == ("docker", "run")]
     assert len(run_calls) == 1
     assert run_calls[0][-2:] == ("echo", "hello sandbox")
@@ -213,9 +218,58 @@ def test_run_enforces_profile_output_limit(tmp_path: Path) -> None:
     )
     runner, _ = make_runner(tmp_path, manager)
     profile = get_profile("sandbox.default@v1")
-    result = runner.run(profile, "run_big", "cat", ["big.txt"])
+    result = runner.run(profile, "run_big", "cat", ["big.txt"]).result
     assert len(result.stdout.encode("utf-8")) <= profile.max_output_bytes
     assert result.truncated
+
+
+def test_scoped_profile_requires_scope(tmp_path: Path) -> None:
+    sign_default(tmp_path)
+    runner, fake = make_runner(tmp_path)
+    profile = get_profile("sandbox.scoped@v1")
+    with pytest.raises(Exception, match="requires the operation scope"):
+        runner.run(profile, "run_noscope", "echo", ["hi"])
+    assert not [call for call in fake.calls if call[:2] == ("docker", "run")]
+
+
+def test_scoped_profile_builds_proxy_argv(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = get_profile("sandbox.scoped@v1")
+    argv = runner.build_argv(
+        profile, "run_s1", "wget", ["http://example.com/"],
+        proxy_url="http://samurai:token123@host.docker.internal:8080",
+    )
+    assert "--network" not in argv
+    assert argv[argv.index("--add-host") + 1] == "host.docker.internal:host-gateway"
+    env_values = [argv[i + 1] for i, part in enumerate(argv) if part == "--env"]
+    assert "HTTP_PROXY=http://samurai:token123@host.docker.internal:8080" in env_values
+    assert "HTTPS_PROXY=http://samurai:token123@host.docker.internal:8080" in env_values
+    assert "NO_PROXY=" in env_values
+    assert argv[-2:] == ["wget", "http://example.com/"]
+
+
+def test_scoped_profile_argv_requires_proxy_url(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = get_profile("sandbox.scoped@v1")
+    with pytest.raises(Exception, match="requires a scoped egress proxy"):
+        runner.build_argv(profile, "run_s2", "wget", [])
+
+
+def test_scoped_run_starts_and_stops_proxy(tmp_path: Path) -> None:
+    sign_default(tmp_path)
+    runner, fake = make_runner(tmp_path)
+    profile = get_profile("sandbox.scoped@v1")
+    scope = ScopeContract(includes=("127.0.0.1",))
+    outcome = runner.run(profile, "run_scoped", "echo", ["hi"], scope)
+    assert outcome.result.exit_code == 0
+    assert outcome.proxy_token is not None
+    assert outcome.egress_events == ()
+    run_calls = [call for call in fake.calls if call[:2] == ("docker", "run")]
+    argv = run_calls[0]
+    env_values = [argv[i + 1] for i, part in enumerate(argv) if part == "--env"]
+    proxy_env = [value for value in env_values if value.startswith("HTTP_PROXY=")]
+    assert proxy_env
+    assert outcome.proxy_token in proxy_env[0]
 
 
 def test_sign_allowlist_writes_signature_file(tmp_path: Path) -> None:

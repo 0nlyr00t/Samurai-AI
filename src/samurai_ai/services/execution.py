@@ -191,6 +191,8 @@ class ToolExecutionService:
 
     def _finish_run(self, run: ToolRun, action_id: str, output: ToolOutput) -> ToolResult:
         expected_version = run.version
+        for secret in output.secrets:
+            self.redactor.register(secret)
         stdout_result = self.redactor.redact(output.stdout)
         stderr_result = self.redactor.redact(output.stderr)
         redaction_count = stdout_result.count + stderr_result.count
@@ -238,19 +240,22 @@ class ToolExecutionService:
                 injection_warnings=warnings,
             )
             event_type = "tool.run.failed"
+        payload: dict[str, Any] = {
+            "run_id": run.id,
+            "tool_id": run.tool_id,
+            "exit_code": run.exit_code,
+            "redaction_count": redaction_count,
+            "injection_warnings": list(warnings),
+        }
+        if output.egress_events:
+            payload["egress"] = list(output.egress_events)
         self.runs.save_run(
             run,
             expected_version,
             OperationEvent(
                 operation_id=run.operation_id,
                 event_type=event_type,
-                payload={
-                    "run_id": run.id,
-                    "tool_id": run.tool_id,
-                    "exit_code": run.exit_code,
-                    "redaction_count": redaction_count,
-                    "injection_warnings": list(warnings),
-                },
+                payload=payload,
             ),
         )
         if run.status is ToolRunStatus.COMPLETED:

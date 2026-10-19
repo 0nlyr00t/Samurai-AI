@@ -1,28 +1,28 @@
 """HTTP egress broker for managed tool execution.
 
-Stage 2a scope control: every request URL is evaluated against the operation
-scope, the hostname is resolved via DNS before connecting and explicitly
-excluded addresses are refused, and each redirect target is re-validated
-through the same pipeline (fail-closed, at most 3 redirects). GET, HEAD and
-POST (with an explicit body, used by the MCP transport) are supported and
-credentials in URLs are rejected; the http.fetch tool itself only exposes
-GET/HEAD through its parameter schema.
+Stage 2b scope control without DNS TOCTOU: every request URL is evaluated
+against the operation scope, the hostname is resolved exactly once, every
+resolved address is checked against the scope exclusions, and the connection
+is then made to one of those pinned addresses — the HTTP Host header (and,
+for HTTPS, the TLS SNI/server_hostname used for certificate validation) still
+carries the original hostname, so a resolver that changes its answer after
+the check cannot redirect the connection elsewhere. Redirect targets go
+through the same pipeline (fail-closed, at most 3 redirects).
 
-This is NOT a complete egress enforcement layer: the DNS check and the
-actual connection are separate lookups (TOCTOU), so a hostile resolver can
-still return a different address at connect time. Closing that gap requires
-connecting to the validated address directly, which is Stage 2b work.
+GET, HEAD and POST (with an explicit body, used by the MCP transport) are
+supported and credentials in URLs are rejected; the http.fetch tool itself
+only exposes GET/HEAD through its parameter schema.
 """
 
 from __future__ import annotations
 
+import http.client
 import socket
-import urllib.error
+import ssl
 import urllib.parse
-import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import Message
-from typing import Any
 
 from samurai_ai.domain.execution import ToolExecutionError, ToolScopeError, ToolValidationError
 from samurai_ai.domain.scope import ScopeContract, ScopeDecisionReason
@@ -31,6 +31,19 @@ MAX_REDIRECTS = 3
 _ALLOWED_METHODS = frozenset({"GET", "HEAD", "POST"})
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _READ_CHUNK = 65536
+
+Resolver = Callable[[str], list[str]]
+
+
+def default_resolver(hostname: str) -> list[str]:
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise ToolExecutionError(f"DNS resolution failed for {hostname}: {exc}") from exc
+    addresses = sorted({str(info[4][0]) for info in infos})
+    if not addresses:
+        raise ToolExecutionError(f"DNS resolution returned no addresses for {hostname}")
+    return addresses
 
 
 @dataclass(frozen=True)
@@ -43,23 +56,60 @@ class HttpResponse:
     redirects: tuple[str, ...]
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: object,
-        code: int,
-        msg: str,
-        headers: Message,
-        newurl: str,
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(
+        self, host: str, port: int, addresses: list[str], timeout: float
     ) -> None:
-        return None
+        super().__init__(host, port=port, timeout=timeout)
+        self._pinned_addresses = addresses
+        self._pinned_timeout = timeout
+
+    def connect(self) -> None:
+        self.sock = _dial_pinned(self._pinned_addresses, self.port, self._pinned_timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(
+        self, host: str, port: int, addresses: list[str], timeout: float
+    ) -> None:
+        self._ssl_context = ssl.create_default_context()
+        super().__init__(host, port=port, timeout=timeout, context=self._ssl_context)
+        self._pinned_addresses = addresses
+        self._pinned_timeout = timeout
+
+    def connect(self) -> None:
+        raw = _dial_pinned(self._pinned_addresses, self.port, self._pinned_timeout)
+        self.sock = self._ssl_context.wrap_socket(raw, server_hostname=self.host)
+
+
+def _dial_pinned(addresses: list[str], port: int, timeout: float) -> socket.socket:
+    last_error: OSError | None = None
+    for address in addresses:
+        try:
+            return socket.create_connection((address, port), timeout=timeout)
+        except OSError as exc:
+            last_error = exc
+    raise ToolExecutionError(
+        f"connect failed for all pinned addresses {addresses}: {last_error}"
+    )
 
 
 class HttpEgressBroker:
-    def __init__(self, scope: ScopeContract) -> None:
+    def __init__(self, scope: ScopeContract, resolver: Resolver = default_resolver) -> None:
         self.scope = scope
-        self._opener = urllib.request.build_opener(_NoRedirectHandler())
+        self.resolver = resolver
+
+    def resolve_and_check(self, hostname: str) -> list[str]:
+        addresses = self.resolver(hostname)
+        if not addresses:
+            raise ToolExecutionError(f"DNS resolution returned no addresses for {hostname}")
+        for address in sorted(addresses):
+            decision = self.scope.evaluate(address)
+            if decision.reason == ScopeDecisionReason.EXCLUDED:
+                raise ToolScopeError(
+                    f"hostname {hostname} resolves to explicitly excluded address {address}"
+                )
+        return sorted(addresses)
 
     def fetch(
         self,
@@ -87,7 +137,7 @@ class HttpEgressBroker:
         current_body = body
         while True:
             self._validate_url(current)
-            response = self._single_request(
+            response = self._pinned_request(
                 current, current_verb, current_body, headers, timeout, max_bytes
             )
             if response.status in (301, 302, 303, 307, 308):
@@ -132,24 +182,8 @@ class HttpEgressBroker:
                 f"URL {url} is not in operation scope: "
                 f"{decision.reason.value} ({decision.detail})"
             )
-        self._check_resolved_addresses(hostname)
 
-    def _check_resolved_addresses(self, hostname: str) -> None:
-        try:
-            infos = socket.getaddrinfo(hostname, None)
-        except socket.gaierror as exc:
-            raise ToolExecutionError(f"DNS resolution failed for {hostname}: {exc}") from exc
-        addresses = {str(info[4][0]) for info in infos}
-        if not addresses:
-            raise ToolExecutionError(f"DNS resolution returned no addresses for {hostname}")
-        for address in sorted(addresses):
-            decision = self.scope.evaluate(address)
-            if decision.reason == ScopeDecisionReason.EXCLUDED:
-                raise ToolScopeError(
-                    f"hostname {hostname} resolves to explicitly excluded address {address}"
-                )
-
-    def _single_request(
+    def _pinned_request(
         self,
         url: str,
         method: str,
@@ -158,42 +192,43 @@ class HttpEgressBroker:
         timeout: float,
         max_bytes: int,
     ) -> _RawResponse:
-        request = urllib.request.Request(url, data=body, method=method)
-        request.add_header("User-Agent", "samurai-ai/0.1 (managed-tool-execution)")
+        parts = urllib.parse.urlsplit(url)
+        hostname = parts.hostname or ""
+        port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+        addresses = self.resolve_and_check(hostname)
+        path = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
+        connection: http.client.HTTPConnection
+        if parts.scheme.lower() == "https":
+            connection = _PinnedHTTPSConnection(hostname, port, addresses, timeout)
+        else:
+            connection = _PinnedHTTPConnection(hostname, port, addresses, timeout)
+        host_header = hostname if parts.port is None else f"{hostname}:{parts.port}"
+        request_headers = {
+            "Host": host_header,
+            "User-Agent": "samurai-ai/0.1 (managed-tool-execution)",
+            "Accept": "*/*",
+            "Connection": "close",
+        }
         for name, value in (headers or {}).items():
-            request.add_header(name, value)
+            request_headers[name] = value
         try:
-            with self._opener.open(request, timeout=timeout) as response:
-                body, truncated = self._read_bounded(response, max_bytes)
-                return _RawResponse(
-                    status=response.status,
-                    reason=response.reason or "",
-                    headers=response.headers,
-                    body=body,
-                    truncated=truncated,
-                )
-        except urllib.error.HTTPError as exc:
-            if exc.code in (301, 302, 303, 307, 308):
-                return _RawResponse(
-                    status=exc.code,
-                    reason=exc.reason or "",
-                    headers=exc.headers,
-                    body=b"",
-                    truncated=False,
-                )
-            body, truncated = self._read_bounded(exc, max_bytes)
+            connection.request(method, path, body=body, headers=request_headers)
+            response = connection.getresponse()
+            payload, truncated = self._read_bounded(response, max_bytes)
             return _RawResponse(
-                status=exc.code,
-                reason=exc.reason or "",
-                headers=exc.headers,
-                body=body,
+                status=response.status,
+                reason=response.reason or "",
+                headers=response.headers,
+                body=payload,
                 truncated=truncated,
             )
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (OSError, http.client.HTTPException) as exc:
             raise ToolExecutionError(f"http request failed for {url}: {exc}") from exc
+        finally:
+            connection.close()
 
     @staticmethod
-    def _read_bounded(stream: Any, max_bytes: int) -> tuple[bytes, bool]:
+    def _read_bounded(stream: http.client.HTTPResponse, max_bytes: int) -> tuple[bytes, bool]:
         chunks: list[bytes] = []
         captured = 0
         truncated = False

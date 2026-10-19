@@ -17,6 +17,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/ok":
             self._respond(200, b"hello")
+        elif self.path == "/host":
+            self._respond(200, (self.headers.get("Host") or "").encode())
         elif self.path == "/big":
             self._respond(200, b"x" * 100000)
         elif self.path == "/redirect-ok":
@@ -153,3 +155,54 @@ def test_fetch_enforces_byte_limit(http_server: str) -> None:
     response = make_broker().fetch(f"{http_server}/big", max_bytes=100)
     assert response.truncated
     assert len(response.body) <= 100
+
+
+def test_fetch_pins_connection_to_validated_address(http_server: str) -> None:
+    port = http_server.rsplit(":", 1)[1]
+    calls: list[str] = []
+
+    def resolver(hostname: str) -> list[str]:
+        calls.append(hostname)
+        return ["127.0.0.1"]
+
+    broker = HttpEgressBroker(
+        ScopeContract(includes=("pinned.test",)), resolver=resolver
+    )
+    response = broker.fetch(f"http://pinned.test:{port}/ok")
+    assert response.status == 200
+    assert response.body == b"hello"
+    assert calls == ["pinned.test"]
+
+    host = broker.fetch(f"http://pinned.test:{port}/host")
+    assert host.body == f"pinned.test:{port}".encode()
+
+
+def test_fetch_ignores_resolver_answers_after_validation(http_server: str) -> None:
+    port = http_server.rsplit(":", 1)[1]
+    calls: list[str] = []
+
+    def mutating_resolver(hostname: str) -> list[str]:
+        calls.append(hostname)
+        if len(calls) > 1:
+            return ["127.0.0.2"]
+        return ["127.0.0.1"]
+
+    broker = HttpEgressBroker(
+        ScopeContract(includes=("pinned.test",)), resolver=mutating_resolver
+    )
+    response = broker.fetch(f"http://pinned.test:{port}/ok")
+    assert response.status == 200
+    assert response.body == b"hello"
+    assert len(calls) == 1
+
+
+def test_fetch_denies_excluded_resolved_address(http_server: str) -> None:
+    def resolver(hostname: str) -> list[str]:
+        return ["127.0.0.2"]
+
+    broker = HttpEgressBroker(
+        ScopeContract(includes=("pinned.test",), excludes=("127.0.0.2",)),
+        resolver=resolver,
+    )
+    with pytest.raises(ToolScopeError, match="excluded"):
+        broker.fetch("http://pinned.test/ok")

@@ -64,11 +64,12 @@ uv run samurai tui
 - RU/EN first-run выбор языка, persisted locale и `/lang`;
 - persistent secrets vault (AES-256-GCM, master key в `vault.key` 0600 или env `SAMURAI_VAULT_KEY`) с per-operation scoping и `{{secret:name}}` placeholders в tool params;
 - Docker sandbox profiles (`sandbox.exec`, R2): static signed allowlist (HMAC-SHA256 от vault master key, `sandbox-allowlist.sig`), pinned-by-digest images, `--network none`, read-only/tmpfs/cap-drop/no-new-privileges/nonroot, resource limits, fail-closed preflight без auto-pull;
+- scoped egress: HTTP broker соединяется с pinned IP (single resolve + проверка каждого адреса по exclusions, Host/SNI по оригинальному имени — DNS TOCTOU устранён); per-run token-authenticated forward proxy на loopback хоста (`execution/egress.py`) для `sandbox.scoped@v1` (network_mode "scoped"): HTTP absolute-URI и CONNECT, вердикты по ScopeContract, порты только 80/443 (конфигурируемо), egress-события (host/port/verdict/bytes, без содержимого) пишутся в payload `tool.run.*` событий, proxy token регистрируется в redactor;
 - MCP без внешнего SDK (JSON-RPC 2.0, protocol 2024-11-05): stdio (no shell, allowlisted executable, per-request timeout) и HTTP transport через scope-enforced egress broker (POST + DNS/redirect revalidation); deferred tool schemas (`mcp tools` сохраняет в `app_settings`), dynamic `mcp.<server>.<tool>` resolution в registry (fail-closed, только enabled серверы), все MCP tools R2 approval-gated, output всегда untrusted-external + injection scanner;
-- 199 unit/integration/CLI/TUI tests + opt-in docker integration test (`SAMURAI_TEST_DOCKER=1`);
+- 222 unit/integration/CLI/TUI tests + opt-in docker integration tests (`SAMURAI_TEST_DOCKER=1`, включая scoped egress через реальный контейнер);
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-LLM и полный egress enforcement для произвольных процессов еще не реализованы. Stage 2b продолжается: egress proxy/DNS TOCTOU и расширенный набор security tools.
+LLM еще не реализован. Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness. Stage 2b осталось: расширенный набор security tools с threat review.
 
 ## 4. Карта репозитория
 
@@ -80,7 +81,7 @@ LLM и полный egress enforcement для произвольных проц�
 - `src/samurai_ai/domain/vault.py` — SecretMetadata, vault exceptions и `{{secret:name}}` placeholder syntax.
 - `src/samurai_ai/domain/sandbox.py` — SandboxProfile, canonical payload и HMAC-SHA256 signing.
 - `src/samurai_ai/domain/mcp.py` — McpServer, McpToolInfo, protocol constants и MCP exceptions.
-- `src/samurai_ai/execution/` — static registry (с dynamic resolver hook), ProcessManager, HTTP egress broker (GET/HEAD/POST), Docker sandbox runner и minimal MCP client (stdio/HTTP transports).
+- `src/samurai_ai/execution/` — static registry (с dynamic resolver hook), ProcessManager, HTTP egress broker (GET/HEAD/POST, DNS pinning), Docker sandbox runner, scoped egress proxy и minimal MCP client (stdio/HTTP transports).
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
 - `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v6.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
@@ -188,7 +189,7 @@ Stage 2a завершен: managed registry, process manager, HTTP scope broker,
 Следующий вертикальный срез — Stage 2b:
 
 1. ~~Docker sandbox profiles с resource/network constraints и signed allowlist~~ (done: `sandbox.exec`, HMAC-signed static profiles, network none, fail-closed preflight).
-2. Egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU.
+2. ~~Egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU~~ (done: pinned-IP broker, per-run scoped egress proxy для `sandbox.scoped@v1`; известное ослабление на Docker Desktop задокументировано в разделе 3).
 3. ~~MCP stdio/HTTP, deferred schemas, health checks и trust model~~ (done: minimal JSON-RPC client, stdio+HTTP transports, `mcp.<server>.<tool>` R2 tools через ToolExecutionService, trust untrusted-external).
 4. ~~Persistent secrets vault и per-operation secret scoping~~ (done: AES-256-GCM, SQLite v5, CLI/TUI, placeholder resolution в tool execution).
 5. Расширенный набор security tools с отдельным threat review.

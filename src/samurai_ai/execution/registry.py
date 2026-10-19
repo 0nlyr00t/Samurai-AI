@@ -32,6 +32,8 @@ class ToolOutput:
     stderr: str
     exit_code: int
     timed_out: bool = False
+    secrets: tuple[str, ...] = ()
+    egress_events: tuple[dict[str, Any], ...] = ()
 
 
 class ToolAdapter(Protocol):
@@ -362,7 +364,7 @@ class SandboxExecTool:
         profile = get_profile(str(params["profile"]))
         executable = str(params["executable"])
         args = [str(argument) for argument in params.get("args", [])]
-        self.runner.build_argv(profile, "preflight", executable, args)
+        self.runner.validate_invocation(profile, executable, args)
         asyncio.run(self.runner.preflight(profile))
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
@@ -370,17 +372,28 @@ class SandboxExecTool:
         executable = str(params["executable"])
         args = [str(argument) for argument in params.get("args", [])]
         run_id = str(params.get("_run_id") or uuid4().hex[:12])
-        result = self.runner.run(profile, run_id, executable, args)
+        outcome = self.runner.run(profile, run_id, executable, args, scope)
+        result = outcome.result
         stderr = result.stderr
         if result.timed_out:
             stderr += "\n[sandbox timed out]"
         if result.truncated:
             stderr += "\n[output truncated]"
+        if outcome.egress_events:
+            allowed = sum(
+                1 for event in outcome.egress_events if event["verdict"] == "allowed"
+            )
+            stderr += (
+                f"\n[egress: {len(outcome.egress_events)} proxied request(s), "
+                f"{allowed} allowed]"
+            )
         return ToolOutput(
             stdout=result.stdout,
             stderr=stderr,
             exit_code=result.exit_code if result.exit_code is not None else -1,
             timed_out=result.timed_out,
+            secrets=(outcome.proxy_token,) if outcome.proxy_token else (),
+            egress_events=outcome.egress_events,
         )
 
 
