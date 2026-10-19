@@ -2,11 +2,14 @@ import json
 from pathlib import Path
 
 from samurai_ai.cli import main
+from samurai_ai.domain.execution import ToolRun
 from samurai_ai.domain.kernel import PlanTask
+from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.storage.database import Database
+from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.recovery import RecoveryRepository
@@ -210,3 +213,37 @@ def test_cli_lang_set_and_show(tmp_path: Path, capsys, monkeypatch) -> None:
 
     assert main(["--db", database, "lang", "de"]) == 2
     assert "unsupported locale" in capsys.readouterr().err
+
+
+def test_cli_reconcile_marks_tool_runs_failed(tmp_path: Path, capsys) -> None:
+    database = str(tmp_path / "reconcile-tool-runs.db")
+    operation_id = create_operation(database, capsys)
+    runs = ToolRunRepository(Database(database))
+    run = ToolRun(operation_id=operation_id, tool_id="local.echo", tool_version=1)
+    runs.add_run(
+        run,
+        OperationEvent(
+            operation_id=operation_id,
+            event_type="tool.run.queued",
+            payload={"run_id": run.id},
+        ),
+    )
+    expected_version = run.version
+    run.start()
+    runs.save_run(
+        run,
+        expected_version,
+        OperationEvent(
+            operation_id=operation_id,
+            event_type="tool.run.started",
+            payload={"run_id": run.id},
+        ),
+    )
+
+    result = main(["--db", database, "--json", "reconcile", operation_id])
+    assert result == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["tool_runs_marked_failed"] == [run.id]
+    restored = runs.get_run(run.id)
+    assert restored is not None
+    assert restored.status.value == "failed"

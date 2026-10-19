@@ -6,11 +6,13 @@ from textual.widgets import Button, Input, RichLog
 
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.storage.database import Database
+from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.recovery import RecoveryRepository
@@ -19,22 +21,25 @@ from samurai_ai.tui.app import LanguagePromptScreen, SamuraiApp
 
 def make_stack(
     tmp_path: Path, name: str = "tui-i18n.db"
-) -> tuple[OperationService, KernelService, SettingsService, RecoveryService]:
+) -> tuple[
+    OperationService, KernelService, SettingsService, RecoveryService, ToolExecutionService
+]:
     database = Database(tmp_path / name)
     service = OperationService(OperationRepository(database))
     kernel = KernelService(service, KernelRepository(database))
     recovery_repository = RecoveryRepository(database)
     settings = SettingsService(recovery_repository)
     recovery = RecoveryService(service, kernel, recovery_repository)
-    return service, kernel, settings, recovery
+    execution = ToolExecutionService(service, kernel, recovery, ToolRunRepository(database))
+    return service, kernel, settings, recovery, execution
 
 
 def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SAMURAI_LANG", raising=False)
-    service, kernel, settings, recovery = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution = make_stack(tmp_path)
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery)
+        app = SamuraiApp(service, kernel, settings, recovery, execution)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
@@ -66,10 +71,10 @@ def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> N
 
 def test_first_run_language_choice_english_via_keyboard(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SAMURAI_LANG", raising=False)
-    service, kernel, settings, recovery = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution = make_stack(tmp_path)
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery)
+        app = SamuraiApp(service, kernel, settings, recovery, execution)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
@@ -86,11 +91,11 @@ def test_first_run_language_choice_english_via_keyboard(tmp_path: Path, monkeypa
 
 
 def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
-    service, kernel, settings, recovery = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution = make_stack(tmp_path)
     settings.set_locale("ru")
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery)
+        app = SamuraiApp(service, kernel, settings, recovery, execution)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)
@@ -116,7 +121,7 @@ def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
 
 
 def test_lang_command_switches_language_without_losing_operation(tmp_path: Path) -> None:
-    service, kernel, settings, recovery = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution = make_stack(tmp_path)
     settings.set_locale("en")
     operation = service.create(
         "Lang lab",
@@ -125,7 +130,7 @@ def test_lang_command_switches_language_without_losing_operation(tmp_path: Path)
     )
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, operation.id)
+        app = SamuraiApp(service, kernel, settings, recovery, execution, operation.id)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             journal = app.query_one("#journal", RichLog)

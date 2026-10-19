@@ -178,10 +178,41 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 """
 
+_MIGRATION_4 = """
+CREATE TABLE IF NOT EXISTS tool_runs (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    task_id TEXT,
+    tool_id TEXT NOT NULL,
+    tool_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    recovery_action_id TEXT,
+    approval_id TEXT,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS tool_runs_operation_id
+ON tool_runs(operation_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS tool_runs_operation_status
+ON tool_runs(operation_id, status, id);
+
+CREATE INDEX IF NOT EXISTS tool_runs_tool
+ON tool_runs(tool_id, tool_version);
+
+CREATE INDEX IF NOT EXISTS tool_runs_recovery_action
+ON tool_runs(recovery_action_id);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
     (3, _MIGRATION_3),
+    (4, _MIGRATION_4),
 )
 
 

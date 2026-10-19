@@ -6,9 +6,11 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
 from samurai_ai.config import default_database_path
+from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.operations import (
     Operation,
@@ -18,6 +20,7 @@ from samurai_ai.domain.operations import (
 )
 from samurai_ai.domain.recovery import RecoveryStateError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
+from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.recovery import (
@@ -28,6 +31,7 @@ from samurai_ai.services.recovery import (
 )
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.storage.database import Database
+from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
@@ -77,22 +81,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_kernel_commands(subcommands)
     register_recovery_commands(subcommands)
+    register_execution_commands(subcommands)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    operation_service, kernel_service, settings_service, recovery_service = _make_services(
-        args.db
+    operation_service, kernel_service, settings_service, recovery_service, execution_service = (
+        _make_services(args.db)
     )
 
     try:
-        recovery_result = handle_recovery_command(args, recovery_service, settings_service)
+        recovery_result = handle_recovery_command(
+            args,
+            recovery_service,
+            settings_service,
+            execution_service,
+        )
         if recovery_result is not None:
             return recovery_result
         kernel_result = handle_kernel_command(args, kernel_service)
         if kernel_result is not None:
             return kernel_result
+        execution_result = handle_execution_command(args, execution_service)
+        if execution_result is not None:
+            return execution_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -109,6 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             kernel_service,
             settings_service,
             recovery_service,
+            execution_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -124,6 +138,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         RecoveryActionNotFoundError,
         PlanNotFoundError,
         InvalidLocaleError,
+        ToolExecutionError,
+        ToolNotFoundError,
+        ToolRunNotFoundError,
+        ToolRunConflictError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -184,7 +202,9 @@ def _handle_operation(
 
 def _make_services(
     database_path: Path | None,
-) -> tuple[OperationService, KernelService, SettingsService, RecoveryService]:
+) -> tuple[
+    OperationService, KernelService, SettingsService, RecoveryService, ToolExecutionService
+]:
     path = database_path or default_database_path()
     database = Database(path)
     operations = OperationService(OperationRepository(database))
@@ -192,7 +212,10 @@ def _make_services(
     recovery_repository = RecoveryRepository(database)
     settings = SettingsService(recovery_repository)
     recovery = RecoveryService(operations, kernel, recovery_repository)
-    return operations, kernel, settings, recovery
+    execution = ToolExecutionService(
+        operations, kernel, recovery, ToolRunRepository(database)
+    )
+    return operations, kernel, settings, recovery, execution
 
 
 def _emit_operation(operation: Operation, json_output: bool) -> None:

@@ -1,3 +1,4 @@
+from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.kernel import (
     ApprovalNotFoundError,
     FindingNotFoundError,
@@ -30,4 +31,6 @@ __all__ = [
     "RecoveryService",
     "SettingsService",
     "SnapshotNotFoundError",
+    "ToolExecutionService",
+    "ToolRunNotFoundError",
 ]

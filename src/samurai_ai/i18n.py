@@ -22,6 +22,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.approvals": "/approvals        Show approval requests",
         "help.snapshots": "/snapshots        Show operation snapshots",
         "help.reconcile": "/reconcile        Reconcile interrupted recovery actions",
+        "help.tools": "/tools            Show registered tool definitions",
+        "help.runs": "/runs             Show tool runs of the current operation",
         "help.lang": "/lang [ru|en]     Show or change the interface language",
         "help.exit": "/exit             Close Samurai AI",
         "help.ctrl-o": "Ctrl-O            Toggle the event journal",
@@ -43,6 +45,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "evidence.empty": "No artifacts",
         "approvals.empty": "No approvals",
         "snapshots.empty": "No snapshots",
+        "tools.empty": "No registered tools",
+        "tools.network": "network",
+        "tools.no-network": "no-network",
+        "runs.empty": "No tool runs",
         "header.with-operation": (
             "SAMURAI AI  {operation_id}  {mode}  SCOPE: OK  MODEL: NOT CONFIGURED"
         ),
@@ -59,8 +65,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chooser.english": "English",
         "chooser.russian": "Русский",
         "reconcile.report": (
-            "actions-marked-unknown={actions} | resumable-tasks={tasks} | "
-            "pending-approvals={approvals}"
+            "actions-marked-unknown={actions} | tool-runs-marked-failed={runs} | "
+            "resumable-tasks={tasks} | pending-approvals={approvals}"
         ),
         "list.none": "(none)",
     },
@@ -84,6 +90,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.approvals": "/approvals        Показать запросы на согласование",
         "help.snapshots": "/snapshots        Показать снимки операции",
         "help.reconcile": "/reconcile        Свести прерванные действия восстановления",
+        "help.tools": "/tools            Показать зарегистрированные инструменты",
+        "help.runs": "/runs             Показать запуски инструментов текущей операции",
         "help.lang": "/lang [ru|en]     Показать или сменить язык интерфейса",
         "help.exit": "/exit             Закрыть Samurai AI",
         "help.ctrl-o": "Ctrl-O            Переключить журнал событий",
@@ -105,6 +113,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "evidence.empty": "Нет артефактов",
         "approvals.empty": "Нет согласований",
         "snapshots.empty": "Нет снимков",
+        "tools.empty": "Нет зарегистрированных инструментов",
+        "tools.network": "сеть",
+        "tools.no-network": "без-сети",
+        "runs.empty": "Нет запусков инструментов",
         "header.with-operation": (
             "SAMURAI AI  {operation_id}  {mode}  ОБЛАСТЬ: OK  МОДЕЛЬ: НЕ НАСТРОЕНА"
         ),
@@ -121,8 +133,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chooser.english": "English",
         "chooser.russian": "Русский",
         "reconcile.report": (
-            "отмечено-unknown={actions} | возобновимые-задачи={tasks} | "
-            "ожидающие-согласования={approvals}"
+            "отмечено-unknown={actions} | tool-runs-failed={runs} | "
+            "возобновимые-задачи={tasks} | ожидающие-согласования={approvals}"
         ),
         "list.none": "(нет)",
     },
@@ -140,6 +152,8 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.approvals",
     "help.snapshots",
     "help.reconcile",
+    "help.tools",
+    "help.runs",
     "help.lang",
     "help.exit",
     "help.ctrl-o",
