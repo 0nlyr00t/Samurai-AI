@@ -3,8 +3,10 @@
 Stage 2a scope control: every request URL is evaluated against the operation
 scope, the hostname is resolved via DNS before connecting and explicitly
 excluded addresses are refused, and each redirect target is re-validated
-through the same pipeline (fail-closed, at most 3 redirects). Only GET and
-HEAD are supported and credentials in URLs are rejected.
+through the same pipeline (fail-closed, at most 3 redirects). GET, HEAD and
+POST (with an explicit body, used by the MCP transport) are supported and
+credentials in URLs are rejected; the http.fetch tool itself only exposes
+GET/HEAD through its parameter schema.
 
 This is NOT a complete egress enforcement layer: the DNS check and the
 actual connection are separate lookups (TOCTOU), so a hostile resolver can
@@ -26,7 +28,7 @@ from samurai_ai.domain.execution import ToolExecutionError, ToolScopeError, Tool
 from samurai_ai.domain.scope import ScopeContract, ScopeDecisionReason
 
 MAX_REDIRECTS = 3
-_ALLOWED_METHODS = frozenset({"GET", "HEAD"})
+_ALLOWED_METHODS = frozenset({"GET", "HEAD", "POST"})
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _READ_CHUNK = 65536
 
@@ -64,18 +66,30 @@ class HttpEgressBroker:
         url: str,
         *,
         method: str = "GET",
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float = 10.0,
         max_bytes: int = 65536,
         max_redirects: int = MAX_REDIRECTS,
     ) -> HttpResponse:
         verb = method.upper()
         if verb not in _ALLOWED_METHODS:
-            raise ToolValidationError(f"http method {method!r} is not allowed (GET/HEAD only)")
+            raise ToolValidationError(
+                f"http method {method!r} is not allowed (GET/HEAD/POST only)"
+            )
+        if body is not None and verb != "POST":
+            raise ToolValidationError(f"request body is only allowed with POST, not {verb}")
+        if verb == "POST" and body is None:
+            raise ToolValidationError("POST requests require a body")
         redirects: list[str] = []
         current = url
+        current_verb = verb
+        current_body = body
         while True:
             self._validate_url(current)
-            response = self._single_request(current, verb, timeout, max_bytes)
+            response = self._single_request(
+                current, current_verb, current_body, headers, timeout, max_bytes
+            )
             if response.status in (301, 302, 303, 307, 308):
                 if len(redirects) >= max_redirects:
                     raise ToolExecutionError(
@@ -86,6 +100,9 @@ class HttpEgressBroker:
                     raise ToolExecutionError(f"redirect without Location header from {current}")
                 current = urllib.parse.urljoin(current, location)
                 redirects.append(current)
+                if response.status == 303:
+                    current_verb = "GET"
+                    current_body = None
                 continue
             return HttpResponse(
                 url=current,
@@ -133,10 +150,18 @@ class HttpEgressBroker:
                 )
 
     def _single_request(
-        self, url: str, method: str, timeout: float, max_bytes: int
+        self,
+        url: str,
+        method: str,
+        body: bytes | None,
+        headers: dict[str, str] | None,
+        timeout: float,
+        max_bytes: int,
     ) -> _RawResponse:
-        request = urllib.request.Request(url, method=method)
+        request = urllib.request.Request(url, data=body, method=method)
         request.add_header("User-Agent", "samurai-ai/0.1 (managed-tool-execution)")
+        for name, value in (headers or {}).items():
+            request.add_header(name, value)
         try:
             with self._opener.open(request, timeout=timeout) as response:
                 body, truncated = self._read_bounded(response, max_bytes)

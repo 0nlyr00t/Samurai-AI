@@ -39,6 +39,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "5")
         self.end_headers()
 
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length)
+        self._respond(200, b"posted:" + body)
+
     def log_message(self, format: str, *args: object) -> None:
         pass
 
@@ -80,9 +85,25 @@ def test_fetch_head_is_allowed(http_server: str) -> None:
     assert response.body == b""
 
 
-def test_fetch_rejects_non_read_methods(http_server: str) -> None:
-    with pytest.raises(ToolValidationError, match="GET/HEAD"):
+def test_fetch_rejects_write_methods_beyond_post(http_server: str) -> None:
+    for method in ("PUT", "DELETE", "PATCH"):
+        with pytest.raises(ToolValidationError, match="GET/HEAD/POST"):
+            make_broker().fetch(f"{http_server}/ok", method=method)
+
+
+def test_fetch_post_requires_body(http_server: str) -> None:
+    with pytest.raises(ToolValidationError, match="require a body"):
         make_broker().fetch(f"{http_server}/ok", method="POST")
+    with pytest.raises(ToolValidationError, match="only allowed with POST"):
+        make_broker().fetch(f"{http_server}/ok", method="GET", body=b"{}")
+
+
+def test_fetch_post_sends_body(http_server: str) -> None:
+    response = make_broker().fetch(
+        f"{http_server}/ok", method="POST", body=b'{"jsonrpc":"2.0"}'
+    )
+    assert response.status == 200
+    assert response.body == b'posted:{"jsonrpc":"2.0"}'
 
 
 def test_fetch_rejects_credentials_in_url(http_server: str) -> None:

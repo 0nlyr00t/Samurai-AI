@@ -224,12 +224,27 @@ CREATE INDEX IF NOT EXISTS secret_entries_operation_id
 ON secret_entries(operation_id, name);
 """
 
+_MIGRATION_6 = """
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    transport TEXT NOT NULL,
+    command TEXT,
+    url TEXT,
+    trust_level TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL
+);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
     (3, _MIGRATION_3),
     (4, _MIGRATION_4),
     (5, _MIGRATION_5),
+    (6, _MIGRATION_6),
 )
 
 

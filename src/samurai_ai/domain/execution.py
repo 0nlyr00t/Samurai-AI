@@ -46,6 +46,7 @@ class ToolKind(StrEnum):
     PROCESS = "process"
     HTTP = "http"
     SANDBOX = "sandbox"
+    MCP = "mcp"
 
 
 class ToolRunStatus(StrEnum):
