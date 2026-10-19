@@ -9,9 +9,12 @@ from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.settings import SettingsService
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
+from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.tui.app import SamuraiApp
 
 
@@ -19,6 +22,10 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     database = Database(tmp_path / "tui.db")
     service = OperationService(OperationRepository(database))
     kernel = KernelService(service, KernelRepository(database))
+    recovery_repository = RecoveryRepository(database)
+    settings = SettingsService(recovery_repository)
+    settings.set_locale("en")
+    recovery = RecoveryService(service, kernel, recovery_repository)
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -54,7 +61,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     )
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, operation.id)
+        app = SamuraiApp(service, kernel, settings, recovery, operation.id)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             header = app.query_one("#operation-header", Static)

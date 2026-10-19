@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0 — Walking Skeleton** and **Stage 1 core — Operation Kernel** are complete.
+**Stage 0 — Walking Skeleton**, **Stage 1 core — Operation Kernel**, and **Stage 1b — Recovery Hardening** are complete.
 
 Implemented:
 
@@ -30,11 +30,13 @@ Implemented:
 - R0–R4 approvals;
 - immutable evidence artifacts with SHA-256;
 - a findings workflow from candidate to reported;
-- SQLite migrations, append-only events, and optimistic concurrency;
-- CLI and TUI with real kernel views;
-- 54 unit/integration/CLI/TUI tests.
+- snapshots/restore/fork, recovery reconcile, and plan/scope diff;
+- RU/EN first-run language selection and `/lang` switching;
+- SQLite migrations v1–v3, append-only events, and optimistic concurrency;
+- CLI and TUI with real kernel/recovery views;
+- 76 unit/integration/CLI/TUI tests.
 
-Not implemented yet: LLM orchestration, MCP, external tool execution, snapshots/reconcile/fork, and the standalone binary.
+Not implemented yet: LLM orchestration, MCP, external tool execution, and the standalone binary.
 
 ## Development quick start
 

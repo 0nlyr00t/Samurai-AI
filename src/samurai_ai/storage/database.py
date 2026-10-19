@@ -129,7 +129,60 @@ CREATE INDEX IF NOT EXISTS findings_operation_id
 ON findings(operation_id, status, id);
 """
 
-_MIGRATIONS: tuple[tuple[int, str], ...] = ((1, _MIGRATION_1), (2, _MIGRATION_2))
+_MIGRATION_3 = """
+CREATE TABLE IF NOT EXISTS operation_snapshots (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS operation_snapshots_operation_id
+ON operation_snapshots(operation_id, created_at, id);
+
+CREATE TRIGGER IF NOT EXISTS operation_snapshots_no_update
+BEFORE UPDATE ON operation_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'operation snapshots are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS operation_snapshots_no_delete
+BEFORE DELETE ON operation_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'operation snapshots are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS recovery_actions (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    task_id TEXT,
+    action_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS recovery_actions_operation_id
+ON recovery_actions(operation_id, id);
+
+CREATE INDEX IF NOT EXISTS recovery_actions_operation_status
+ON recovery_actions(operation_id, status, id);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+_MIGRATIONS: tuple[tuple[int, str], ...] = (
+    (1, _MIGRATION_1),
+    (2, _MIGRATION_2),
+    (3, _MIGRATION_3),
+)
 
 
 class Database:

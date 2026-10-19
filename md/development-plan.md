@@ -4,11 +4,11 @@
 
 **Этап 0 завершен:** BRD/roadmap, домен операций, scope policy, SQLite persistence, append-only events, CLI и базовый TUI.
 
-**Этап 1 core завершен:** plans/tasks/dependencies, stage gates, approvals R0–R4, immutable evidence artifacts, findings workflow, policy-gated operation transitions, SQLite migration v2, kernel CLI и read-only TUI views. Проверки: 54 tests, ruff, strict mypy и CLI E2E — успешно.
+**Этап 1 завершен:** Operation Kernel и Recovery Hardening. Реализованы plans/tasks/gates, approvals R0–R4, immutable evidence, findings workflow, snapshots/restore/fork, recovery actions reconcile, plan/scope diff, SQLite migrations v1–v3, kernel/recovery CLI, TUI и RU/EN first-run localization. Проверки: 76 tests, ruff, strict mypy и CLI/TUI E2E — успешно.
 
-Текущие ограничения: LLM, MCP и внешнее выполнение инструментов еще не подключены; snapshots/reconcile/fork отложены до recovery-среза перед Tool Execution; URL scope rules поддерживают только origins; evidence content пока считается доверенным текстом оператора.
+Текущие ограничения: LLM, MCP и внешнее выполнение инструментов еще не подключены; restore создает новую операцию и не копирует artifact content/findings/approvals; URL scope rules поддерживают только origins; полная локализация будущих CLI error messages обязательна для новых строк.
 
-Следующий рабочий этап — **Этап 1b, Recovery Hardening**, затем **Этап 2, Tool Execution и безопасность**.
+Следующий рабочий этап — **Этап 2, Tool Execution и безопасность**.
 
 ## 1. Архитектурный курс
 
@@ -76,7 +76,15 @@
 - Diff для изменений scope/plan и operator-facing recovery report.
 - Localization foundation RU/EN: first-run выбор языка, persisted locale, `/lang`, внешние строки CLI/TUI и синхронные RU/EN ресурсы.
 
-Этап 1b должен быть завершен до подключения внешнего Tool Execution.
+Этап 1b завершен до подключения внешнего Tool Execution.
+
+### Acceptance для завершенного Recovery Hardening
+
+- Snapshot immutable и содержит metadata artifacts без artifact content.
+- Restore создает новую операцию, сбрасывает plan progress и не копирует artifacts/findings/approvals.
+- Fork сохраняет scope/objective/plan structure и не переносит evidence или approvals.
+- Reconcile атомарно переводит in-flight actions в `unknown`, не выполняет retry и возвращает resumable tasks/pending approvals.
+- RU/EN locale сохраняется, first-run выбор и `/lang` работают без потери operation state.
 
 ## 4. Этап 2 — Tool Execution и безопасность
 

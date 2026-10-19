@@ -45,7 +45,7 @@ uv run samurai tui
 
 ## 3. Текущее состояние
 
-Завершен **Этап 0 — Walking Skeleton** и **Этап 1 core — Operation Kernel**:
+Завершен **Этап 0 — Walking Skeleton**, **Этап 1 core — Operation Kernel** и **Этап 1b — Recovery Hardening**:
 
 - четыре режима операций и проверяемые lifecycle transitions;
 - include/exclude scope для domain, wildcard, URL origins и IP/CIDR;
@@ -53,30 +53,40 @@ uv run samurai tui
 - approvals R0–R4: R0/R1 auto-approved, R2/R3 требуют решения, R4 auto-rejected;
 - immutable evidence artifacts с SHA-256 и файловым хранилищем;
 - findings workflow `candidate → validating → validated / false-positive / duplicate → reported`;
-- policy-gated operation transitions;
-- SQLite migrations v1/v2, append-only events и optimistic concurrency;
-- kernel CLI и read-only TUI views;
-- 54 unit/integration/CLI/TUI tests;
-- ruff, strict mypy и CLI E2E проходят успешно.
+- immutable operation snapshots и безопасный restore в новую операцию;
+- operation fork без копирования artifact content, findings или approvals;
+- recovery actions и reconcile in-flight → `unknown` без retry;
+- plan/scope diff;
+- SQLite migrations v1–v3, append-only events и optimistic concurrency;
+- kernel/recovery CLI и TUI;
+- RU/EN first-run выбор языка, persisted locale и `/lang`;
+- 76 unit/integration/CLI/TUI tests;
+- ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-LLM, MCP и внешнее выполнение security-инструментов еще не реализованы. Snapshots/reconcile/fork еще не реализованы и запланированы отдельным recovery-срезом перед Tool Execution. Не показывать эти возможности как готовые.
+LLM, MCP и внешнее выполнение security-инструментов еще не реализованы. Следующий этап — Stage 2, Tool Execution и безопасность.
 
 ## 4. Карта репозитория
 
 - `src/samurai_ai/domain/operations.py` — Operation, OperationMode, OperationStatus и переходы.
 - `src/samurai_ai/domain/scope.py` — ScopeContract и детерминированные решения.
 - `src/samurai_ai/domain/kernel.py` — PlanTask, StageGate, OperationPlan, Approval, Artifact и Finding.
-- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations.
+- `src/samurai_ai/domain/recovery.py` — RecoveryAction, OperationSnapshot, RecoveryReport и diff.
+- `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
+- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v3.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
 - `src/samurai_ai/storage/kernel.py` — KernelRepository для plans/approvals/artifacts/findings.
+- `src/samurai_ai/storage/recovery.py` — snapshots, recovery actions и app settings.
 - `src/samurai_ai/services/operations.py` — сервисный сценарий операций.
 - `src/samurai_ai/services/kernel.py` — KernelService, policy preconditions и summary.
+- `src/samurai_ai/services/recovery.py` — snapshots/restore/fork/reconcile/diff.
+- `src/samurai_ai/services/settings.py` — persisted locale и `SAMURAI_LANG`.
 - `src/samurai_ai/cli.py` — CLI entry point и общие команды.
 - `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
-- `src/samurai_ai/tui/app.py` — TUI без доменной логики в обработчиках.
-- `tests/unit` — чистое доменное ядро и scope/kernel edge cases.
+- `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
+- `src/samurai_ai/tui/app.py` — локализованный TUI без доменной логики в обработчиках.
+- `tests/unit` — чистое доменное ядро и scope/kernel/recovery edge cases.
 - `tests/integration` — SQLite, recovery, append-only, CLI и kernel E2E.
-- `tests/tui` — клавиатурный TUI smoke через `run_test`.
+- `tests/tui` — клавиатурный TUI и i18n smoke через `run_test`.
 
 ## 5. Текущая семантика scope
 
@@ -118,27 +128,34 @@ Plan создается из JSON-файла:
 
 ```bash
 samurai plan create <operation-id> plan.json
-samurai plan show|approve <operation-id>
+samurai plan show|approve|diff <operation-id> ...
 samurai task start|complete <operation-id> <task-id>
 samurai gate pass <operation-id> <gate-id>
 samurai artifact add|list <operation-id> ...
 samurai finding create|list|attach|validate|report ...
 samurai approval request|list|approve|reject ...
+samurai snapshot create|list|show|restore ...
+samurai operation fork <operation-id> [--name]
+samurai reconcile <operation-id>
+samurai lang [ru|en]
 ```
 
-TUI read-only команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/status`, `/scope`.
+TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/lang`, `/status`, `/scope`.
 
-## 7. Следующий этап — Recovery Hardening и Tool Execution
+## 7. Следующий этап — Tool Execution и безопасность
 
-Сначала завершить Stage 1b:
+Stage 1b завершен: snapshots/restore/fork, reconcile, plan/scope diff и RU/EN localization работают и покрыты тестами.
 
-1. Operation snapshots и controlled restore points.
-2. Reconcile in-flight actions после crash/restart; действие с неизвестным внешним результатом не повторять автоматически.
-3. Operation fork/resume без копирования секретов и без потери audit trail.
-4. Diff для изменений scope/plan и operator-facing recovery report.
-5. Localization foundation RU/EN: first-run выбор языка, persisted locale, `/lang` и внешние строки CLI/TUI.
+Следующий вертикальный срез — Stage 2:
 
-Затем начинать Stage 2: tool registry, async process manager, sandbox, egress policy, MCP, secrets redaction и prompt-injection defenses. На Stage 3 добавить расширяемый model registry для frontier APIs и first-class Ollama/local provider; playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
+1. Versioned tool registry и native adapters с risk/capability metadata.
+2. Async process manager: background, cancel, timeout, resource limits, circuit breaker.
+3. Docker sandbox и network egress policy; повторная scope-проверка DNS/redirect.
+4. MCP stdio/HTTP, deferred schemas, health checks и trust model.
+5. Secrets vault/redaction и prompt-injection defenses.
+6. Интеграция in-flight tool actions с recovery journal.
+
+На Stage 3 добавить расширяемый model registry для frontier APIs и first-class Ollama/local provider; playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
 
 ## 8. Инварианты и правила изменений
 

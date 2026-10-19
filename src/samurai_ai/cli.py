@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
+from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
 from samurai_ai.config import default_database_path
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.operations import (
@@ -15,12 +16,21 @@ from samurai_ai.domain.operations import (
     OperationStatus,
     OperationTransitionError,
 )
+from samurai_ai.domain.recovery import RecoveryStateError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
+from samurai_ai.services.recovery import (
+    PlanNotFoundError,
+    RecoveryActionNotFoundError,
+    RecoveryService,
+    SnapshotNotFoundError,
+)
+from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
+from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
 from samurai_ai.tui.app import SamuraiApp
 
 
@@ -50,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
     transition.add_argument("operation_id")
     transition.add_argument("status", choices=[status.value for status in OperationStatus])
 
+    fork = operation_commands.add_parser(
+        "fork", help="Fork an operation into a fresh copy without progress"
+    )
+    fork.add_argument("operation_id")
+    fork.add_argument("--name", default=None)
+
     scope = subcommands.add_parser("scope", help="Evaluate operation scope")
     scope_commands = scope.add_subparsers(dest="scope_command", required=True)
     check = scope_commands.add_parser("check", help="Check a target against operation scope")
@@ -60,14 +76,20 @@ def build_parser() -> argparse.ArgumentParser:
     tui.add_argument("--operation", dest="operation_id")
 
     register_kernel_commands(subcommands)
+    register_recovery_commands(subcommands)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    operation_service, kernel_service = _make_services(args.db)
+    operation_service, kernel_service, settings_service, recovery_service = _make_services(
+        args.db
+    )
 
     try:
+        recovery_result = handle_recovery_command(args, recovery_service, settings_service)
+        if recovery_result is not None:
+            return recovery_result
         kernel_result = handle_kernel_command(args, kernel_service)
         if kernel_result is not None:
             return kernel_result
@@ -85,6 +107,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         SamuraiApp(
             operation_service,
             kernel_service,
+            settings_service,
+            recovery_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -94,6 +118,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         OperationConflictError,
         ScopeValidationError,
         KernelError,
+        RecoveryStateError,
+        RecoveryConflictError,
+        SnapshotNotFoundError,
+        RecoveryActionNotFoundError,
+        PlanNotFoundError,
+        InvalidLocaleError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -152,12 +182,17 @@ def _handle_operation(
     return 0
 
 
-def _make_services(database_path: Path | None) -> tuple[OperationService, KernelService]:
+def _make_services(
+    database_path: Path | None,
+) -> tuple[OperationService, KernelService, SettingsService, RecoveryService]:
     path = database_path or default_database_path()
     database = Database(path)
     operations = OperationService(OperationRepository(database))
     kernel = KernelService(operations, KernelRepository(database))
-    return operations, kernel
+    recovery_repository = RecoveryRepository(database)
+    settings = SettingsService(recovery_repository)
+    recovery = RecoveryService(operations, kernel, recovery_repository)
+    return operations, kernel, settings, recovery
 
 
 def _emit_operation(operation: Operation, json_output: bool) -> None:
