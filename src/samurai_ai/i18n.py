@@ -24,6 +24,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.reconcile": "/reconcile        Reconcile interrupted recovery actions",
         "help.tools": "/tools            Show registered tool definitions",
         "help.runs": "/runs             Show tool runs of the current operation",
+        "help.secrets": "/secrets         Show secret metadata (values are never shown)",
         "help.lang": "/lang [ru|en]     Show or change the interface language",
         "help.exit": "/exit             Close Samurai AI",
         "help.ctrl-o": "Ctrl-O            Toggle the event journal",
@@ -49,6 +50,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tools.network": "network",
         "tools.no-network": "no-network",
         "runs.empty": "No tool runs",
+        "secrets.empty": "No secrets in this scope",
+        "secrets.global": "global",
         "header.with-operation": (
             "SAMURAI AI  {operation_id}  {mode}  SCOPE: OK  MODEL: NOT CONFIGURED"
         ),
@@ -92,6 +95,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.reconcile": "/reconcile        Свести прерванные действия восстановления",
         "help.tools": "/tools            Показать зарегистрированные инструменты",
         "help.runs": "/runs             Показать запуски инструментов текущей операции",
+        "help.secrets": "/secrets         Показать метаданные секретов (значения скрыты)",
         "help.lang": "/lang [ru|en]     Показать или сменить язык интерфейса",
         "help.exit": "/exit             Закрыть Samurai AI",
         "help.ctrl-o": "Ctrl-O            Переключить журнал событий",
@@ -117,6 +121,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tools.network": "сеть",
         "tools.no-network": "без-сети",
         "runs.empty": "Нет запусков инструментов",
+        "secrets.empty": "Нет секретов в этой области",
+        "secrets.global": "глобальный",
         "header.with-operation": (
             "SAMURAI AI  {operation_id}  {mode}  ОБЛАСТЬ: OK  МОДЕЛЬ: НЕ НАСТРОЕНА"
         ),
@@ -154,6 +160,7 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.reconcile",
     "help.tools",
     "help.runs",
+    "help.secrets",
     "help.lang",
     "help.exit",
     "help.ctrl-o",

@@ -208,11 +208,28 @@ CREATE INDEX IF NOT EXISTS tool_runs_recovery_action
 ON tool_runs(recovery_action_id);
 """
 
+_MIGRATION_5 = """
+CREATE TABLE IF NOT EXISTS secret_entries (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT,
+    name TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    UNIQUE(operation_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS secret_entries_operation_id
+ON secret_entries(operation_id, name);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
     (3, _MIGRATION_3),
     (4, _MIGRATION_4),
+    (5, _MIGRATION_5),
 )
 
 

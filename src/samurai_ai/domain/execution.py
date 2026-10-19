@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from samurai_ai.domain.kernel import RiskClass
+from samurai_ai.domain.vault import SECRET_PLACEHOLDER
 
 _TOOL_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+\Z")
 
@@ -243,9 +244,19 @@ class SecretRedactor:
             if occurrences:
                 result = result.replace(value, self.PLACEHOLDER)
                 count += occurrences
+        stashed: list[str] = []
+
+        def stash(match: re.Match[str]) -> str:
+            stashed.append(match.group(0))
+            return f"\x00{len(stashed) - 1}\x00"
+
+        protected = SECRET_PLACEHOLDER.sub(stash, result)
         for pattern in self._PATTERNS:
-            result, replacements = pattern.subn(self._pattern_replacement, result)
+            protected, replacements = pattern.subn(self._pattern_replacement, protected)
             count += replacements
+        result = re.sub(
+            "\x00(\\d+)\x00", lambda match: stashed[int(match.group(1))], protected
+        )
         return RedactionResult(text=result, count=count)
 
     def _pattern_replacement(self, match: re.Match[str]) -> str:

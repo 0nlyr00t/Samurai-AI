@@ -60,12 +60,13 @@ uv run samurai tui
 - DNS/redirect scope revalidation для HTTP tool;
 - recovery action и SQLite v4 `tool_runs` для каждого execution;
 - prompt-injection warnings и `untrusted-external` trust label;
-- kernel/recovery/tool CLI и локализованный TUI;
+- kernel/recovery/tool/secret CLI и локализованный TUI;
 - RU/EN first-run выбор языка, persisted locale и `/lang`;
-- 124 unit/integration/CLI/TUI tests;
+- persistent secrets vault (AES-256-GCM, master key в `vault.key` 0600 или env `SAMURAI_VAULT_KEY`) с per-operation scoping и `{{secret:name}}` placeholders в tool params;
+- 148 unit/integration/CLI/TUI tests;
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-LLM, MCP, Docker sandbox, persistent secrets vault и полный egress enforcement еще не реализованы. Следующий этап — Stage 2b, Isolation and Protocol Expansion.
+LLM, MCP, Docker sandbox и полный egress enforcement еще не реализованы. Следующий этап — Stage 2b, Isolation and Protocol Expansion (vault slice завершен).
 
 ## 4. Карта репозитория
 
@@ -74,22 +75,26 @@ LLM, MCP, Docker sandbox, persistent secrets vault и полный egress enforc
 - `src/samurai_ai/domain/kernel.py` — PlanTask, StageGate, OperationPlan, Approval, Artifact и Finding.
 - `src/samurai_ai/domain/recovery.py` — RecoveryAction, OperationSnapshot, RecoveryReport и diff.
 - `src/samurai_ai/domain/execution.py` — ToolDefinition, ToolRun, redactor и injection scanner.
+- `src/samurai_ai/domain/vault.py` — SecretMetadata, vault exceptions и `{{secret:name}}` placeholder syntax.
 - `src/samurai_ai/execution/` — static registry, ProcessManager и HTTP egress broker.
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
-- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v4.
+- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v5.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
 - `src/samurai_ai/storage/kernel.py` — KernelRepository для plans/approvals/artifacts/findings.
 - `src/samurai_ai/storage/recovery.py` — snapshots, recovery actions и app settings.
 - `src/samurai_ai/storage/execution.py` — ToolRunRepository и recovery-compatible runs.
+- `src/samurai_ai/storage/vault.py` — VaultRepository для encrypted secret entries.
 - `src/samurai_ai/services/operations.py` — сервисный сценарий операций.
 - `src/samurai_ai/services/kernel.py` — KernelService, policy preconditions и summary.
 - `src/samurai_ai/services/recovery.py` — snapshots/restore/fork/reconcile/diff.
 - `src/samurai_ai/services/settings.py` — persisted locale и `SAMURAI_LANG`.
-- `src/samurai_ai/services/execution.py` — approval-gated managed tool execution.
+- `src/samurai_ai/services/execution.py` — approval-gated managed tool execution с vault placeholder resolution.
+- `src/samurai_ai/services/vault.py` — VaultService: AES-256-GCM encrypt/decrypt, scoping и resolve_placeholders.
 - `src/samurai_ai/cli.py` — CLI entry point и общие команды.
 - `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
 - `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
 - `src/samurai_ai/cli_execution.py` — tool list/run/show команды.
+- `src/samurai_ai/cli_vault.py` — secret add/list/remove команды (значения не печатаются).
 - `src/samurai_ai/tui/app.py` — локализованный TUI без доменной логики в обработчиках.
 - `tests/unit` — чистое доменное ядро и scope/kernel/recovery/execution edge cases.
 - `tests/integration` — SQLite, recovery, process/http broker, CLI и kernel E2E.
@@ -147,10 +152,15 @@ samurai reconcile <operation-id>
 samurai tool list
 samurai tool run <operation-id> <tool-id> --param key=value [--approval-id <id>]
 samurai tool show <run-id>
+samurai secret add <name> [--operation <id>] [--value <v> | --stdin]
+samurai secret list [--operation <id>]
+samurai secret remove <name> [--operation <id>]
 samurai lang [ru|en]
 ```
 
-TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/lang`, `/status`, `/scope`.
+Tool params поддерживают `{{secret:name}}` placeholders: значение подставляется из vault непосредственно перед исполнением, в ToolRun/events/artifacts сохраняется только placeholder-форма, а plaintext регистрируется в SecretRedactor запуска.
+
+TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/secrets`, `/lang`, `/status`, `/scope`.
 
 ## 7. Следующий этап — Isolation and Protocol Expansion
 
@@ -161,7 +171,7 @@ Stage 2a завершен: managed registry, process manager, HTTP scope broker,
 1. Docker sandbox profiles с resource/network constraints и signed allowlist.
 2. Egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU.
 3. MCP stdio/HTTP, deferred schemas, health checks и trust model.
-4. Persistent secrets vault и per-operation secret scoping.
+4. ~~Persistent secrets vault и per-operation secret scoping~~ (done: AES-256-GCM, SQLite v5, CLI/TUI, placeholder resolution в tool execution).
 5. Расширенный набор security tools с отдельным threat review.
 
 На Stage 3 добавить расширяемый model registry для frontier APIs и first-class Ollama/local provider; playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.

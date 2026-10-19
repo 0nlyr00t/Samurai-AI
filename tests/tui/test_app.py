@@ -12,23 +12,31 @@ from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import SettingsService
+from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.recovery import RecoveryRepository
+from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
 
 def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> None:
     database = Database(tmp_path / "tui.db")
-    service = OperationService(OperationRepository(database))
+    operation_repository = OperationRepository(database)
+    service = OperationService(operation_repository)
     kernel = KernelService(service, KernelRepository(database))
     recovery_repository = RecoveryRepository(database)
     settings = SettingsService(recovery_repository)
     settings.set_locale("en")
     recovery = RecoveryService(service, kernel, recovery_repository)
-    execution = ToolExecutionService(service, kernel, recovery, ToolRunRepository(database))
+    vault = VaultService(
+        VaultRepository(database), operation_repository, tmp_path / "vault.key"
+    )
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), vault=vault
+    )
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -63,9 +71,12 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         RiskClass.R2,
     )
     tool_result = execution.run_tool(operation.id, "local.echo", {"text": "hello tui"})
+    secret = vault.add(
+        "tui-token", "tui-secret-plaintext", operation.id, created_by="operator"
+    )
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, operation.id)
+        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, operation.id)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             header = app.query_one("#operation-header", Static)
@@ -100,11 +111,14 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/approvals", approval.id),
                     ("/tools", "local.echo"),
                     ("/runs", tool_result.run.id),
+                    ("/secrets", secret.id),
                 ):
                     command_input.value = command
                     await pilot.press("enter")
                     await pilot.pause()
                     assert any(expected in message for message in messages)
+
+                assert not any("tui-secret-plaintext" in message for message in messages)
 
             assert journal.display
             await pilot.press("ctrl+o")

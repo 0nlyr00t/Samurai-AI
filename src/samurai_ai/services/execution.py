@@ -16,10 +16,12 @@ from samurai_ai.domain.execution import (
 )
 from samurai_ai.domain.kernel import Approval, ApprovalStatus, ArtifactKind, RiskClass
 from samurai_ai.domain.operations import OperationEvent
+from samurai_ai.domain.vault import secret_references
 from samurai_ai.execution.registry import ToolOutput, ToolRegistry, default_registry
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.execution import ToolRunRepository
 
 
@@ -37,6 +39,7 @@ class ToolExecutionService:
         registry: ToolRegistry | None = None,
         redactor: SecretRedactor | None = None,
         scanner: PromptInjectionScanner | None = None,
+        vault: VaultService | None = None,
     ) -> None:
         self.operations = operations
         self.kernel = kernel
@@ -45,6 +48,7 @@ class ToolExecutionService:
         self.registry = registry or default_registry()
         self.redactor = redactor or SecretRedactor()
         self.scanner = scanner or PromptInjectionScanner()
+        self.vault = vault
 
     def list_tools(self) -> list[ToolDefinition]:
         return self.registry.definitions()
@@ -84,6 +88,7 @@ class ToolExecutionService:
                 f"tool {definition.id} is risk class r4 and cannot be executed"
             )
         validated = self.registry.validate_params(definition, params or {})
+        resolved = self._resolve_params(validated, operation_id)
         approval = self._resolve_approval(
             operation_id, definition, task_id, approval_id
         )
@@ -131,7 +136,7 @@ class ToolExecutionService:
         )
 
         try:
-            output = adapter.invoke(validated, operation.scope)
+            output = adapter.invoke(resolved, operation.scope)
         except ToolExecutionError:
             self._fail_run(run, action.id)
             raise
@@ -286,6 +291,30 @@ class ToolExecutionService:
             created_by=f"tool:{run.tool_id}",
         )
         return artifact.id
+
+    def _resolve_params(self, params: dict[str, Any], operation_id: str) -> dict[str, Any]:
+        def walk(value: Any) -> Any:
+            if isinstance(value, str):
+                if not secret_references(value):
+                    return value
+                if self.vault is None:
+                    raise ToolExecutionError(
+                        "secret placeholders require a configured secrets vault"
+                    )
+                resolved, plaintexts = self.vault.resolve_placeholders(
+                    value, operation_id
+                )
+                for plaintext in plaintexts:
+                    self.redactor.register(plaintext)
+                return resolved
+            if isinstance(value, list):
+                return [walk(item) for item in value]
+            if isinstance(value, dict):
+                return {key: walk(item) for key, item in value.items()}
+            return value
+
+        resolved_params: dict[str, Any] = walk(params)
+        return resolved_params
 
     def _redact_params(self, params: dict[str, Any]) -> tuple[dict[str, Any], int]:
         count = 0
