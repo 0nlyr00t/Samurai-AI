@@ -13,3 +13,7 @@ def default_database_path() -> Path:
 
 def vault_key_path() -> Path:
     return data_directory() / "vault.key"
+
+
+def sandbox_allowlist_path() -> Path:
+    return data_directory() / "sandbox-allowlist.sig"

@@ -89,6 +89,9 @@ class ToolExecutionService:
             )
         validated = self.registry.validate_params(definition, params or {})
         resolved = self._resolve_params(validated, operation_id)
+        preflight = getattr(adapter, "preflight", None)
+        if callable(preflight):
+            preflight(resolved)
         approval = self._resolve_approval(
             operation_id, definition, task_id, approval_id
         )
@@ -136,6 +139,7 @@ class ToolExecutionService:
         )
 
         try:
+            resolved["_run_id"] = run.id
             output = adapter.invoke(resolved, operation.scope)
         except ToolExecutionError:
             self._fail_run(run, action.id)
