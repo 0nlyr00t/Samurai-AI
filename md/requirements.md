@@ -142,6 +142,7 @@ Samurai AI объединяет дисциплину DSH, инструмента
 - **FR-18 — Custom Playbooks и Skills [P1].** Эксперт меняет gates, инструкции, доказательства и инструменты без изменения ядра. Плагины требуют trust review.
 - **FR-19 — Headless и интеграции [P1].** CLI без TUI, JSON events, стабильные exit codes, CI/CD и трекеры. Внешняя отправка отчетов требует отдельного подтверждения.
 - **FR-20 — Evaluation Framework [MVP: внутренний; P1: пользовательский].** Фиксируются версии модели/playbook/tools, config, время, стоимость, interventions и subtask results. Используются свежие приватные задачи и контроль contamination.
+- **FR-21 — Локализация RU/EN [MVP].** При первом запуске установщик/TUI предлагает выбор русского или английского языка, сохраняет его в конфигурации и позволяет переключать позже без потери операции. Все operator-facing строки CLI/TUI, ошибки, approvals, help и шаблоны отчетов должны быть внешними ресурсами; новые строки добавляются одновременно в RU и EN.
 
 ## 7. Требования к TUI
 
@@ -176,9 +177,10 @@ PLAN | ASK | R1 PASSIVE | TASKS:2 | COST:0.84 | /help
 - `Ctrl+O` раскрывает вывод; `Ctrl+T` открывает задачи.
 - Поддерживается steering во время выполнения.
 - `/stop` останавливает все agent-controlled задачи.
+- `/lang` открывает выбор RU/EN и применяет язык без перезаписи operation state.
 - Постоянно видны scope, risk, approval mode, активные задачи и бюджет.
 
-Базовые команды: `/operation`, `/scope`, `/mode`, `/plan`, `/tasks`, `/agents`, `/assets`, `/findings`, `/evidence`, `/report`, `/sessions`, `/model`, `/permission`, `/theme`, `/help`.
+Базовые команды: `/operation`, `/scope`, `/mode`, `/plan`, `/tasks`, `/agents`, `/assets`, `/findings`, `/evidence`, `/report`, `/sessions`, `/model`, `/permission`, `/theme`, `/lang`, `/help`.
 
 ### Approval Panel
 
