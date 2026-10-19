@@ -154,15 +154,18 @@ def test_prompt_injection_scanner_flags_suspicious_output() -> None:
     assert scanner.scan("totally benign output") == ()
 
 
-def test_default_registry_contains_stage2a_tools() -> None:
+def test_default_registry_contains_stage2_tools() -> None:
     registry = default_registry()
     definitions = {definition.id: definition for definition in registry.definitions()}
-    assert set(definitions) == {"local.echo", "process.exec", "http.fetch"}
+    assert set(definitions) == {"local.echo", "process.exec", "http.fetch", "sandbox.exec"}
     assert definitions["local.echo"].risk_class == RiskClass.R0
     assert definitions["process.exec"].risk_class == RiskClass.R1
     assert definitions["http.fetch"].risk_class == RiskClass.R2
+    assert definitions["sandbox.exec"].risk_class == RiskClass.R2
     assert definitions["http.fetch"].network_access is True
     assert definitions["process.exec"].network_access is False
+    assert definitions["sandbox.exec"].network_access is False
+    assert definitions["sandbox.exec"].kind == ToolKind.SANDBOX
 
 
 def test_registry_is_fail_closed_for_unknown_tools() -> None:

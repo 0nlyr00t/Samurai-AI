@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
+from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
@@ -87,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_recovery_commands(subcommands)
     register_execution_commands(subcommands)
     register_vault_commands(subcommands)
+    register_sandbox_commands(subcommands)
     return parser
 
 
@@ -119,6 +121,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         vault_result = handle_vault_command(args, vault_service)
         if vault_result is not None:
             return vault_result
+        sandbox_result = handle_sandbox_command(args)
+        if sandbox_result is not None:
+            return sandbox_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":

@@ -63,10 +63,11 @@ uv run samurai tui
 - kernel/recovery/tool/secret CLI и локализованный TUI;
 - RU/EN first-run выбор языка, persisted locale и `/lang`;
 - persistent secrets vault (AES-256-GCM, master key в `vault.key` 0600 или env `SAMURAI_VAULT_KEY`) с per-operation scoping и `{{secret:name}}` placeholders в tool params;
-- 148 unit/integration/CLI/TUI tests;
+- Docker sandbox profiles (`sandbox.exec`, R2): static signed allowlist (HMAC-SHA256 от vault master key, `sandbox-allowlist.sig`), pinned-by-digest images, `--network none`, read-only/tmpfs/cap-drop/no-new-privileges/nonroot, resource limits, fail-closed preflight без auto-pull;
+- 171 unit/integration/CLI/TUI tests + opt-in docker integration test (`SAMURAI_TEST_DOCKER=1`);
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-LLM, MCP, Docker sandbox и полный egress enforcement еще не реализованы. Следующий этап — Stage 2b, Isolation and Protocol Expansion (vault slice завершен).
+LLM, MCP и полный egress enforcement для произвольных процессов еще не реализованы. Stage 2b продолжается: egress proxy/DNS TOCTOU, MCP и расширенный набор security tools.
 
 ## 4. Карта репозитория
 
@@ -76,7 +77,8 @@ LLM, MCP, Docker sandbox и полный egress enforcement еще не реал
 - `src/samurai_ai/domain/recovery.py` — RecoveryAction, OperationSnapshot, RecoveryReport и diff.
 - `src/samurai_ai/domain/execution.py` — ToolDefinition, ToolRun, redactor и injection scanner.
 - `src/samurai_ai/domain/vault.py` — SecretMetadata, vault exceptions и `{{secret:name}}` placeholder syntax.
-- `src/samurai_ai/execution/` — static registry, ProcessManager и HTTP egress broker.
+- `src/samurai_ai/domain/sandbox.py` — SandboxProfile, canonical payload и HMAC-SHA256 signing.
+- `src/samurai_ai/execution/` — static registry, ProcessManager, HTTP egress broker и Docker sandbox runner.
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
 - `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v5.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
@@ -95,6 +97,7 @@ LLM, MCP, Docker sandbox и полный egress enforcement еще не реал
 - `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
 - `src/samurai_ai/cli_execution.py` — tool list/run/show команды.
 - `src/samurai_ai/cli_vault.py` — secret add/list/remove команды (значения не печатаются).
+- `src/samurai_ai/cli_sandbox.py` — sandbox profiles/sign команды.
 - `src/samurai_ai/tui/app.py` — локализованный TUI без доменной логики в обработчиках.
 - `tests/unit` — чистое доменное ядро и scope/kernel/recovery/execution edge cases.
 - `tests/integration` — SQLite, recovery, process/http broker, CLI и kernel E2E.
@@ -155,10 +158,14 @@ samurai tool show <run-id>
 samurai secret add <name> [--operation <id>] [--value <v> | --stdin]
 samurai secret list [--operation <id>]
 samurai secret remove <name> [--operation <id>]
+samurai sandbox profiles
+samurai sandbox sign
 samurai lang [ru|en]
 ```
 
 Tool params поддерживают `{{secret:name}}` placeholders: значение подставляется из vault непосредственно перед исполнением, в ToolRun/events/artifacts сохраняется только placeholder-форма, а plaintext регистрируется в SecretRedactor запуска.
+
+`sandbox.exec` исполняет только executables из allowlist подписанного профиля: образ обязан быть pinned by digest и уже присутствовать локально (auto-pull запрещён), контейнер стартует с `--network none`, `--read-only`, `--cap-drop ALL`, `no-new-privileges` и non-root user. Подпись allowlist создаётся через `samurai sandbox sign` и проверяется до любого запуска.
 
 TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/secrets`, `/lang`, `/status`, `/scope`.
 
@@ -168,7 +175,7 @@ Stage 2a завершен: managed registry, process manager, HTTP scope broker,
 
 Следующий вертикальный срез — Stage 2b:
 
-1. Docker sandbox profiles с resource/network constraints и signed allowlist.
+1. ~~Docker sandbox profiles с resource/network constraints и signed allowlist~~ (done: `sandbox.exec`, HMAC-signed static profiles, network none, fail-closed preflight).
 2. Egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU.
 3. MCP stdio/HTTP, deferred schemas, health checks и trust model.
 4. ~~Persistent secrets vault и per-operation secret scoping~~ (done: AES-256-GCM, SQLite v5, CLI/TUI, placeholder resolution в tool execution).

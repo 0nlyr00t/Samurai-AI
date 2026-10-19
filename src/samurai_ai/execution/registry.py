@@ -10,7 +10,9 @@ import asyncio
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import uuid4
 
+from samurai_ai.config import sandbox_allowlist_path, vault_key_path
 from samurai_ai.domain.execution import (
     ToolDefinition,
     ToolKind,
@@ -21,6 +23,7 @@ from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.http import HttpEgressBroker
 from samurai_ai.execution.process import ProcessManager
+from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 
 
 @dataclass(frozen=True)
@@ -291,14 +294,85 @@ class HttpFetchTool:
         )
 
 
+class SandboxExecTool:
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        if runner is None:
+            from samurai_ai.services.vault import load_master_key
+
+            runner = DockerSandboxRunner(
+                ProcessManager(allowed_executables=frozenset({"docker"})),
+                sandbox_allowlist_path(),
+                lambda: load_master_key(vault_key_path()),
+            )
+        self.runner = runner
+        self._definition = ToolDefinition(
+            id="sandbox.exec",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Run a profile-allowlisted executable in a signed, "
+            "networkless Docker sandbox",
+            risk_class=RiskClass.R2,
+            network_access=False,
+            timeout_seconds=90,
+            output_limit_bytes=65536,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "profile": {"type": "string", "minLength": 1},
+                    "executable": {"type": "string", "minLength": 1},
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": [],
+                    },
+                },
+                "required": ["profile", "executable"],
+                "additionalProperties": False,
+            },
+            capabilities=("sandbox",),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def preflight(self, params: dict[str, Any]) -> None:
+        profile = get_profile(str(params["profile"]))
+        executable = str(params["executable"])
+        args = [str(argument) for argument in params.get("args", [])]
+        self.runner.build_argv(profile, "preflight", executable, args)
+        asyncio.run(self.runner.preflight(profile))
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        profile = get_profile(str(params["profile"]))
+        executable = str(params["executable"])
+        args = [str(argument) for argument in params.get("args", [])]
+        run_id = str(params.get("_run_id") or uuid4().hex[:12])
+        result = self.runner.run(profile, run_id, executable, args)
+        stderr = result.stderr
+        if result.timed_out:
+            stderr += "\n[sandbox timed out]"
+        if result.truncated:
+            stderr += "\n[output truncated]"
+        return ToolOutput(
+            stdout=result.stdout,
+            stderr=stderr,
+            exit_code=result.exit_code if result.exit_code is not None else -1,
+            timed_out=result.timed_out,
+        )
+
+
 def default_registry() -> ToolRegistry:
-    return ToolRegistry(adapters=(LocalEchoTool(), ProcessExecTool(), HttpFetchTool()))
+    return ToolRegistry(
+        adapters=(LocalEchoTool(), ProcessExecTool(), HttpFetchTool(), SandboxExecTool())
+    )
 
 
 __all__ = [
     "HttpFetchTool",
     "LocalEchoTool",
     "ProcessExecTool",
+    "SandboxExecTool",
     "ToolAdapter",
     "ToolOutput",
     "ToolRegistry",

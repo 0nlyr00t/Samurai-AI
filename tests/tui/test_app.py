@@ -110,6 +110,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/evidence", artifact.id),
                     ("/approvals", approval.id),
                     ("/tools", "local.echo"),
+                    ("/tools", "sandbox.exec"),
                     ("/runs", tool_result.run.id),
                     ("/secrets", secret.id),
                 ):
