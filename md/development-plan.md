@@ -8,9 +8,11 @@
 
 **Этап 2a завершен:** Managed Tool Execution Core. Реализованы versioned tool registry, `local.echo`, `process.exec` без shell, `http.fetch` через scope broker, async ProcessManager, approval-gated execution, recovery integration, redaction, prompt-injection warnings, SQLite v4, tool CLI и TUI. Проверки: 124 tests, ruff, strict mypy и CLI/TUI E2E — успешно.
 
-Текущие ограничения: Docker sandbox, MCP, persistent secrets vault и полный egress enforcement для произвольных процессов относятся к Stage 2b; HTTP broker снижает DNS/redirect риск, но сохраняет DNS TOCTOU; `process.exec` не имеет сетевого доступа и допускает только allowlisted executables.
+**Этап 2b завершен (4 из 5 пунктов):** persistent secrets vault (AES-256-GCM, SQLite v5, per-operation scoping, `{{secret:name}}` placeholders), Docker sandbox profiles со static signed allowlist и resource constraints, scoped egress proxy с per-run token auth и DNS pinning (DNS TOCTOU устранен и в broker, и в proxy), MCP stdio/HTTP client без внешнего SDK (JSON-RPC 2.0, protocol 2024-11-05, deferred schemas, health checks, trust model, SQLite v6). Проверки: 222 tests + opt-in docker integration, ruff, strict mypy, CLI smoke — успешно. Пункт 5 (расширенный набор security tools) отложен до отдельного threat review.
 
-Следующий рабочий этап — **Этап 2b, Isolation and Protocol Expansion**.
+Текущие ограничения: scoped sandbox на Docker Desktop for Mac не дает hard egress enforcement (контейнер может обойти proxy через bridge NAT; полный enforcement требует Linux-harness с internal network + in-network proxy); MCP Streamable HTTP поддержан без SSE-streaming responses; `process.exec` не имеет сетевого доступа и допускает только allowlisted executables; LLM и оркестрация не реализованы.
+
+Следующий рабочий этап — **Этап 3, LLM и оркестрация** (после threat review расширенного набора security tools как параллельной задачи).
 
 ## 1. Архитектурный курс
 
@@ -107,13 +109,13 @@
 - Timeout/cancel завершают процессную группу; circuit breaker не выполняет retry.
 - Tool run, recovery action, approval и artifacts восстанавливаются после перезапуска.
 
-### Stage 2b — Isolation and Protocol Expansion
+### Stage 2b — Isolation and Protocol Expansion (завершен, 4/5)
 
-- Docker sandbox profiles с resource/network constraints и signed allowlist.
-- Настоящий egress proxy/enforcement для произвольных процессов и устранение DNS TOCTOU.
-- MCP stdio/HTTP, deferred schemas, health checks и trust model.
-- Persistent secrets vault и per-operation secret scoping.
-- Расширенный набор security tools с отдельным threat review.
+- ~~Docker sandbox profiles с resource/network constraints и signed allowlist~~ — `sandbox.exec`, HMAC-signed static profiles, pinned-by-digest images, fail-closed preflight без auto-pull.
+- ~~Egress proxy/enforcement и устранение DNS TOCTOU~~ — pinned-IP соединения в broker и proxy, per-run token-authenticated scoped egress proxy для `sandbox.scoped@v1`; известное ослабление на Docker Desktop задокументировано в статусе выше.
+- ~~MCP stdio/HTTP, deferred schemas, health checks и trust model~~ — минимальный JSON-RPC 2.0 клиент, dynamic `mcp.<server>.<tool>` tools, все R2 approval-gated, output untrusted-external.
+- ~~Persistent secrets vault и per-operation secret scoping~~ — AES-256-GCM, SQLite v5, CLI/TUI, placeholder resolution в tool execution с redaction.
+- Расширенный набор security tools — отложен до отдельного threat review.
 
 ## 5. Этап 3 — LLM и оркестрация
 
