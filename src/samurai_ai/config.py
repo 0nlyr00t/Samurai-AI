@@ -9,3 +9,7 @@ def data_directory() -> Path:
 
 def default_database_path() -> Path:
     return data_directory() / "samurai.db"
+
+
+def vault_key_path() -> Path:
+    return data_directory() / "vault.key"

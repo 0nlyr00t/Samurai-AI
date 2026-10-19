@@ -9,7 +9,8 @@ from pydantic import ValidationError
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
-from samurai_ai.config import default_database_path
+from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
+from samurai_ai.config import default_database_path, vault_key_path
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.operations import (
@@ -20,6 +21,7 @@ from samurai_ai.domain.operations import (
 )
 from samurai_ai.domain.recovery import RecoveryStateError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
+from samurai_ai.domain.vault import VaultError
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
@@ -30,11 +32,13 @@ from samurai_ai.services.recovery import (
     SnapshotNotFoundError,
 )
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
+from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
+from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
 
@@ -82,14 +86,20 @@ def build_parser() -> argparse.ArgumentParser:
     register_kernel_commands(subcommands)
     register_recovery_commands(subcommands)
     register_execution_commands(subcommands)
+    register_vault_commands(subcommands)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    operation_service, kernel_service, settings_service, recovery_service, execution_service = (
-        _make_services(args.db)
-    )
+    (
+        operation_service,
+        kernel_service,
+        settings_service,
+        recovery_service,
+        execution_service,
+        vault_service,
+    ) = _make_services(args.db)
 
     try:
         recovery_result = handle_recovery_command(
@@ -106,6 +116,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         execution_result = handle_execution_command(args, execution_service)
         if execution_result is not None:
             return execution_result
+        vault_result = handle_vault_command(args, vault_service)
+        if vault_result is not None:
+            return vault_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -123,6 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings_service,
             recovery_service,
             execution_service,
+            vault_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -142,6 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ToolNotFoundError,
         ToolRunNotFoundError,
         ToolRunConflictError,
+        VaultError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -203,19 +218,26 @@ def _handle_operation(
 def _make_services(
     database_path: Path | None,
 ) -> tuple[
-    OperationService, KernelService, SettingsService, RecoveryService, ToolExecutionService
+    OperationService,
+    KernelService,
+    SettingsService,
+    RecoveryService,
+    ToolExecutionService,
+    VaultService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
-    operations = OperationService(OperationRepository(database))
+    operation_repository = OperationRepository(database)
+    operations = OperationService(operation_repository)
     kernel = KernelService(operations, KernelRepository(database))
     recovery_repository = RecoveryRepository(database)
     settings = SettingsService(recovery_repository)
     recovery = RecoveryService(operations, kernel, recovery_repository)
+    vault = VaultService(VaultRepository(database), operation_repository, vault_key_path())
     execution = ToolExecutionService(
-        operations, kernel, recovery, ToolRunRepository(database)
+        operations, kernel, recovery, ToolRunRepository(database), vault=vault
     )
-    return operations, kernel, settings, recovery, execution
+    return operations, kernel, settings, recovery, execution, vault
 
 
 def _emit_operation(operation: Operation, json_output: bool) -> None:

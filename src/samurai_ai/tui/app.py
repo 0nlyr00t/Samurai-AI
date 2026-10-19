@@ -12,6 +12,7 @@ from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
+from samurai_ai.services.vault import VaultService
 
 
 class LanguagePromptScreen(ModalScreen[str]):
@@ -103,6 +104,7 @@ class SamuraiApp(App[None]):
         settings: SettingsService,
         recovery: RecoveryService,
         execution: ToolExecutionService,
+        vault: VaultService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -111,6 +113,7 @@ class SamuraiApp(App[None]):
         self.settings = settings
         self.recovery = recovery
         self.execution = execution
+        self.vault = vault
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -219,6 +222,9 @@ class SamuraiApp(App[None]):
             return
         if name == "/runs":
             self._show_runs()
+            return
+        if name == "/secrets":
+            self._show_secrets()
             return
         if name == "/reconcile":
             self._show_reconcile()
@@ -438,6 +444,20 @@ class SamuraiApp(App[None]):
             journal.write(
                 f"[run] {run.id} | {run.tool_id} v{run.tool_version} | {run.status.value} | "
                 f"trust={run.trust.value} | warnings={warnings} | artifacts={artifacts}"
+            )
+
+    def _show_secrets(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        operation_id = self.operation.id if self.operation else None
+        entries = self.vault.list_metadata(operation_id)
+        if not entries:
+            journal.write("[secrets] " + self.translator.t("secrets.empty"))
+            return
+        for entry in entries:
+            scope = entry.operation_id or self.translator.t("secrets.global")
+            journal.write(
+                f"[secret] {entry.id} | {entry.name} | scope={scope} | "
+                f"by={entry.created_by} | {entry.created_at.isoformat()}"
             )
 
     def _show_reconcile(self) -> None:
