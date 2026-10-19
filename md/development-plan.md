@@ -74,6 +74,7 @@
 - Reconcile in-flight actions после crash/restart; действие с неизвестным внешним результатом не повторяется автоматически.
 - Operation fork/resume без копирования секретов и без потери audit trail.
 - Diff для изменений scope/plan и operator-facing recovery report.
+- Localization foundation RU/EN: first-run выбор языка, persisted locale, `/lang`, внешние строки CLI/TUI и синхронные RU/EN ресурсы.
 
 Этап 1b должен быть завершен до подключения внешнего Tool Execution.
 
