@@ -1,26 +1,62 @@
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Input, RichLog, Static
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, Input, RichLog, Static
 
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
 from samurai_ai.domain.operations import Operation
+from samurai_ai.i18n import Translator
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
+from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 
-_HELP_LINES = (
-    "/help             Show available commands",
-    "/status           Show the current operation and kernel summary",
-    "/scope [target]   Show scope rules or evaluate a target",
-    "/plan             Show the current plan and lifecycle stage",
-    "/tasks            Show plan tasks",
-    "/gates            Show stage gates",
-    "/findings         Show findings",
-    "/evidence         Show evidence artifacts",
-    "/approvals        Show approval requests",
-    "/exit             Close Samurai AI",
-    "Ctrl-O            Toggle the event journal",
-    "Ctrl-C            Close Samurai AI",
-)
+
+class LanguagePromptScreen(ModalScreen[str]):
+    CSS = """
+    LanguagePromptScreen {
+        align: center middle;
+    }
+    #language-dialog {
+        width: 52;
+        height: auto;
+        padding: 1 2;
+        border: solid #5bc0be;
+        background: #161b22;
+    }
+    #language-title {
+        text-style: bold;
+        color: #4fa8ff;
+        padding-bottom: 1;
+    }
+    #language-buttons {
+        height: auto;
+    }
+    #language-buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, translator: Translator) -> None:
+        super().__init__()
+        self.translator = translator
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="language-dialog"):
+            yield Static(self.translator.t("chooser.title"), id="language-title")
+            with Horizontal(id="language-buttons"):
+                yield Button(self.translator.t("chooser.english"), id="lang-en")
+                yield Button(self.translator.t("chooser.russian"), id="lang-ru")
+
+    def on_mount(self) -> None:
+        self.query_one("#lang-en", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "lang-ru":
+            self.dismiss("ru")
+        else:
+            self.dismiss("en")
 
 
 class SamuraiApp(App[None]):
@@ -63,21 +99,24 @@ class SamuraiApp(App[None]):
         self,
         service: OperationService,
         kernel: KernelService,
+        settings: SettingsService,
+        recovery: RecoveryService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
         self.service = service
         self.kernel = kernel
+        self.settings = settings
+        self.recovery = recovery
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
+        self.translator = Translator(settings.get_locale() or "en")
+        self._locale_known = settings.get_locale() is not None
 
     def compose(self) -> ComposeResult:
         yield Static(id="operation-header")
         yield RichLog(id="journal", markup=False, wrap=True, auto_scroll=True)
-        yield Input(
-            placeholder="Enter a command; /help lists Operation Kernel capabilities",
-            id="command-input",
-        )
+        yield Input(placeholder=self.translator.t("input.placeholder"), id="command-input")
         yield Static(id="status-bar")
 
     def on_mount(self) -> None:
@@ -91,14 +130,37 @@ class SamuraiApp(App[None]):
             journal.write(f"[error] {exc}")
 
         self._refresh_chrome()
-        journal.write("Samurai AI 0.1.0 — governed operation shell")
-        journal.write("Stage 1: plans, tasks, gates, approvals, evidence and findings")
-        if self.operation:
-            journal.write(f"Loaded {self.operation.id}: {self.operation.name}")
+        if self._locale_known:
+            self._write_welcome()
+            self.query_one("#command-input", Input).focus()
         else:
-            journal.write("No operation loaded. Create one with: samurai operation create --help")
-        journal.write("Use /help to list available commands.")
+            self.push_screen(LanguagePromptScreen(self.translator), self._on_locale_chosen)
+
+    def _on_locale_chosen(self, locale: str | None) -> None:
+        if locale:
+            self.settings.set_locale(locale)
+            self.translator.set_locale(locale)
+            self._locale_known = True
+        self.query_one("#command-input", Input).placeholder = self.translator.t(
+            "input.placeholder"
+        )
+        self._write_welcome()
+        self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
+
+    def _write_welcome(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        journal.write(self.translator.t("welcome.title"))
+        journal.write(self.translator.t("welcome.stage"))
+        if self.operation:
+            journal.write(
+                self.translator.t(
+                    "welcome.loaded", operation_id=self.operation.id, name=self.operation.name
+                )
+            )
+        else:
+            journal.write(self.translator.t("welcome.no-operation"))
+        journal.write(self.translator.t("welcome.help-hint"))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         command = event.value.strip()
@@ -119,7 +181,7 @@ class SamuraiApp(App[None]):
             self.exit()
             return
         if name == "/help":
-            for line in _HELP_LINES:
+            for line in self.translator.help_lines():
                 journal.write(line)
             return
         if name == "/status":
@@ -146,16 +208,27 @@ class SamuraiApp(App[None]):
         if name == "/approvals":
             self._show_approvals()
             return
+        if name == "/snapshots":
+            self._show_snapshots()
+            return
+        if name == "/reconcile":
+            self._show_reconcile()
+            return
+        if name == "/lang":
+            self._show_lang(argument.strip())
+            return
 
         if name.startswith("/"):
-            journal.write(f"[error] Unknown command: {name}. Use /help.")
+            journal.write(
+                "[error] " + self.translator.t("error.unknown-command", name=name)
+            )
         else:
-            journal.write("[info] AI orchestration is not enabled yet. Use /help.")
+            journal.write("[info] " + self.translator.t("info.ai-disabled"))
 
     def _show_status(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[status] No operation loaded")
+            journal.write("[status] " + self.translator.t("status.no-operation"))
             return
         self.operation = self.service.get(self.operation.id)
         operation = self.operation
@@ -175,12 +248,18 @@ class SamuraiApp(App[None]):
     def _show_scope(self, target: str) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[scope] No operation loaded")
+            journal.write("[scope] " + self.translator.t("status.no-operation"))
             return
         scope = self.operation.scope
         if not target:
-            journal.write(f"[scope] includes: {', '.join(scope.includes)}")
-            journal.write(f"[scope] excludes: {', '.join(scope.excludes) or '(none)'}")
+            journal.write(
+                "[scope] "
+                + self.translator.t("scope.includes", rules=", ".join(scope.includes))
+            )
+            excludes = ", ".join(scope.excludes) or self.translator.t("scope.none")
+            journal.write(
+                "[scope] " + self.translator.t("scope.excludes", rules=excludes)
+            )
             return
         decision = scope.evaluate(target)
         level = "allow" if decision.allowed else "deny"
@@ -191,16 +270,23 @@ class SamuraiApp(App[None]):
     def _show_plan(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[plan] No operation loaded")
+            journal.write("[plan] " + self.translator.t("status.no-operation"))
             return
         operation = self.operation
-        objective = operation.objective or "(objective not set)"
+        objective = operation.objective or self.translator.t("plan.objective-unset")
         plan = self.kernel.get_current_plan(operation.id)
-        journal.write(f"[plan] stage={operation.status.value}; objective={objective}")
+        journal.write(
+            "[plan] "
+            + self.translator.t(
+                "plan.stage", stage=operation.status.value, objective=objective
+            )
+        )
         if plan is None:
-            journal.write("[plan] No current plan. Create one with: samurai plan create")
+            journal.write("[plan] " + self.translator.t("plan.no-plan"))
             return
-        approved = "approved" if plan.approved else "not-approved"
+        approved = self.translator.t(
+            "plan.approved" if plan.approved else "plan.not-approved"
+        )
         tasks_done = sum(
             1 for task in plan.tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED)
         )
@@ -213,11 +299,11 @@ class SamuraiApp(App[None]):
     def _show_tasks(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[tasks] No operation loaded")
+            journal.write("[tasks] " + self.translator.t("status.no-operation"))
             return
         plan = self.kernel.get_current_plan(self.operation.id)
         if plan is None or not plan.tasks:
-            journal.write("[tasks] No current plan tasks")
+            journal.write("[tasks] " + self.translator.t("tasks.empty"))
             return
         for task in plan.tasks:
             dependencies = ",".join(task.depends_on) or "-"
@@ -230,11 +316,11 @@ class SamuraiApp(App[None]):
     def _show_gates(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[gates] No operation loaded")
+            journal.write("[gates] " + self.translator.t("status.no-operation"))
             return
         plan = self.kernel.get_current_plan(self.operation.id)
         if plan is None or not plan.gates:
-            journal.write("[gates] No current plan gates")
+            journal.write("[gates] " + self.translator.t("gates.empty"))
             return
         for gate in plan.gates:
             requirements = ",".join(gate.required_artifacts) or "-"
@@ -245,11 +331,11 @@ class SamuraiApp(App[None]):
     def _show_findings(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[findings] No operation loaded")
+            journal.write("[findings] " + self.translator.t("status.no-operation"))
             return
         findings = self.kernel.kernel.list_findings(self.operation.id)
         if not findings:
-            journal.write("[findings] No findings")
+            journal.write("[findings] " + self.translator.t("findings.empty"))
             return
         for finding in findings:
             duplicate = f" | duplicate-of={finding.duplicate_of}" if finding.duplicate_of else ""
@@ -261,11 +347,11 @@ class SamuraiApp(App[None]):
     def _show_evidence(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[evidence] No operation loaded")
+            journal.write("[evidence] " + self.translator.t("status.no-operation"))
             return
         artifacts = self.kernel.kernel.list_artifacts(self.operation.id)
         if not artifacts:
-            journal.write("[evidence] No artifacts")
+            journal.write("[evidence] " + self.translator.t("evidence.empty"))
             return
         for artifact in artifacts:
             journal.write(
@@ -278,11 +364,11 @@ class SamuraiApp(App[None]):
     def _show_approvals(self) -> None:
         journal = self.query_one("#journal", RichLog)
         if not self.operation:
-            journal.write("[approvals] No operation loaded")
+            journal.write("[approvals] " + self.translator.t("status.no-operation"))
             return
         approvals = self.kernel.kernel.list_approvals(self.operation.id)
         if not approvals:
-            journal.write("[approvals] No approvals")
+            journal.write("[approvals] " + self.translator.t("approvals.empty"))
             return
         for approval in approvals:
             actor = approval.decided_by or "-"
@@ -292,6 +378,60 @@ class SamuraiApp(App[None]):
                 f"actor={actor} | {approval.action}"
             )
 
+    def _show_snapshots(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[snapshots] " + self.translator.t("status.no-operation"))
+            return
+        snapshots = self.recovery.list_snapshots(self.operation.id)
+        if not snapshots:
+            journal.write("[snapshots] " + self.translator.t("snapshots.empty"))
+            return
+        for snapshot in snapshots:
+            journal.write(
+                f"[snapshot] {snapshot.id} | {snapshot.label or '-'} | "
+                f"{snapshot.created_at.isoformat()}"
+            )
+
+    def _show_reconcile(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[reconcile] " + self.translator.t("status.no-operation"))
+            return
+        report = self.recovery.reconcile_operation(self.operation.id, actor="operator")
+        none = self.translator.t("list.none")
+        journal.write(
+            "[reconcile] "
+            + self.translator.t(
+                "reconcile.report",
+                actions=", ".join(report.actions_marked_unknown) or none,
+                tasks=", ".join(report.resumable_tasks) or none,
+                approvals=", ".join(report.pending_approvals) or none,
+            )
+        )
+
+    def _show_lang(self, argument: str) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not argument:
+            journal.write(
+                "[lang] "
+                + self.translator.t("lang.current", locale=self.translator.locale)
+            )
+            return
+        try:
+            locale = self.settings.set_locale(argument)
+        except InvalidLocaleError:
+            journal.write(
+                "[error] " + self.translator.t("lang.invalid", locale=argument)
+            )
+            return
+        self.translator.set_locale(locale)
+        self.query_one("#command-input", Input).placeholder = self.translator.t(
+            "input.placeholder"
+        )
+        journal.write("[lang] " + self.translator.t("lang.changed", locale=locale))
+        self._refresh_chrome()
+
     def _refresh_chrome(self) -> None:
         header = self.query_one("#operation-header", Static)
         status_bar = self.query_one("#status-bar", Static)
@@ -299,18 +439,26 @@ class SamuraiApp(App[None]):
             operation = self.operation
             summary = self.kernel.summary(operation.id)
             header.update(
-                f"SAMURAI AI  {operation.id}  {operation.mode.value.upper()}  "
-                "SCOPE: OK  MODEL: NOT CONFIGURED"
+                self.translator.t(
+                    "header.with-operation",
+                    operation_id=operation.id,
+                    mode=operation.mode.value.upper(),
+                )
             )
             status_bar.update(
-                f"{operation.status.value.upper()} | TASKS {summary.tasks_done}/"
-                f"{summary.tasks_total} | GATES {summary.gates_passed}/"
-                f"{summary.gates_total} | PENDING {summary.pending_approvals} | "
-                "APPROVAL: ASK | /help"
+                self.translator.t(
+                    "statusbar.with-operation",
+                    status=operation.status.value.upper(),
+                    tasks_done=summary.tasks_done,
+                    tasks_total=summary.tasks_total,
+                    gates_passed=summary.gates_passed,
+                    gates_total=summary.gates_total,
+                    pending=summary.pending_approvals,
+                )
             )
         else:
-            header.update("SAMURAI AI  NO OPERATION  SCOPE: NOT SET")
-            status_bar.update("IDLE | APPROVAL: ASK | /help")
+            header.update(self.translator.t("header.no-operation"))
+            status_bar.update(self.translator.t("statusbar.idle"))
 
 
 def _artifact_links(artifact: Artifact) -> str:

@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0 — Walking Skeleton** и **Stage 1 core — Operation Kernel**.
+Завершены **Stage 0 — Walking Skeleton**, **Stage 1 core — Operation Kernel** и **Stage 1b — Recovery Hardening**.
 
 Уже реализовано:
 
@@ -30,11 +30,13 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - approvals R0–R4;
 - immutable evidence artifacts с SHA-256;
 - findings workflow от candidate до reported;
-- SQLite migrations, append-only events и optimistic concurrency;
-- CLI и TUI с реальными kernel-представлениями;
-- 54 unit/integration/CLI/TUI tests.
+- snapshots/restore/fork, recovery reconcile и plan/scope diff;
+- RU/EN first-run выбор языка и переключение через `/lang`;
+- SQLite migrations v1–v3, append-only events и optimistic concurrency;
+- CLI и TUI с реальными kernel/recovery-представлениями;
+- 76 unit/integration/CLI/TUI tests.
 
-Еще не реализовано: LLM orchestration, MCP, внешнее tool execution, snapshots/reconcile/fork и standalone binary.
+Еще не реализовано: LLM orchestration, MCP, внешнее tool execution и standalone binary.
 
 ## Быстрый старт для разработки
 

@@ -31,6 +31,10 @@ def register_kernel_commands(
     plan_show.add_argument("operation_id")
     plan_approve = plan_commands.add_parser("approve", help="Approve the current plan")
     plan_approve.add_argument("operation_id")
+    plan_diff = plan_commands.add_parser("diff", help="Diff two plans of an operation")
+    plan_diff.add_argument("operation_id")
+    plan_diff.add_argument("old_plan_id")
+    plan_diff.add_argument("new_plan_id")
 
     task = subcommands.add_parser("task", help="Manage plan tasks")
     task_commands = task.add_subparsers(dest="task_command", required=True)

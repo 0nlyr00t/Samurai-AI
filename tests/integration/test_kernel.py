@@ -349,12 +349,13 @@ def test_v1_database_migrates_to_v2(tmp_path: Path) -> None:
         versions = {
             row["version"] for row in migrated.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2}
+        assert versions == {1, 2, 3}
         tables = {
             row["name"]
             for row in migrated.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         assert {"plans", "approvals", "artifacts", "findings"} <= tables
+        assert {"operation_snapshots", "recovery_actions", "app_settings"} <= tables
 
     repository = OperationRepository(database)
     restored = repository.get(legacy.id)
