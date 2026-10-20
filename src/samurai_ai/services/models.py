@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import json
+from typing import Any, Protocol
 
+from samurai_ai.agents.anthropic import AnthropicProvider
+from samurai_ai.agents.budgets import (
+    BUDGET_KEY_PREFIX,
+    ModelBudget,
+    UsageSummary,
+    check_budget,
+    usage_from_events,
+)
+from samurai_ai.agents.gemini import GeminiProvider
 from samurai_ai.agents.ollama import OllamaProvider
 from samurai_ai.agents.openai_compat import OpenAICompatProvider
 from samurai_ai.agents.provider import ChatRequest, ChatResponse, Message
 from samurai_ai.agents.registry import ModelRegistry
+from samurai_ai.agents.router import ModelRouter
 from samurai_ai.domain.execution import ApprovalRequiredError, ToolStateError
 from samurai_ai.domain.kernel import Approval, ApprovalStatus, RiskClass
 from samurai_ai.domain.models import (
@@ -15,6 +26,7 @@ from samurai_ai.domain.models import (
     ModelError,
     ModelNotFoundError,
     ProviderDefinition,
+    ProviderUnavailableError,
     parse_model_id,
 )
 from samurai_ai.domain.operations import OperationEvent
@@ -23,6 +35,15 @@ from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.models import ModelEndpointRepository
+from samurai_ai.storage.recovery import RecoveryRepository
+
+
+class ProviderImpl(Protocol):
+    async def health(self) -> bool: ...
+
+    async def list_models(self) -> Any: ...
+
+    async def complete(self, request: ChatRequest) -> ChatResponse: ...
 
 
 class ModelService:
@@ -33,12 +54,14 @@ class ModelService:
         kernel: KernelService,
         operations: OperationService,
         endpoints: ModelEndpointRepository | None = None,
+        settings: RecoveryRepository | None = None,
     ) -> None:
         self.registry = registry
         self.vault = vault
         self.kernel = kernel
         self.operations = operations
         self.endpoints = endpoints
+        self.settings = settings
 
     def list_providers(self) -> list[dict[str, Any]]:
         rows = []
@@ -106,24 +129,47 @@ class ModelService:
 
     def discover_models(self, provider_id: str) -> list[ModelDefinition]:
         provider = self.registry.get_provider(provider_id)
+        impl = self._build_provider(provider)
         if provider.api_family is ApiFamily.OLLAMA:
-            return asyncio.run(OllamaProvider(provider).list_models())
-        if provider.api_family is ApiFamily.OPENAI_COMPATIBLE:
-            impl = self._build_provider(provider)
-            names = asyncio.run(impl.list_models())
-            return [
-                ModelDefinition(
-                    id=f"{provider.id}/{name}@v1",
-                    provider_id=provider.id,
-                    display_name=name,
-                    api_family=provider.api_family,
-                    context_limit=32768,
-                    max_output_tokens=4096,
-                    local=provider.local,
-                )
-                for name in names
-            ]
-        raise ModelError(f"discovery is not supported for {provider.api_family.value}")
+            discovered: list[ModelDefinition] = asyncio.run(impl.list_models())
+            return discovered
+        names: list[str] = asyncio.run(impl.list_models())
+        return [
+            ModelDefinition(
+                id=f"{provider.id}/{name}@v1",
+                provider_id=provider.id,
+                display_name=name,
+                api_family=provider.api_family,
+                context_limit=32768,
+                max_output_tokens=4096,
+                local=provider.local,
+            )
+            for name in names
+        ]
+
+    def get_budget(self, operation_id: str) -> ModelBudget:
+        if self.settings is None:
+            return ModelBudget()
+        raw = self.settings.get_setting(f"{BUDGET_KEY_PREFIX}{operation_id}")
+        if raw is None:
+            return ModelBudget()
+        return ModelBudget.model_validate(json.loads(raw))
+
+    def set_budget(self, operation_id: str, budget: ModelBudget) -> ModelBudget:
+        self.operations.get(operation_id)
+        if budget.is_unset():
+            raise ModelError("at least one budget limit must be set")
+        if self.settings is None:
+            raise ModelError("budget persistence is not configured")
+        self.settings.set_setting(
+            f"{BUDGET_KEY_PREFIX}{operation_id}",
+            budget.model_dump_json(),
+        )
+        return budget
+
+    def usage(self, operation_id: str) -> UsageSummary:
+        self.operations.get(operation_id)
+        return usage_from_events(self.operations.events(operation_id))
 
     def complete(
         self,
@@ -133,28 +179,64 @@ class ModelService:
         *,
         max_tokens: int | None = None,
         approval_id: str | None = None,
+        fallbacks: tuple[str, ...] = (),
+        router: ModelRouter | None = None,
     ) -> ChatResponse:
         self.operations.get(operation_id)
         model, provider = self._resolve_model(model_id)
-        self._resolve_approval(operation_id, model, provider, approval_id)
+        candidates = [model.id, *fallbacks]
+        risk = RiskClass.R2 if self._any_remote(candidates) else RiskClass.R1
+        self._check_budget(operation_id)
+        self._resolve_approval(operation_id, model, risk, approval_id)
         request = ChatRequest(
             model_id=model.id,
             messages=(Message(role="user", content=prompt),),
             max_tokens=max_tokens,
         )
-        response = asyncio.run(self._complete(provider, request))
+
+        async def invoke(candidate_id: str) -> ChatResponse:
+            candidate_model, candidate_provider = await self._resolve_model_async(
+                candidate_id
+            )
+            self._check_budget(operation_id)
+            return await self._complete(
+                candidate_provider,
+                ChatRequest(
+                    model_id=candidate_model.id,
+                    messages=request.messages,
+                    max_tokens=request.max_tokens,
+                    temperature=request.temperature,
+                ),
+            )
+
+        def on_fallback(from_model: str, to_model: str, reason: str) -> None:
+            self.operations.repository.append_event(
+                OperationEvent(
+                    operation_id=operation_id,
+                    event_type="model.fallback",
+                    payload={
+                        "from_model": from_model,
+                        "to_model": to_model,
+                        "reason": reason,
+                    },
+                )
+            )
+
+        active_router = router or ModelRouter()
+        response = asyncio.run(active_router.complete(candidates, invoke, on_fallback))
+        used_model, used_provider = self._resolve_model(response.model_id)
         self.operations.repository.append_event(
             OperationEvent(
                 operation_id=operation_id,
                 event_type="model.call",
                 payload={
-                    "model_id": model.id,
-                    "provider_id": provider.id,
-                    "local": provider.local,
+                    "model_id": response.model_id,
+                    "provider_id": used_provider.id,
+                    "local": used_provider.local,
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
                     "latency_ms": response.latency_ms,
-                    "estimated_cost_usd": model.estimate_cost(
+                    "estimated_cost_usd": used_model.estimate_cost(
                         response.usage.prompt_tokens,
                         response.usage.completion_tokens,
                     ),
@@ -163,11 +245,23 @@ class ModelService:
         )
         return response
 
+    def _check_budget(self, operation_id: str) -> None:
+        budget = self.get_budget(operation_id)
+        if budget.is_unset():
+            return
+        check_budget(budget, self.usage(operation_id))
+
+    def _any_remote(self, candidates: list[str]) -> bool:
+        for candidate in candidates:
+            provider_id, _ = parse_model_id(candidate)
+            provider = self.registry.get_provider(provider_id)
+            if not provider.local:
+                return True
+        return False
+
     async def _complete(
-        self, provider: ProviderDefinition, request: Any
+        self, provider: ProviderDefinition, request: ChatRequest
     ) -> ChatResponse:
-        if provider.api_family is ApiFamily.OLLAMA:
-            return await OllamaProvider(provider).complete(request)
         impl = self._build_provider(provider)
         return await impl.complete(request)
 
@@ -181,21 +275,30 @@ class ModelService:
             return model, provider
         return self.registry.get_model(model_id)
 
+    async def _resolve_model_async(
+        self, model_id: str
+    ) -> tuple[ModelDefinition, ProviderDefinition]:
+        provider_id, _ = parse_model_id(model_id)
+        provider = self.registry.get_provider(provider_id)
+        if provider.api_family is ApiFamily.OLLAMA:
+            model = await OllamaProvider(provider).resolve_model(model_id)
+            return model, provider
+        return self.registry.get_model(model_id)
+
     def _resolve_approval(
         self,
         operation_id: str,
         model: ModelDefinition,
-        provider: ProviderDefinition,
+        risk: RiskClass,
         approval_id: str | None,
     ) -> Approval:
-        risk = RiskClass.R1 if provider.local else RiskClass.R2
         action = f"model.call {model.id}"
         if approval_id is None:
             approval = self.kernel.request_approval(
                 operation_id,
                 action,
                 risk,
-                reason=f"{provider.id} via {provider.base_url}",
+                reason=f"{model.id} via {model.provider_id}",
                 requested_by="operator",
             )
             if approval.status != ApprovalStatus.APPROVED:
@@ -218,16 +321,23 @@ class ModelService:
             raise ToolStateError(f"approval {approval_id} was rejected")
         return stored
 
-    def _build_provider(self, provider: ProviderDefinition) -> OpenAICompatProvider:
+    def _build_provider(self, provider: ProviderDefinition) -> ProviderImpl:
+        if provider.api_family is ApiFamily.OLLAMA:
+            return OllamaProvider(provider)
         api_key: str | None = None
         if provider.secret_name:
             try:
                 api_key = self.vault.get(provider.secret_name)
             except SecretNotFoundError as exc:
-                raise ModelError(
+                raise ProviderUnavailableError(
                     f"API key for provider {provider.id} is not configured; "
-                    f"add it with 'samurai secret add {provider.secret_name} --stdin'"
+                    f"add it with 'samurai secret add {provider.secret_name} --stdin'",
+                    auth=True,
                 ) from exc
+        if provider.api_family is ApiFamily.ANTHROPIC:
+            return AnthropicProvider(provider, api_key)
+        if provider.api_family is ApiFamily.GEMINI:
+            return GeminiProvider(provider, api_key)
         return OpenAICompatProvider(provider, api_key)
 
     def _secret_exists(self, secret_name: str) -> bool:

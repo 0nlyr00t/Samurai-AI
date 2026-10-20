@@ -199,3 +199,87 @@ def test_cli_model_complete_unknown_model_fails(home: Path, capsys) -> None:
         == 2
     )
     assert "not found" in capsys.readouterr().err
+
+
+def test_cli_model_fallback_budget_usage(
+    home: Path, capsys, fake_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = str(home / "fallback.db")
+    operation_id = create_operation(database, capsys)
+    assert (
+        main(
+            [
+                "--db", database, "model", "register", "broken",
+                "--base-url", f"{fake_server}/v1", "--secret-name", "broken-key",
+            ]
+        )
+        == 0
+    )
+    register_fake(database, fake_server, capsys)
+    monkeypatch.setattr("sys.stdin", io.StringIO("wrong-key"))
+    assert main(["--db", database, "secret", "add", "broken-key", "--stdin"]) == 0
+    monkeypatch.setattr("sys.stdin", io.StringIO(API_KEY))
+    assert main(["--db", database, "secret", "add", "fake-key", "--stdin"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--db", database, "model", "complete", "broken/fake-model@v1",
+                "--operation", operation_id, "--prompt", "route me",
+                "--fallback", "fake/fake-model@v1",
+            ]
+        )
+        == 2
+    )
+    error = capsys.readouterr().err
+    approval_id = error.split("samurai approval approve ", 1)[1].split("'", 1)[0]
+    assert (
+        main(["--db", database, "approval", "approve", approval_id, "--actor", "operator"])
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--db", database, "model", "complete", "broken/fake-model@v1",
+                "--operation", operation_id, "--prompt", "route me",
+                "--fallback", "fake/fake-model@v1", "--approval-id", approval_id,
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.out.startswith("cli:route me")
+    assert "broken/fake-model@v1 -> fake/fake-model@v1" in captured.err
+
+    assert (
+        main(["--db", database, "--json", "operation", "show", operation_id, "--events"])
+        == 0
+    )
+    events = json.loads(capsys.readouterr().out)["events"]
+    fallbacks = [event for event in events if event["event_type"] == "model.fallback"]
+    assert fallbacks[0]["payload"]["reason"] == "auth"
+
+    assert (
+        main(["--db", database, "model", "budget", operation_id, "--max-calls", "1"]) == 0
+    )
+    capsys.readouterr()
+    assert main(["--db", database, "model", "budget", operation_id]) == 0
+    assert "max-calls=1" in capsys.readouterr().out
+
+    approval = main(
+        [
+            "--db", database, "model", "complete", "fake/fake-model@v1",
+            "--operation", operation_id, "--prompt", "blocked",
+        ]
+    )
+    assert approval == 2
+    assert "budget exhausted" in capsys.readouterr().err
+
+    assert main(["--db", database, "--json", "model", "usage", operation_id]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["calls"] == 1
+    assert summary["prompt_tokens"] == 4
+    assert summary["by_model"]["fake/fake-model@v1"]["calls"] == 1

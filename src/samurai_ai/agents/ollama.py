@@ -177,7 +177,12 @@ class OllamaProvider:
     def _decode(status: int, body: bytes) -> dict[str, Any]:
         if status >= 400:
             snippet = body.decode("utf-8", errors="replace")[:200]
-            raise ProviderUnavailableError(f"ollama returned HTTP {status}: {snippet}")
+            raise ProviderUnavailableError(
+                f"ollama returned HTTP {status}: {snippet}",
+                status=status,
+                transient=status == 429 or status >= 500,
+                auth=status in (401, 403),
+            )
         try:
             decoded = json.loads(body)
         except json.JSONDecodeError as exc:
