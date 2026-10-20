@@ -89,6 +89,10 @@ class OperationRepository:
                 )
             self._append_event(connection, event)
 
+    def append_event(self, event: OperationEvent) -> None:
+        with self.database.transaction() as connection:
+            self._append_event(connection, event)
+
     def events(self, operation_id: str) -> list[OperationEvent]:
         with self.database.connect() as connection:
             rows = connection.execute(

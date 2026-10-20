@@ -238,6 +238,19 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 );
 """
 
+_MIGRATION_7 = """
+CREATE TABLE IF NOT EXISTS model_endpoints (
+    id TEXT PRIMARY KEY,
+    api_family TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    secret_name TEXT,
+    display_name TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL
+);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -245,6 +258,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (4, _MIGRATION_4),
     (5, _MIGRATION_5),
     (6, _MIGRATION_6),
+    (7, _MIGRATION_7),
 )
 
 

@@ -1,0 +1,229 @@
+"""Versioned static registry of LLM providers and models.
+
+Static, code-defined providers (OpenAI-compatible family) plus the local
+Ollama provider. Custom OpenAI-compatible endpoints registered by the
+operator via CLI are persisted in SQLite (migration v7) and merged here.
+Fail-closed: unknown provider or model ids raise ModelNotFoundError.
+"""
+
+from __future__ import annotations
+
+from samurai_ai.domain.models import (
+    ApiFamily,
+    ModelCapability,
+    ModelDefinition,
+    ModelNotFoundError,
+    ProviderDefinition,
+    parse_model_id,
+)
+from samurai_ai.storage.models import ModelEndpointRepository
+
+STATIC_PROVIDERS: tuple[ProviderDefinition, ...] = (
+    ProviderDefinition(
+        id="openai",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://api.openai.com/v1",
+        secret_name="openai-api-key",
+    ),
+    ProviderDefinition(
+        id="deepseek",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://api.deepseek.com/v1",
+        secret_name="deepseek-api-key",
+    ),
+    ProviderDefinition(
+        id="xai",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://api.x.ai/v1",
+        secret_name="xai-api-key",
+    ),
+    ProviderDefinition(
+        id="moonshot",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://api.moonshot.ai/v1",
+        secret_name="moonshot-api-key",
+    ),
+    ProviderDefinition(
+        id="mistral",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://api.mistral.ai/v1",
+        secret_name="mistral-api-key",
+    ),
+    ProviderDefinition(
+        id="openrouter",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://openrouter.ai/api/v1",
+        secret_name="openrouter-api-key",
+    ),
+    ProviderDefinition(
+        id="qwen",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        secret_name="dashscope-api-key",
+    ),
+    ProviderDefinition(
+        id="ollama",
+        api_family=ApiFamily.OLLAMA,
+        base_url="http://localhost:11434",
+        local=True,
+    ),
+)
+
+_TOOL_CAPS = frozenset(
+    {
+        ModelCapability.TOOLS,
+        ModelCapability.STRUCTURED_OUTPUT,
+        ModelCapability.STREAMING,
+    }
+)
+
+STATIC_MODELS: tuple[ModelDefinition, ...] = (
+    ModelDefinition(
+        id="openai/gpt-4o@v1",
+        provider_id="openai",
+        display_name="GPT-4o",
+        context_limit=128000,
+        max_output_tokens=16384,
+        capabilities=_TOOL_CAPS | {ModelCapability.VISION},
+        cost_input_per_m=2.5,
+        cost_output_per_m=10.0,
+    ),
+    ModelDefinition(
+        id="openai/gpt-4o-mini@v1",
+        provider_id="openai",
+        display_name="GPT-4o mini",
+        context_limit=128000,
+        max_output_tokens=16384,
+        capabilities=_TOOL_CAPS | {ModelCapability.VISION},
+        cost_input_per_m=0.15,
+        cost_output_per_m=0.6,
+    ),
+    ModelDefinition(
+        id="deepseek/deepseek-chat@v1",
+        provider_id="deepseek",
+        display_name="DeepSeek Chat",
+        context_limit=64000,
+        max_output_tokens=8192,
+        capabilities=_TOOL_CAPS,
+        cost_input_per_m=0.27,
+        cost_output_per_m=1.1,
+    ),
+    ModelDefinition(
+        id="deepseek/deepseek-reasoner@v1",
+        provider_id="deepseek",
+        display_name="DeepSeek Reasoner",
+        context_limit=64000,
+        max_output_tokens=8192,
+        capabilities=frozenset({ModelCapability.STREAMING}),
+        cost_input_per_m=0.55,
+        cost_output_per_m=2.19,
+    ),
+    ModelDefinition(
+        id="xai/grok-3@v1",
+        provider_id="xai",
+        display_name="Grok 3",
+        context_limit=131072,
+        max_output_tokens=8192,
+        capabilities=frozenset({ModelCapability.TOOLS, ModelCapability.STREAMING}),
+        cost_input_per_m=3.0,
+        cost_output_per_m=15.0,
+    ),
+    ModelDefinition(
+        id="moonshot/kimi-k2@v1",
+        provider_id="moonshot",
+        display_name="Kimi K2",
+        context_limit=131072,
+        max_output_tokens=8192,
+        capabilities=frozenset({ModelCapability.TOOLS, ModelCapability.STREAMING}),
+        cost_input_per_m=0.6,
+        cost_output_per_m=2.5,
+    ),
+    ModelDefinition(
+        id="mistral/mistral-large@v1",
+        provider_id="mistral",
+        display_name="Mistral Large",
+        context_limit=131072,
+        max_output_tokens=8192,
+        capabilities=_TOOL_CAPS,
+        cost_input_per_m=2.0,
+        cost_output_per_m=6.0,
+    ),
+    ModelDefinition(
+        id="openrouter/auto@v1",
+        provider_id="openrouter",
+        display_name="OpenRouter Auto",
+        context_limit=131072,
+        max_output_tokens=4096,
+        capabilities=frozenset({ModelCapability.TOOLS, ModelCapability.STREAMING}),
+    ),
+    ModelDefinition(
+        id="qwen/qwen-max@v1",
+        provider_id="qwen",
+        display_name="Qwen Max",
+        context_limit=32768,
+        max_output_tokens=8192,
+        capabilities=frozenset({ModelCapability.TOOLS, ModelCapability.STREAMING}),
+        cost_input_per_m=1.6,
+        cost_output_per_m=6.4,
+    ),
+)
+
+
+class ModelRegistry:
+    def __init__(
+        self,
+        endpoints: ModelEndpointRepository | None = None,
+        providers: tuple[ProviderDefinition, ...] | None = None,
+    ) -> None:
+        self.endpoints = endpoints
+        self.static_providers = providers if providers is not None else STATIC_PROVIDERS
+
+    def get_provider(self, provider_id: str) -> ProviderDefinition:
+        for provider in self.static_providers:
+            if provider.id == provider_id:
+                return provider
+        if self.endpoints is not None:
+            endpoint = self.endpoints.get(provider_id)
+            if endpoint is not None:
+                return endpoint
+        raise ModelNotFoundError(f"model provider not found: {provider_id}")
+
+    def get_model(self, model_id: str) -> tuple[ModelDefinition, ProviderDefinition]:
+        provider_id, _ = parse_model_id(model_id)
+        for model in STATIC_MODELS:
+            if model.id == model_id:
+                return model, self.get_provider(model.provider_id)
+        provider = self.get_provider(provider_id)
+        if provider.api_family is ApiFamily.OLLAMA:
+            raise ModelNotFoundError(
+                f"ollama models are discovered at runtime; resolve "
+                f"{model_id!r} through the provider discovery"
+            )
+        if self.endpoints is not None and self.endpoints.get(provider_id) is not None:
+            return (
+                ModelDefinition(
+                    id=model_id,
+                    provider_id=provider_id,
+                    display_name=model_id,
+                    api_family=provider.api_family,
+                    context_limit=32768,
+                    max_output_tokens=4096,
+                    capabilities=frozenset(),
+                ),
+                provider,
+            )
+        raise ModelNotFoundError(f"model not found: {model_id}")
+
+    def list_providers(self) -> list[ProviderDefinition]:
+        providers = list(self.static_providers)
+        if self.endpoints is not None:
+            providers.extend(self.endpoints.list_all())
+        return providers
+
+    def list_models(self, provider_id: str | None = None) -> list[ModelDefinition]:
+        models = [
+            model
+            for model in STATIC_MODELS
+            if provider_id is None or model.provider_id == provider_id
+        ]
+        return models

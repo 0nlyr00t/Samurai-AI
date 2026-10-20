@@ -66,10 +66,10 @@ uv run samurai tui
 - Docker sandbox profiles (`sandbox.exec`, R2): static signed allowlist (HMAC-SHA256 от vault master key, `sandbox-allowlist.sig`), pinned-by-digest images, `--network none`, read-only/tmpfs/cap-drop/no-new-privileges/nonroot, resource limits, fail-closed preflight без auto-pull;
 - scoped egress: HTTP broker соединяется с pinned IP (single resolve + проверка каждого адреса по exclusions, Host/SNI по оригинальному имени — DNS TOCTOU устранён); per-run token-authenticated forward proxy на loopback хоста (`execution/egress.py`) для `sandbox.scoped@v1` (network_mode "scoped"): HTTP absolute-URI и CONNECT, вердикты по ScopeContract, порты только 80/443 (конфигурируемо), egress-события (host/port/verdict/bytes, без содержимого) пишутся в payload `tool.run.*` событий, proxy token регистрируется в redactor;
 - MCP без внешнего SDK (JSON-RPC 2.0, protocol 2024-11-05): stdio (no shell, allowlisted executable, per-request timeout) и HTTP transport через scope-enforced egress broker (POST + DNS/redirect revalidation); deferred tool schemas (`mcp tools` сохраняет в `app_settings`), dynamic `mcp.<server>.<tool>` resolution в registry (fail-closed, только enabled серверы), все MCP tools R2 approval-gated, output всегда untrusted-external + injection scanner;
-- 222 unit/integration/CLI/TUI tests + opt-in docker integration tests (`SAMURAI_TEST_DOCKER=1`, включая scoped egress через реальный контейнер);
+- 248 unit/integration/CLI/TUI tests + opt-in docker (`SAMURAI_TEST_DOCKER=1`) и opt-in ollama (`SAMURAI_TEST_OLLAMA=1`) integration tests;
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-LLM еще не реализован. Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness. Stage 2b осталось: расширенный набор security tools с threat review.
+Этап 3 начат (slice 1): versioned model registry (`<provider>/<model>@v1`), OpenAI-compatible provider family (OpenAI, DeepSeek, xAI, Moonshot/Kimi, Mistral, OpenRouter, Qwen) и Ollama как first-class local provider (discovery через /api/tags, local data route, offline-friendly degradation). LLM-трафик — operator infrastructure: не подчиняется target scope, клиент pinned на зарегистрированный base_url (fail-closed). API keys — global-scope секреты vault, redact'ятся из ошибок и никогда не попадают в events. `model.call` events с usage/latency/cost без содержимого; remote = R2 approval, local = R1. Custom OpenAI-compatible endpoints персистятся (SQLite v7). Streaming capability объявлена, но не реализована; anthropic/gemini families зарезервированы в enum; retry/fallback и оркестрация — следующие slices. Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness.
 
 ## 4. Карта репозитория
 
@@ -81,15 +81,18 @@ LLM еще не реализован. Известное ослабление sc
 - `src/samurai_ai/domain/vault.py` — SecretMetadata, vault exceptions и `{{secret:name}}` placeholder syntax.
 - `src/samurai_ai/domain/sandbox.py` — SandboxProfile, canonical payload и HMAC-SHA256 signing.
 - `src/samurai_ai/domain/mcp.py` — McpServer, McpToolInfo, protocol constants и MCP exceptions.
+- `src/samurai_ai/domain/models.py` — ModelDefinition, ProviderDefinition, ModelCapability, ApiFamily и model exceptions.
+- `src/samurai_ai/agents/` — versioned model registry (static + persisted), capability negotiation, OpenAI-compatible client и Ollama provider.
 - `src/samurai_ai/execution/` — static registry (с dynamic resolver hook), ProcessManager, HTTP egress broker (GET/HEAD/POST, DNS pinning), Docker sandbox runner, scoped egress proxy и minimal MCP client (stdio/HTTP transports).
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
-- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v6.
+- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v7.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
 - `src/samurai_ai/storage/kernel.py` — KernelRepository для plans/approvals/artifacts/findings.
 - `src/samurai_ai/storage/recovery.py` — snapshots, recovery actions и app settings.
 - `src/samurai_ai/storage/execution.py` — ToolRunRepository и recovery-compatible runs.
 - `src/samurai_ai/storage/vault.py` — VaultRepository для encrypted secret entries.
 - `src/samurai_ai/storage/mcp.py` — McpServerRepository и deferred tool schema cache (app_settings).
+- `src/samurai_ai/storage/models.py` — ModelEndpointRepository для custom OpenAI-compatible endpoints.
 - `src/samurai_ai/services/operations.py` — сервисный сценарий операций.
 - `src/samurai_ai/services/kernel.py` — KernelService, policy preconditions и summary.
 - `src/samurai_ai/services/recovery.py` — snapshots/restore/fork/reconcile/diff.
@@ -97,6 +100,7 @@ LLM еще не реализован. Известное ослабление sc
 - `src/samurai_ai/services/execution.py` — approval-gated managed tool execution с vault placeholder resolution.
 - `src/samurai_ai/services/vault.py` — VaultService: AES-256-GCM encrypt/decrypt, scoping и resolve_placeholders.
 - `src/samurai_ai/services/mcp.py` — McpService (CRUD, health, fetch_tools) и fail-closed McpToolResolver.
+- `src/samurai_ai/services/models.py` — ModelService: provider/model inventory, health, governed `model.call` с approval и usage events.
 - `src/samurai_ai/cli.py` — CLI entry point и общие команды.
 - `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
 - `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
@@ -104,6 +108,7 @@ LLM еще не реализован. Известное ослабление sc
 - `src/samurai_ai/cli_vault.py` — secret add/list/remove команды (значения не печатаются).
 - `src/samurai_ai/cli_sandbox.py` — sandbox profiles/sign команды.
 - `src/samurai_ai/cli_mcp.py` — mcp add/remove/list/enable/disable/health/tools/invoke команды.
+- `src/samurai_ai/cli_models.py` — model providers/list/register/remove/health/complete команды.
 - `src/samurai_ai/tui/app.py` — локализованный TUI без доменной логики в обработчиках.
 - `tests/unit` — чистое доменное ядро и scope/kernel/recovery/execution edge cases.
 - `tests/integration` — SQLite, recovery, process/http broker, CLI и kernel E2E.
@@ -171,6 +176,12 @@ samurai mcp list|enable|disable|remove ...
 samurai mcp health <name> [--operation <id>]
 samurai mcp tools <name> [--operation <id>]
 samurai mcp invoke <server> <tool> --operation <id> --param k=v [--approval-id <id>]
+samurai model providers
+samurai model list [--provider <id>] [--discover]
+samurai model register <id> --base-url <url> [--secret-name <name>]
+samurai model remove <id>
+samurai model health <provider-or-model-id>
+samurai model complete <model-id> --operation <id> --prompt "..." [--approval-id <id>]
 samurai lang [ru|en]
 ```
 
@@ -186,9 +197,13 @@ TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/app
 
 Stage 2b завершен (4 из 5 пунктов): secrets vault, Docker sandbox, scoped egress proxy с DNS pinning и MCP работают и покрыты тестами. Остался отложенный пункт 5 — расширенный набор security tools, который вводится только после отдельного threat review (может выполняться параллельно с Этапом 3).
 
-Следующий вертикальный срез — Этап 3:
+Следующий вертикальный срез — Этап 3, slice 2 (уже завершён slice 1: provider abstraction, versioned model registry, OpenAI-compatible family, Ollama local provider, custom endpoints, governed `model.call`):
 
-На Stage 3 добавить расширяемый model registry для frontier APIs и first-class Ollama/local provider; playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
+- retry/fallback и бюджеты для model calls;
+- Anthropic и Gemini provider families (enum зарезервирован);
+- streaming responses;
+- Planner/Executor/Parser/Verifier, shared blackboard и subagent contexts;
+- playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
 
 ## 8. Инварианты и правила изменений
 

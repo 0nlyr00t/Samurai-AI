@@ -6,9 +6,11 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
+from samurai_ai.cli_models import handle_model_command, register_model_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
@@ -16,6 +18,7 @@ from samurai_ai.config import default_database_path, vault_key_path
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.mcp import McpServerNotFoundError
+from samurai_ai.domain.models import ModelError, ModelNotFoundError
 from samurai_ai.domain.operations import (
     Operation,
     OperationMode,
@@ -29,6 +32,7 @@ from samurai_ai.execution.registry import default_registry
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
+from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.recovery import (
     PlanNotFoundError,
@@ -42,6 +46,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
+from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
 from samurai_ai.storage.vault import VaultRepository
@@ -95,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_vault_commands(subcommands)
     register_sandbox_commands(subcommands)
     register_mcp_commands(subcommands)
+    register_model_commands(subcommands)
     return parser
 
 
@@ -108,6 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         execution_service,
         vault_service,
         mcp_service,
+        model_service,
     ) = _make_services(args.db)
 
     try:
@@ -136,6 +143,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if mcp_result is not None:
             return mcp_result
+        model_result = handle_model_command(args, model_service)
+        if model_result is not None:
+            return model_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -177,6 +187,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         VaultError,
         McpServerNotFoundError,
         McpServerConflictError,
+        ModelError,
+        ModelNotFoundError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -245,6 +257,7 @@ def _make_services(
     ToolExecutionService,
     VaultService,
     McpService,
+    ModelService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -256,6 +269,10 @@ def _make_services(
     recovery = RecoveryService(operations, kernel, recovery_repository)
     vault = VaultService(VaultRepository(database), operation_repository, vault_key_path())
     mcp = McpService(McpServerRepository(database))
+    model_endpoints = ModelEndpointRepository(database)
+    models = ModelService(
+        ModelRegistry(model_endpoints), vault, kernel, operations, model_endpoints
+    )
     execution = ToolExecutionService(
         operations,
         kernel,
@@ -264,7 +281,7 @@ def _make_services(
         registry=default_registry(mcp.resolver()),
         vault=vault,
     )
-    return operations, kernel, settings, recovery, execution, vault, mcp
+    return operations, kernel, settings, recovery, execution, vault, mcp, models
 
 
 def _emit_operation(operation: Operation, json_output: bool) -> None:
