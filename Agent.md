@@ -66,10 +66,10 @@ uv run samurai tui
 - Docker sandbox profiles (`sandbox.exec`, R2): static signed allowlist (HMAC-SHA256 от vault master key, `sandbox-allowlist.sig`), pinned-by-digest images, `--network none`, read-only/tmpfs/cap-drop/no-new-privileges/nonroot, resource limits, fail-closed preflight без auto-pull;
 - scoped egress: HTTP broker соединяется с pinned IP (single resolve + проверка каждого адреса по exclusions, Host/SNI по оригинальному имени — DNS TOCTOU устранён); per-run token-authenticated forward proxy на loopback хоста (`execution/egress.py`) для `sandbox.scoped@v1` (network_mode "scoped"): HTTP absolute-URI и CONNECT, вердикты по ScopeContract, порты только 80/443 (конфигурируемо), egress-события (host/port/verdict/bytes, без содержимого) пишутся в payload `tool.run.*` событий, proxy token регистрируется в redactor;
 - MCP без внешнего SDK (JSON-RPC 2.0, protocol 2024-11-05): stdio (no shell, allowlisted executable, per-request timeout) и HTTP transport через scope-enforced egress broker (POST + DNS/redirect revalidation); deferred tool schemas (`mcp tools` сохраняет в `app_settings`), dynamic `mcp.<server>.<tool>` resolution в registry (fail-closed, только enabled серверы), все MCP tools R2 approval-gated, output всегда untrusted-external + injection scanner;
-- 248 unit/integration/CLI/TUI tests + opt-in docker (`SAMURAI_TEST_DOCKER=1`) и opt-in ollama (`SAMURAI_TEST_OLLAMA=1`) integration tests;
+- 272 unit/integration/CLI/TUI tests + opt-in docker (`SAMURAI_TEST_DOCKER=1`) и opt-in ollama (`SAMURAI_TEST_OLLAMA=1`) integration tests;
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-Этап 3 начат (slice 1): versioned model registry (`<provider>/<model>@v1`), OpenAI-compatible provider family (OpenAI, DeepSeek, xAI, Moonshot/Kimi, Mistral, OpenRouter, Qwen) и Ollama как first-class local provider (discovery через /api/tags, local data route, offline-friendly degradation). LLM-трафик — operator infrastructure: не подчиняется target scope, клиент pinned на зарегистрированный base_url (fail-closed). API keys — global-scope секреты vault, redact'ятся из ошибок и никогда не попадают в events. `model.call` events с usage/latency/cost без содержимого; remote = R2 approval, local = R1. Custom OpenAI-compatible endpoints персистятся (SQLite v7). Streaming capability объявлена, но не реализована; anthropic/gemini families зарезервированы в enum; retry/fallback и оркестрация — следующие slices. Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness.
+Этап 3 (slices 1–2): versioned model registry (`<provider>/<model>@v1`), три API-семейства — OpenAI-compatible (OpenAI, DeepSeek, xAI, Moonshot/Kimi, Mistral, OpenRouter, Qwen + custom endpoints SQLite v7), Anthropic (/v1/messages, x-api-key + anthropic-version, system extraction, tool_use mapping), Gemini (generateContent, x-goog-api-key header, systemInstruction, functionCall mapping) — и Ollama как first-class local provider. Единый ChatRequest/ChatResponse контракт на всех семействах (контрактный тест). ModelRouter: ordered fallback (transient 429/5xx → retry ≤2 с deterministic backoff затем next candidate; capability/auth → skip; non-transient → abort), `model.fallback` события (from/to/reason). Budgets: `ModelBudget` per operation (app_settings `budget.<op>`), usage агрегируется replay'ем `model.call` событий (журнал — источник истины), `BudgetExceededError` до вызова и без fallback. LLM-трафик — operator infrastructure: pinned на зарегистрированный base_url; API keys в SecretRedactor, не попадают в events. `model.call` events с usage/latency/cost без содержимого; remote = R2 approval, local = R1. Streaming capability объявлена, но не реализована; оркестрация (Planner/Executor/Parser/Verifier, blackboard) — следующие slices. Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness.
 
 ## 4. Карта репозитория
 
@@ -82,7 +82,7 @@ uv run samurai tui
 - `src/samurai_ai/domain/sandbox.py` — SandboxProfile, canonical payload и HMAC-SHA256 signing.
 - `src/samurai_ai/domain/mcp.py` — McpServer, McpToolInfo, protocol constants и MCP exceptions.
 - `src/samurai_ai/domain/models.py` — ModelDefinition, ProviderDefinition, ModelCapability, ApiFamily и model exceptions.
-- `src/samurai_ai/agents/` — versioned model registry (static + persisted), capability negotiation, OpenAI-compatible client и Ollama provider.
+- `src/samurai_ai/agents/` — versioned model registry (static + persisted), capability negotiation, OpenAI-compatible/Anthropic/Gemini клиенты, Ollama provider, ModelRouter (retry/fallback) и budgets.
 - `src/samurai_ai/execution/` — static registry (с dynamic resolver hook), ProcessManager, HTTP egress broker (GET/HEAD/POST, DNS pinning), Docker sandbox runner, scoped egress proxy и minimal MCP client (stdio/HTTP transports).
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
 - `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v7.
@@ -100,7 +100,7 @@ uv run samurai tui
 - `src/samurai_ai/services/execution.py` — approval-gated managed tool execution с vault placeholder resolution.
 - `src/samurai_ai/services/vault.py` — VaultService: AES-256-GCM encrypt/decrypt, scoping и resolve_placeholders.
 - `src/samurai_ai/services/mcp.py` — McpService (CRUD, health, fetch_tools) и fail-closed McpToolResolver.
-- `src/samurai_ai/services/models.py` — ModelService: provider/model inventory, health, governed `model.call` с approval и usage events.
+- `src/samurai_ai/services/models.py` — ModelService: provider/model inventory, health, governed `model.call` через ModelRouter с approval, fallback events и per-operation budgets.
 - `src/samurai_ai/cli.py` — CLI entry point и общие команды.
 - `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
 - `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
@@ -181,7 +181,9 @@ samurai model list [--provider <id>] [--discover]
 samurai model register <id> --base-url <url> [--secret-name <name>]
 samurai model remove <id>
 samurai model health <provider-or-model-id>
-samurai model complete <model-id> --operation <id> --prompt "..." [--approval-id <id>]
+samurai model complete <model-id> --operation <id> --prompt "..." [--fallback <id>] [--approval-id <id>]
+samurai model budget <operation-id> [--max-tokens N] [--max-cost X] [--max-calls N]
+samurai model usage <operation-id>
 samurai lang [ru|en]
 ```
 
@@ -197,12 +199,11 @@ TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/app
 
 Stage 2b завершен (4 из 5 пунктов): secrets vault, Docker sandbox, scoped egress proxy с DNS pinning и MCP работают и покрыты тестами. Остался отложенный пункт 5 — расширенный набор security tools, который вводится только после отдельного threat review (может выполняться параллельно с Этапом 3).
 
-Следующий вертикальный срез — Этап 3, slice 2 (уже завершён slice 1: provider abstraction, versioned model registry, OpenAI-compatible family, Ollama local provider, custom endpoints, governed `model.call`):
+Следующий вертикальный срез — Этап 3, slice 3 (завершены slice 1: provider abstraction/registry/Ollama и slice 2: Anthropic + Gemini families, ModelRouter retry/fallback, budgets):
 
-- retry/fallback и бюджеты для model calls;
-- Anthropic и Gemini provider families (enum зарезервирован);
 - streaming responses;
-- Planner/Executor/Parser/Verifier, shared blackboard и subagent contexts;
+- Planner/Executor/Parser/Verifier, shared blackboard и subagent contexts (ограничение рекурсии);
+- data route/cost/context accounting поверх usage events;
 - playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
 
 ## 8. Инварианты и правила изменений

@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 
+from samurai_ai.agents.budgets import ModelBudget
 from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.services.models import ModelService
 
@@ -46,6 +47,27 @@ def register_model_commands(
     complete.add_argument("--prompt", required=True)
     complete.add_argument("--max-tokens", dest="max_tokens", type=int)
     complete.add_argument("--approval-id", dest="approval_id")
+    complete.add_argument(
+        "--fallback",
+        action="append",
+        dest="fallbacks",
+        default=[],
+        metavar="MODEL_ID",
+        help="Fallback model id (repeatable, tried in order)",
+    )
+
+    budget = model_commands.add_parser(
+        "budget", help="Show or set the per-operation model call budget"
+    )
+    budget.add_argument("operation_id")
+    budget.add_argument("--max-tokens", dest="max_tokens", type=int)
+    budget.add_argument("--max-cost", dest="max_cost", type=float)
+    budget.add_argument("--max-calls", dest="max_calls", type=int)
+
+    usage = model_commands.add_parser(
+        "usage", help="Show aggregated model usage for an operation"
+    )
+    usage.add_argument("operation_id")
 
 
 def handle_model_command(args: argparse.Namespace, models: ModelService) -> int | None:
@@ -108,7 +130,58 @@ def handle_model_command(args: argparse.Namespace, models: ModelService) -> int 
             state = "healthy" if report["healthy"] else "unavailable"
             print(f"{report['provider']}\t{state}\t{report['base_url']}")
         return 0 if report["healthy"] else 1
+    if args.model_command == "budget":
+        return _budget(args, models)
+    if args.model_command == "usage":
+        summary = models.usage(args.operation_id)
+        if args.json_output:
+            _print_json(summary.model_dump(mode="json"))
+        else:
+            print(
+                f"calls={summary.calls}\ttokens={summary.prompt_tokens}+"
+                f"{summary.completion_tokens}\tcost=${summary.cost_usd}"
+            )
+            for model_id, usage_entry in summary.by_model.items():
+                print(
+                    f"  {model_id}\tcalls={usage_entry['calls']}\t"
+                    f"tokens={usage_entry['prompt_tokens']}+{usage_entry['completion_tokens']}\t"
+                    f"cost=${usage_entry['cost_usd']}"
+                )
+        return 0
     return _complete(args, models)
+
+
+def _budget(args: argparse.Namespace, models: ModelService) -> int:
+    if (
+        args.max_tokens is None
+        and args.max_cost is None
+        and args.max_calls is None
+    ):
+        budget = models.get_budget(args.operation_id)
+        if args.json_output:
+            _print_json(budget.model_dump(mode="json"))
+        elif budget.is_unset():
+            print("no budget set")
+        else:
+            print(
+                f"max-tokens={budget.max_tokens_total or '-'}\t"
+                f"max-cost={budget.max_cost_usd or '-'}\t"
+                f"max-calls={budget.max_calls or '-'}"
+            )
+        return 0
+    budget = models.set_budget(
+        args.operation_id,
+        ModelBudget(
+            max_tokens_total=args.max_tokens,
+            max_cost_usd=args.max_cost,
+            max_calls=args.max_calls,
+        ),
+    )
+    if args.json_output:
+        _print_json(budget.model_dump(mode="json"))
+    else:
+        print(f"budget set for {args.operation_id}")
+    return 0
 
 
 def _complete(args: argparse.Namespace, models: ModelService) -> int:
@@ -119,6 +192,7 @@ def _complete(args: argparse.Namespace, models: ModelService) -> int:
             args.prompt,
             max_tokens=args.max_tokens,
             approval_id=args.approval_id,
+            fallbacks=tuple(args.fallbacks),
         )
     except ApprovalRequiredError as exc:
         if args.json_output:
@@ -141,8 +215,11 @@ def _complete(args: argparse.Namespace, models: ModelService) -> int:
         _print_json(response.model_dump(mode="json"))
     else:
         print(response.text)
+        route = response.model_id
+        if route != args.model_id:
+            route = f"{args.model_id} -> {route}"
         print(
-            f"[{response.model_id} via {response.provider_id} | "
+            f"[{route} via {response.provider_id} | "
             f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens} | "
             f"{response.latency_ms}ms]",
             file=sys.stderr,

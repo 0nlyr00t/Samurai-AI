@@ -197,7 +197,10 @@ class OpenAICompatProvider:
                 body.decode("utf-8", errors="replace")[:_MAX_ERROR_SNIPPET]
             ).text
             raise ProviderUnavailableError(
-                f"provider {self.provider.id} returned HTTP {status}: {snippet}"
+                f"provider {self.provider.id} returned HTTP {status}: {snippet}",
+                status=status,
+                transient=status == 429 or status >= 500,
+                auth=status in (401, 403),
             )
         try:
             decoded = json.loads(body)

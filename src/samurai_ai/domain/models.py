@@ -30,7 +30,18 @@ class CapabilityError(ModelError):
 
 
 class ProviderUnavailableError(ModelError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        transient: bool = True,
+        auth: bool = False,
+    ) -> None:
+        self.status = status
+        self.transient = transient
+        self.auth = auth
+        super().__init__(message)
 
 
 class ModelCapability(StrEnum):

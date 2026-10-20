@@ -63,7 +63,7 @@ def test_static_registry_contents() -> None:
 def test_registry_fail_closed_for_unknown() -> None:
     registry = ModelRegistry()
     with pytest.raises(ModelNotFoundError):
-        registry.get_provider("anthropic")
+        registry.get_provider("no-such-provider")
     with pytest.raises(ModelNotFoundError):
         registry.get_model("openai/gpt-3@v1")
     with pytest.raises(ModelNotFoundError):

@@ -271,7 +271,12 @@ def _make_services(
     mcp = McpService(McpServerRepository(database))
     model_endpoints = ModelEndpointRepository(database)
     models = ModelService(
-        ModelRegistry(model_endpoints), vault, kernel, operations, model_endpoints
+        ModelRegistry(model_endpoints),
+        vault,
+        kernel,
+        operations,
+        model_endpoints,
+        recovery_repository,
     )
     execution = ToolExecutionService(
         operations,
