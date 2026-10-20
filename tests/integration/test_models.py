@@ -12,6 +12,7 @@ from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.models import (
     ApiFamily,
+    ModelCapability,
     ModelError,
     ModelNotFoundError,
     ProviderDefinition,
@@ -180,7 +181,7 @@ def test_custom_endpoint_register_resolve_remove(vault_env: Path) -> None:
 
     model, provider = models.registry.get_model("custom/anything@v1")
     assert provider.id == "custom"
-    assert model.capabilities == frozenset()
+    assert model.capabilities == frozenset({ModelCapability.STRUCTURED_OUTPUT})
 
     with pytest.raises(ModelNotFoundError):
         models.registry.get_model("other/anything@v1")
@@ -365,7 +366,7 @@ def test_migration_v6_to_v7_adds_model_endpoints(vault_env: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7}
+        assert versions == {1, 2, 3, 4, 5, 6, 7, 8}
         connection.execute(
             """
             INSERT INTO model_endpoints(

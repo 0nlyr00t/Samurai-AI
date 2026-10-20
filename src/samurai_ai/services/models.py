@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from samurai_ai.agents.anthropic import AnthropicProvider
@@ -55,6 +56,7 @@ class ModelService:
         operations: OperationService,
         endpoints: ModelEndpointRepository | None = None,
         settings: RecoveryRepository | None = None,
+        provider_factory: Callable[[ProviderDefinition], ProviderImpl] | None = None,
     ) -> None:
         self.registry = registry
         self.vault = vault
@@ -62,6 +64,7 @@ class ModelService:
         self.operations = operations
         self.endpoints = endpoints
         self.settings = settings
+        self.provider_factory = provider_factory
 
     def list_providers(self) -> list[dict[str, Any]]:
         rows = []
@@ -181,6 +184,7 @@ class ModelService:
         approval_id: str | None = None,
         fallbacks: tuple[str, ...] = (),
         router: ModelRouter | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
         self.operations.get(operation_id)
         model, provider = self._resolve_model(model_id)
@@ -225,22 +229,25 @@ class ModelService:
         active_router = router or ModelRouter()
         response = asyncio.run(active_router.complete(candidates, invoke, on_fallback))
         used_model, used_provider = self._resolve_model(response.model_id)
+        payload: dict[str, Any] = {
+            "model_id": response.model_id,
+            "provider_id": used_provider.id,
+            "local": used_provider.local,
+            "prompt_tokens": response.usage.prompt_tokens,
+            "completion_tokens": response.usage.completion_tokens,
+            "latency_ms": response.latency_ms,
+            "estimated_cost_usd": used_model.estimate_cost(
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+            ),
+        }
+        if extra_payload:
+            payload.update(extra_payload)
         self.operations.repository.append_event(
             OperationEvent(
                 operation_id=operation_id,
                 event_type="model.call",
-                payload={
-                    "model_id": response.model_id,
-                    "provider_id": used_provider.id,
-                    "local": used_provider.local,
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "latency_ms": response.latency_ms,
-                    "estimated_cost_usd": used_model.estimate_cost(
-                        response.usage.prompt_tokens,
-                        response.usage.completion_tokens,
-                    ),
-                },
+                payload=payload,
             )
         )
         return response
@@ -274,6 +281,9 @@ class ModelService:
             model = asyncio.run(OllamaProvider(provider).resolve_model(model_id))
             return model, provider
         return self.registry.get_model(model_id)
+
+    def resolve_model(self, model_id: str) -> tuple[ModelDefinition, ProviderDefinition]:
+        return self._resolve_model(model_id)
 
     async def _resolve_model_async(
         self, model_id: str
@@ -322,6 +332,8 @@ class ModelService:
         return stored
 
     def _build_provider(self, provider: ProviderDefinition) -> ProviderImpl:
+        if self.provider_factory is not None:
+            return self.provider_factory(provider)
         if provider.api_family is ApiFamily.OLLAMA:
             return OllamaProvider(provider)
         api_key: str | None = None

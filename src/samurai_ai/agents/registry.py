@@ -230,9 +230,11 @@ class ModelRegistry:
         self,
         endpoints: ModelEndpointRepository | None = None,
         providers: tuple[ProviderDefinition, ...] | None = None,
+        models: tuple[ModelDefinition, ...] | None = None,
     ) -> None:
         self.endpoints = endpoints
         self.static_providers = providers if providers is not None else STATIC_PROVIDERS
+        self.static_models = models if models is not None else STATIC_MODELS
 
     def get_provider(self, provider_id: str) -> ProviderDefinition:
         for provider in self.static_providers:
@@ -246,7 +248,7 @@ class ModelRegistry:
 
     def get_model(self, model_id: str) -> tuple[ModelDefinition, ProviderDefinition]:
         provider_id, _ = parse_model_id(model_id)
-        for model in STATIC_MODELS:
+        for model in self.static_models:
             if model.id == model_id:
                 return model, self.get_provider(model.provider_id)
         provider = self.get_provider(provider_id)
@@ -264,7 +266,7 @@ class ModelRegistry:
                     api_family=provider.api_family,
                     context_limit=32768,
                     max_output_tokens=4096,
-                    capabilities=frozenset(),
+                    capabilities=frozenset({ModelCapability.STRUCTURED_OUTPUT}),
                 ),
                 provider,
             )
@@ -279,7 +281,7 @@ class ModelRegistry:
     def list_models(self, provider_id: str | None = None) -> list[ModelDefinition]:
         models = [
             model
-            for model in STATIC_MODELS
+            for model in self.static_models
             if provider_id is None or model.provider_id == provider_id
         ]
         return models

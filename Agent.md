@@ -66,10 +66,10 @@ uv run samurai tui
 - Docker sandbox profiles (`sandbox.exec`, R2): static signed allowlist (HMAC-SHA256 от vault master key, `sandbox-allowlist.sig`), pinned-by-digest images, `--network none`, read-only/tmpfs/cap-drop/no-new-privileges/nonroot, resource limits, fail-closed preflight без auto-pull;
 - scoped egress: HTTP broker соединяется с pinned IP (single resolve + проверка каждого адреса по exclusions, Host/SNI по оригинальному имени — DNS TOCTOU устранён); per-run token-authenticated forward proxy на loopback хоста (`execution/egress.py`) для `sandbox.scoped@v1` (network_mode "scoped"): HTTP absolute-URI и CONNECT, вердикты по ScopeContract, порты только 80/443 (конфигурируемо), egress-события (host/port/verdict/bytes, без содержимого) пишутся в payload `tool.run.*` событий, proxy token регистрируется в redactor;
 - MCP без внешнего SDK (JSON-RPC 2.0, protocol 2024-11-05): stdio (no shell, allowlisted executable, per-request timeout) и HTTP transport через scope-enforced egress broker (POST + DNS/redirect revalidation); deferred tool schemas (`mcp tools` сохраняет в `app_settings`), dynamic `mcp.<server>.<tool>` resolution в registry (fail-closed, только enabled серверы), все MCP tools R2 approval-gated, output всегда untrusted-external + injection scanner;
-- 272 unit/integration/CLI/TUI tests + opt-in docker (`SAMURAI_TEST_DOCKER=1`) и opt-in ollama (`SAMURAI_TEST_OLLAMA=1`) integration tests;
+- 295 unit/integration/CLI/TUI tests + opt-in docker (`SAMURAI_TEST_DOCKER=1`) и opt-in ollama (`SAMURAI_TEST_OLLAMA=1`) integration tests;
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-Этап 3 (slices 1–2): versioned model registry (`<provider>/<model>@v1`), три API-семейства — OpenAI-compatible (OpenAI, DeepSeek, xAI, Moonshot/Kimi, Mistral, OpenRouter, Qwen + custom endpoints SQLite v7), Anthropic (/v1/messages, x-api-key + anthropic-version, system extraction, tool_use mapping), Gemini (generateContent, x-goog-api-key header, systemInstruction, functionCall mapping) — и Ollama как first-class local provider. Единый ChatRequest/ChatResponse контракт на всех семействах (контрактный тест). ModelRouter: ordered fallback (transient 429/5xx → retry ≤2 с deterministic backoff затем next candidate; capability/auth → skip; non-transient → abort), `model.fallback` события (from/to/reason). Budgets: `ModelBudget` per operation (app_settings `budget.<op>`), usage агрегируется replay'ем `model.call` событий (журнал — источник истины), `BudgetExceededError` до вызова и без fallback. LLM-трафик — operator infrastructure: pinned на зарегистрированный base_url; API keys в SecretRedactor, не попадают в events. `model.call` events с usage/latency/cost без содержимого; remote = R2 approval, local = R1. Streaming capability объявлена, но не реализована; оркестрация (Planner/Executor/Parser/Verifier, blackboard) — следующие slices. Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness.
+Этап 3 (slices 1–3): versioned model registry (`<provider>/<model>@v1`), три API-семейства — OpenAI-compatible (OpenAI, DeepSeek, xAI, Moonshot/Kimi, Mistral, OpenRouter, Qwen + custom endpoints SQLite v7), Anthropic (/v1/messages, x-api-key + anthropic-version, system extraction, tool_use mapping), Gemini (generateContent, x-goog-api-key header, systemInstruction, functionCall mapping) — и Ollama как first-class local provider. Единый ChatRequest/ChatResponse контракт на всех семействах (контрактный тест). ModelRouter: ordered fallback (transient 429/5xx → retry ≤2 затем next candidate; capability/auth → skip; non-transient → abort), `model.fallback` события. Budgets: `ModelBudget` per operation (app_settings `budget.<op>`), usage из replay `model.call` событий, `BudgetExceededError` до вызова. Оркестрация (slice 3): Planner/Executor/Parser/Verifier, закрытая command schema (`request_tool_run`/`note`/`propose_finding`/`complete_task`/`fail` — всё через governed services, reject → `agent.command.rejected` без side effects, >3 подряд → run failed), Parser с bounded retry (≤2, corrective prompt), capability pre-check до первого вызова, `agent_runs` (SQLite v8) с parent_run_id/depth (max_depth=1), blackboard из replay `agent.note` событий с namespace isolation (`shared.*` + `run.<id>.*`) и redaction, `model.call` с `agent_run_id` для per-run accounting. `agent show`: route/usage/context %/data route без ключей. Streaming не реализован; mid-run resume не реализован (resume = новый run, blackboard сохраняется в журнале). Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness.
 
 ## 4. Карта репозитория
 
@@ -82,10 +82,11 @@ uv run samurai tui
 - `src/samurai_ai/domain/sandbox.py` — SandboxProfile, canonical payload и HMAC-SHA256 signing.
 - `src/samurai_ai/domain/mcp.py` — McpServer, McpToolInfo, protocol constants и MCP exceptions.
 - `src/samurai_ai/domain/models.py` — ModelDefinition, ProviderDefinition, ModelCapability, ApiFamily и model exceptions.
-- `src/samurai_ai/agents/` — versioned model registry (static + persisted), capability negotiation, OpenAI-compatible/Anthropic/Gemini клиенты, Ollama provider, ModelRouter (retry/fallback) и budgets.
+- `src/samurai_ai/domain/agents.py` — AgentRun, command schema (discriminated union) и agent exceptions.
+- `src/samurai_ai/agents/` — versioned model registry (static + persisted), capability negotiation, OpenAI-compatible/Anthropic/Gemini клиенты, Ollama provider, ModelRouter (retry/fallback), budgets, blackboard, parser и AgentOrchestrator.
 - `src/samurai_ai/execution/` — static registry (с dynamic resolver hook), ProcessManager, HTTP egress broker (GET/HEAD/POST, DNS pinning), Docker sandbox runner, scoped egress proxy и minimal MCP client (stdio/HTTP transports).
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
-- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v7.
+- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v8.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
 - `src/samurai_ai/storage/kernel.py` — KernelRepository для plans/approvals/artifacts/findings.
 - `src/samurai_ai/storage/recovery.py` — snapshots, recovery actions и app settings.
@@ -93,6 +94,7 @@ uv run samurai tui
 - `src/samurai_ai/storage/vault.py` — VaultRepository для encrypted secret entries.
 - `src/samurai_ai/storage/mcp.py` — McpServerRepository и deferred tool schema cache (app_settings).
 - `src/samurai_ai/storage/models.py` — ModelEndpointRepository для custom OpenAI-compatible endpoints.
+- `src/samurai_ai/storage/agents.py` — AgentRunRepository для agent_runs (миграция v8).
 - `src/samurai_ai/services/operations.py` — сервисный сценарий операций.
 - `src/samurai_ai/services/kernel.py` — KernelService, policy preconditions и summary.
 - `src/samurai_ai/services/recovery.py` — snapshots/restore/fork/reconcile/diff.
@@ -108,7 +110,8 @@ uv run samurai tui
 - `src/samurai_ai/cli_vault.py` — secret add/list/remove команды (значения не печатаются).
 - `src/samurai_ai/cli_sandbox.py` — sandbox profiles/sign команды.
 - `src/samurai_ai/cli_mcp.py` — mcp add/remove/list/enable/disable/health/tools/invoke команды.
-- `src/samurai_ai/cli_models.py` — model providers/list/register/remove/health/complete команды.
+- `src/samurai_ai/cli_models.py` — model providers/list/register/remove/health/complete/budget/usage команды.
+- `src/samurai_ai/cli_agents.py` — agent run/list/show команды.
 - `src/samurai_ai/tui/app.py` — локализованный TUI без доменной логики в обработчиках.
 - `tests/unit` — чистое доменное ядро и scope/kernel/recovery/execution edge cases.
 - `tests/integration` — SQLite, recovery, process/http broker, CLI и kernel E2E.
@@ -184,6 +187,9 @@ samurai model health <provider-or-model-id>
 samurai model complete <model-id> --operation <id> --prompt "..." [--fallback <id>] [--approval-id <id>]
 samurai model budget <operation-id> [--max-tokens N] [--max-cost X] [--max-calls N]
 samurai model usage <operation-id>
+samurai agent run <operation-id> <task-id> --model <id> [--fallback <id>] [--approval-id <id>]
+samurai agent list <operation-id>
+samurai agent show <run-id>
 samurai lang [ru|en]
 ```
 
@@ -193,13 +199,13 @@ Tool params поддерживают `{{secret:name}}` placeholders: значе�
 
 MCP: схемы инструментов импортируются только явным `samurai mcp tools <name>` (deferred, кэшируются в `app_settings`); вызов идёт как обычный governed tool run `mcp.<server>.<tool>` с R2 approval. HTTP MCP endpoints проходят через operation scope (для `health`/`tools` нужен `--operation`). Disabled сервер или unknown tool → fail-closed `ToolNotFoundError`.
 
-TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/secrets`, `/lang`, `/status`, `/scope`.
+TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/agents`, `/secrets`, `/lang`, `/status`, `/scope`.
 
 ## 7. Следующий этап — LLM и оркестрация (Этап 3)
 
 Stage 2b завершен (4 из 5 пунктов): secrets vault, Docker sandbox, scoped egress proxy с DNS pinning и MCP работают и покрыты тестами. Остался отложенный пункт 5 — расширенный набор security tools, который вводится только после отдельного threat review (может выполняться параллельно с Этапом 3).
 
-Следующий вертикальный срез — Этап 3, slice 3 (завершены slice 1: provider abstraction/registry/Ollama и slice 2: Anthropic + Gemini families, ModelRouter retry/fallback, budgets):
+Следующий вертикальный срез — Этап 3, slice 4 (завершены slice 1: provider abstraction/registry/Ollama; slice 2: Anthropic + Gemini families, ModelRouter retry/fallback, budgets; slice 3: Planner/Executor/Parser/Verifier, command schema, blackboard, subagent depth):
 
 - streaming responses;
 - Planner/Executor/Parser/Verifier, shared blackboard и subagent contexts (ограничение рекурсии);

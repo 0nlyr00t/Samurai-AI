@@ -251,6 +251,24 @@ CREATE TABLE IF NOT EXISTS model_endpoints (
 );
 """
 
+_MIGRATION_8 = """
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL,
+    parent_run_id TEXT,
+    depth INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    model_route TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS agent_runs_operation_id
+ON agent_runs(operation_id, created_at, id);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -259,6 +277,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (5, _MIGRATION_5),
     (6, _MIGRATION_6),
     (7, _MIGRATION_7),
+    (8, _MIGRATION_8),
 )
 
 

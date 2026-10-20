@@ -6,7 +6,9 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
+from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
@@ -15,6 +17,7 @@ from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_c
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
+from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.mcp import McpServerNotFoundError
@@ -42,6 +45,7 @@ from samurai_ai.services.recovery import (
 )
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
@@ -101,6 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_sandbox_commands(subcommands)
     register_mcp_commands(subcommands)
     register_model_commands(subcommands)
+    register_agent_commands(subcommands)
     return parser
 
 
@@ -115,6 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         vault_service,
         mcp_service,
         model_service,
+        agent_orchestrator,
     ) = _make_services(args.db)
 
     try:
@@ -146,6 +152,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_result = handle_model_command(args, model_service)
         if model_result is not None:
             return model_result
+        agent_result = handle_agent_command(args, agent_orchestrator, model_service)
+        if agent_result is not None:
+            return agent_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -164,6 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             recovery_service,
             execution_service,
             vault_service,
+            agent_orchestrator.runs,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -189,6 +199,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         McpServerConflictError,
         ModelError,
         ModelNotFoundError,
+        AgentError,
+        AgentRunNotFoundError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -258,6 +270,7 @@ def _make_services(
     VaultService,
     McpService,
     ModelService,
+    AgentOrchestrator,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -286,7 +299,10 @@ def _make_services(
         registry=default_registry(mcp.resolver()),
         vault=vault,
     )
-    return operations, kernel, settings, recovery, execution, vault, mcp, models
+    agents = AgentOrchestrator(
+        models, kernel, execution, operations, AgentRunRepository(database)
+    )
+    return operations, kernel, settings, recovery, execution, vault, mcp, models, agents
 
 
 def _emit_operation(operation: Operation, json_output: bool) -> None:

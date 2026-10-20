@@ -13,6 +13,7 @@ from samurai_ai.services.operations import OperationNotFoundError, OperationServ
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.storage.agents import AgentRunRepository
 
 
 class LanguagePromptScreen(ModalScreen[str]):
@@ -105,6 +106,7 @@ class SamuraiApp(App[None]):
         recovery: RecoveryService,
         execution: ToolExecutionService,
         vault: VaultService,
+        agents: AgentRunRepository,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -114,6 +116,7 @@ class SamuraiApp(App[None]):
         self.recovery = recovery
         self.execution = execution
         self.vault = vault
+        self.agents = agents
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -222,6 +225,9 @@ class SamuraiApp(App[None]):
             return
         if name == "/runs":
             self._show_runs()
+            return
+        if name == "/agents":
+            self._show_agents()
             return
         if name == "/secrets":
             self._show_secrets()
@@ -444,6 +450,21 @@ class SamuraiApp(App[None]):
             journal.write(
                 f"[run] {run.id} | {run.tool_id} v{run.tool_version} | {run.status.value} | "
                 f"trust={run.trust.value} | warnings={warnings} | artifacts={artifacts}"
+            )
+
+    def _show_agents(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[agents] " + self.translator.t("status.no-operation"))
+            return
+        runs = self.agents.list_runs(self.operation.id)
+        if not runs:
+            journal.write("[agents] " + self.translator.t("agents.empty"))
+            return
+        for run in runs:
+            journal.write(
+                f"[agent] {run.id} | {run.task_id} | {run.status.value} | "
+                f"depth={run.depth} | route={','.join(run.model_route)}"
             )
 
     def _show_secrets(self) -> None:
