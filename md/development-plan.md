@@ -10,9 +10,11 @@
 
 **Этап 2b завершен (4 из 5 пунктов):** persistent secrets vault (AES-256-GCM, SQLite v5, per-operation scoping, `{{secret:name}}` placeholders), Docker sandbox profiles со static signed allowlist и resource constraints, scoped egress proxy с per-run token auth и DNS pinning (DNS TOCTOU устранен и в broker, и в proxy), MCP stdio/HTTP client без внешнего SDK (JSON-RPC 2.0, protocol 2024-11-05, deferred schemas, health checks, trust model, SQLite v6). Проверки: 222 tests + opt-in docker integration, ruff, strict mypy, CLI smoke — успешно. Пункт 5 (расширенный набор security tools) отложен до отдельного threat review.
 
-Текущие ограничения: scoped sandbox на Docker Desktop for Mac не дает hard egress enforcement (контейнер может обойти proxy через bridge NAT; полный enforcement требует Linux-harness с internal network + in-network proxy); MCP Streamable HTTP поддержан без SSE-streaming responses; `process.exec` не имеет сетевого доступа и допускает только allowlisted executables; LLM и оркестрация не реализованы.
+**Этап 3 завершен:** LLM и оркестрация. Реализованы provider abstraction и versioned model registry (13 моделей, 4 API-семейства: openai-compatible с OpenAI/DeepSeek/xAI/Moonshot-Kimi/Mistral/OpenRouter/Qwen и custom endpoints SQLite v7, anthropic, gemini), Ollama как first-class local provider (discovery, local data route, offline-friendly degradation), capability negotiation (block до запуска), ModelRouter с retry/fallback и `model.fallback` событиями, per-operation budgets (`ModelBudget`, usage из replay `model.call` событий, `BudgetExceededError` без потери состояния), оркестратор Planner/Executor/Parser/Verifier с закрытой command schema (`request_tool_run`/`note`/`propose_finding`/`complete_task`/`fail` через governed services), shared blackboard из журнала с namespace isolation, subagent contexts с depth limit, `agent_runs` (SQLite v8), data route/cost/context display в `agent show`, CLI `model`/`agent` и TUI `/agents`. LLM-трафик pinned на зарегистрированный base_url; API keys в vault + redaction. Проверки: 301 test (включая acceptance `test_stage3_acceptance.py` и opt-in Ollama/docker), ruff, strict mypy, CLI smoke — успешно.
 
-Следующий рабочий этап — **Этап 3, LLM и оркестрация** (после threat review расширенного набора security tools как параллельной задачи).
+Текущие ограничения: scoped sandbox на Docker Desktop for Mac не дает hard egress enforcement (контейнер может обойти proxy через bridge NAT; полный enforcement требует Linux-harness с internal network + in-network proxy); MCP Streamable HTTP поддержан без SSE-streaming responses; LLM streaming не реализован (capability объявлена); Anthropic health — минимальный POST probe; mid-run resume агента = новый run с сохраненным blackboard; `process.exec` не имеет сетевого доступа и допускает только allowlisted executables.
+
+Следующий рабочий этап — **Этап 4, продуктовые playbooks и отчеты** (после threat review расширенного набора security tools как параллельной задачи).
 
 ## 1. Архитектурный курс
 
@@ -117,23 +119,23 @@
 - ~~Persistent secrets vault и per-operation secret scoping~~ — AES-256-GCM, SQLite v5, CLI/TUI, placeholder resolution в tool execution с redaction.
 - Расширенный набор security tools — отложен до отдельного threat review.
 
-## 5. Этап 3 — LLM и оркестрация
+## 5. Этап 3 — LLM и оркестрация (завершен)
 
-### Объем
+### Объем (реализовано)
 
-- Provider abstraction и versioned model registry: OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock, DeepSeek, xAI, Qwen, Moonshot/Kimi, Mistral, OpenRouter и OpenAI-compatible endpoints.
-- Ollama как first-class local provider: health check, model discovery, явный local data route и offline-friendly degradation.
-- Capability negotiation для tools/function calling, structured outputs, streaming, vision и context limits; playbook не должен зависеть от vendor-specific API.
-- Planner/Executor/Parser/Verifier, structured outputs, retry/fallback и бюджеты.
-- Shared blackboard, изолированные контексты подагентов, наследование разрешений и ограничение рекурсии.
-- Отображение маршрута данных, стоимости и потребления контекста.
+- ~~Provider abstraction и versioned model registry~~ — 13 моделей, семейства openai-compatible (включая custom endpoints, SQLite v7), anthropic, gemini, ollama; Azure OpenAI/AWS Bedrock не вошли (подключаются как custom openai-compatible endpoints).
+- ~~Ollama как first-class local provider~~ — health, discovery через /api/tags, local data route, offline-friendly degradation.
+- ~~Capability negotiation~~ — tools/structured-output/streaming/vision, block до запуска; playbook не зависит от vendor-specific API (единый ChatRequest/ChatResponse, контрактный тест на трех семействах).
+- ~~Planner/Executor/Parser/Verifier, structured outputs, retry/fallback и бюджеты~~ — parser с bounded retry, ModelRouter, ModelBudget + usage replay.
+- ~~Shared blackboard, изолированные контексты подагентов, наследование разрешений и ограничение рекурсии~~ — blackboard из журнала с namespace isolation, agent_runs с parent_run_id/depth, max_depth=1, общий budget операции.
+- ~~Отображение маршрута данных, стоимости и потребления контекста~~ — `agent show` и `model usage`/`model budget`.
 
-### Acceptance
+### Acceptance (все пункты покрыты тестами в `tests/integration/test_stage3_acceptance.py`)
 
-- Один playbook работает минимум на двух разных API-семействах и одной локальной Ollama-модели без изменения policy и evidence format.
-- Неподдерживаемая capability обнаруживается до запуска и переводит задачу в понятный fallback/block, а не в silent failure.
-- Модель не может изменить состояние вне разрешенных команд и схем.
-- Бюджет останавливает или переводит операцию в ожидание без потери состояния.
+- Один playbook работает на openai-compatible и anthropic семействах без изменения policy/evidence format; локальная Ollama-модель — opt-in тест `SAMURAI_TEST_OLLAMA=1` (пройден на реальном Ollama).
+- Неподдерживаемая capability (нет tools/structured-output) блокирует run до первого model call — без `model.call` событий и без записи agent run.
+- Команды вне whitelist отклоняются (`agent.command.rejected`), состояние операции неизменно.
+- Бюджет переводит run в `budget-exceeded` без потери состояния; повторный run после поднятия бюджета завершается успешно.
 
 ## 6. Этап 4 — Продуктовые playbooks и отчеты
 
