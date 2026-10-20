@@ -12,6 +12,7 @@ from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
@@ -30,6 +31,7 @@ def make_stack(
     RecoveryService,
     ToolExecutionService,
     VaultService,
+    AgentRunRepository,
 ]:
     database = Database(tmp_path / name)
     operation_repository = OperationRepository(database)
@@ -44,15 +46,16 @@ def make_stack(
     execution = ToolExecutionService(
         service, kernel, recovery, ToolRunRepository(database), vault=vault
     )
-    return service, kernel, settings, recovery, execution, vault
+    agents = AgentRunRepository(database)
+    return service, kernel, settings, recovery, execution, vault, agents
 
 
 def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SAMURAI_LANG", raising=False)
-    service, kernel, settings, recovery, execution, vault = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault)
+        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, agents)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
@@ -84,10 +87,10 @@ def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> N
 
 def test_first_run_language_choice_english_via_keyboard(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SAMURAI_LANG", raising=False)
-    service, kernel, settings, recovery, execution, vault = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault)
+        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, agents)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
@@ -104,11 +107,11 @@ def test_first_run_language_choice_english_via_keyboard(tmp_path: Path, monkeypa
 
 
 def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
-    service, kernel, settings, recovery, execution, vault = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
     settings.set_locale("ru")
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault)
+        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, agents)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)
@@ -134,7 +137,7 @@ def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
 
 
 def test_lang_command_switches_language_without_losing_operation(tmp_path: Path) -> None:
-    service, kernel, settings, recovery, execution, vault = make_stack(tmp_path)
+    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
     settings.set_locale("en")
     operation = service.create(
         "Lang lab",
@@ -143,7 +146,10 @@ def test_lang_command_switches_language_without_losing_operation(tmp_path: Path)
     )
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, operation.id)
+        app = SamuraiApp(
+            service, kernel, settings, recovery, execution, vault, agents,
+            operation.id,
+        )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             journal = app.query_one("#journal", RichLog)

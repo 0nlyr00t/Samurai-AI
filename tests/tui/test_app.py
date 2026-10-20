@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from textual.widgets import Input, RichLog, Static
 
+from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
@@ -13,6 +14,7 @@ from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
@@ -37,6 +39,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     execution = ToolExecutionService(
         service, kernel, recovery, ToolRunRepository(database), vault=vault
     )
+    agents = AgentRunRepository(database)
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -74,9 +77,20 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     secret = vault.add(
         "tui-token", "tui-secret-plaintext", operation.id, created_by="operator"
     )
+    agent_run = AgentRun(
+        operation_id=operation.id,
+        task_id="recon",
+        model_route=("fake/agent@v1",),
+    )
+    agents.add(agent_run)
+    agent_run.finish(AgentRunStatus.COMPLETED)
+    agents.finish(agent_run)
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, operation.id)
+        app = SamuraiApp(
+            service, kernel, settings, recovery, execution, vault, agents,
+            operation.id,
+        )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             header = app.query_one("#operation-header", Static)
@@ -112,6 +126,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/tools", "local.echo"),
                     ("/tools", "sandbox.exec"),
                     ("/runs", tool_result.run.id),
+                    ("/agents", agent_run.id),
                     ("/secrets", secret.id),
                 ):
                     command_input.value = command
