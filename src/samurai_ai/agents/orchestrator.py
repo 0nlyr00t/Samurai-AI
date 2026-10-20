@@ -18,7 +18,6 @@ from typing import Any, TypeVar
 
 from samurai_ai.agents.blackboard import Blackboard, make_note_event
 from samurai_ai.agents.budgets import BudgetExceededError
-from samurai_ai.agents.capabilities import require_capabilities
 from samurai_ai.agents.parser import (
     MAX_PARSE_RETRIES,
     corrective_prompt,
@@ -48,7 +47,7 @@ from samurai_ai.domain.execution import (
     ToolNotFoundError,
 )
 from samurai_ai.domain.kernel import ArtifactError, FindingSeverity, KernelError
-from samurai_ai.domain.models import ModelCapability
+from samurai_ai.domain.models import CapabilityError, ModelCapability
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
@@ -139,7 +138,13 @@ class AgentOrchestrator:
                 )
 
         model, _ = self.models.resolve_model(candidates[0])
-        require_capabilities(model, (ModelCapability.STRUCTURED_OUTPUT,))
+        if not (
+            model.capabilities
+            & {ModelCapability.STRUCTURED_OUTPUT, ModelCapability.TOOLS}
+        ):
+            raise CapabilityError(
+                model.id, ("structured-output", ModelCapability.TOOLS.value)
+            )
 
         run = AgentRun(
             operation_id=operation_id,

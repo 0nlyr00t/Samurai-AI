@@ -45,7 +45,7 @@ uv run samurai tui
 
 ## 3. Текущее состояние
 
-Завершены **Этап 0**, **Этап 1/1b**, **Этап 2a — Managed Tool Execution Core** и **Этап 2b — Isolation and Protocol Expansion** (4 из 5 пунктов; расширенный набор security tools отложен до threat review):
+Завершены **Этап 0**, **Этап 1/1b**, **Этап 2a — Managed Tool Execution Core**, **Этап 2b — Isolation and Protocol Expansion** (4 из 5 пунктов; расширенный набор security tools отложен до threat review) и **Этап 3 — LLM и оркестрация**:
 
 - четыре режима операций и проверяемые lifecycle transitions;
 - include/exclude scope для domain, wildcard, URL origins и IP/CIDR;
@@ -66,10 +66,10 @@ uv run samurai tui
 - Docker sandbox profiles (`sandbox.exec`, R2): static signed allowlist (HMAC-SHA256 от vault master key, `sandbox-allowlist.sig`), pinned-by-digest images, `--network none`, read-only/tmpfs/cap-drop/no-new-privileges/nonroot, resource limits, fail-closed preflight без auto-pull;
 - scoped egress: HTTP broker соединяется с pinned IP (single resolve + проверка каждого адреса по exclusions, Host/SNI по оригинальному имени — DNS TOCTOU устранён); per-run token-authenticated forward proxy на loopback хоста (`execution/egress.py`) для `sandbox.scoped@v1` (network_mode "scoped"): HTTP absolute-URI и CONNECT, вердикты по ScopeContract, порты только 80/443 (конфигурируемо), egress-события (host/port/verdict/bytes, без содержимого) пишутся в payload `tool.run.*` событий, proxy token регистрируется в redactor;
 - MCP без внешнего SDK (JSON-RPC 2.0, protocol 2024-11-05): stdio (no shell, allowlisted executable, per-request timeout) и HTTP transport через scope-enforced egress broker (POST + DNS/redirect revalidation); deferred tool schemas (`mcp tools` сохраняет в `app_settings`), dynamic `mcp.<server>.<tool>` resolution в registry (fail-closed, только enabled серверы), все MCP tools R2 approval-gated, output всегда untrusted-external + injection scanner;
-- 295 unit/integration/CLI/TUI tests + opt-in docker (`SAMURAI_TEST_DOCKER=1`) и opt-in ollama (`SAMURAI_TEST_OLLAMA=1`) integration tests;
+- 301 unit/integration/CLI/TUI tests + opt-in docker (`SAMURAI_TEST_DOCKER=1`) и opt-in ollama (`SAMURAI_TEST_OLLAMA=1`) integration tests;
 - ruff, strict mypy и CLI/TUI E2E проходят успешно.
 
-Этап 3 (slices 1–3): versioned model registry (`<provider>/<model>@v1`), три API-семейства — OpenAI-compatible (OpenAI, DeepSeek, xAI, Moonshot/Kimi, Mistral, OpenRouter, Qwen + custom endpoints SQLite v7), Anthropic (/v1/messages, x-api-key + anthropic-version, system extraction, tool_use mapping), Gemini (generateContent, x-goog-api-key header, systemInstruction, functionCall mapping) — и Ollama как first-class local provider. Единый ChatRequest/ChatResponse контракт на всех семействах (контрактный тест). ModelRouter: ordered fallback (transient 429/5xx → retry ≤2 затем next candidate; capability/auth → skip; non-transient → abort), `model.fallback` события. Budgets: `ModelBudget` per operation (app_settings `budget.<op>`), usage из replay `model.call` событий, `BudgetExceededError` до вызова. Оркестрация (slice 3): Planner/Executor/Parser/Verifier, закрытая command schema (`request_tool_run`/`note`/`propose_finding`/`complete_task`/`fail` — всё через governed services, reject → `agent.command.rejected` без side effects, >3 подряд → run failed), Parser с bounded retry (≤2, corrective prompt), capability pre-check до первого вызова, `agent_runs` (SQLite v8) с parent_run_id/depth (max_depth=1), blackboard из replay `agent.note` событий с namespace isolation (`shared.*` + `run.<id>.*`) и redaction, `model.call` с `agent_run_id` для per-run accounting. `agent show`: route/usage/context %/data route без ключей. Streaming не реализован; mid-run resume не реализован (resume = новый run, blackboard сохраняется в журнале). Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness.
+Этап 3 завершен (slices 1–4): versioned model registry (`<provider>/<model>@v1`), четыре API-семейства — OpenAI-compatible (OpenAI, DeepSeek, xAI, Moonshot/Kimi, Mistral, OpenRouter, Qwen + custom endpoints SQLite v7), Anthropic (/v1/messages, x-api-key + anthropic-version, system extraction, tool_use mapping), Gemini (generateContent, x-goog-api-key header, systemInstruction, functionCall mapping) — и Ollama как first-class local provider. Единый ChatRequest/ChatResponse контракт на всех семействах (контрактный тест). ModelRouter: ordered fallback (transient 429/5xx → retry ≤2 затем next candidate; capability/auth → skip; non-transient → abort), `model.fallback` события. Budgets: `ModelBudget` per operation (app_settings `budget.<op>`), usage из replay `model.call` событий, `BudgetExceededError` до вызова. Оркестрация: Planner/Executor/Parser/Verifier, закрытая command schema (`request_tool_run`/`note`/`propose_finding`/`complete_task`/`fail` — всё через governed services, reject → `agent.command.rejected` без side effects, >3 подряд → run failed), Parser с bounded retry (≤2, corrective prompt), capability pre-check до первого вызова, `agent_runs` (SQLite v8) с parent_run_id/depth (max_depth=1), blackboard из replay `agent.note` событий с namespace isolation (`shared.*` + `run.<id>.*`) и redaction, `model.call` с `agent_run_id` для per-run accounting. `agent show`: route/usage/context %/data route без ключей. Streaming не реализован; mid-run resume не реализован (resume = новый run, blackboard сохраняется в журнале). Известное ослабление scoped sandbox: прокси слушает host loopback, контейнер на default bridge достаёт его через `host.docker.internal` — контейнер теоретически может обойти proxy напрямую (bridge NAT), полный enforcement требует internal docker network + in-network proxy, что на Docker Desktop for Mac недостижимо (gateway внутри VM недоступен хосту — проверено эмпирически). Hard enforcement планируется на Linux-harness.
 
 ## 4. Карта репозитория
 
@@ -201,16 +201,19 @@ MCP: схемы инструментов импортируются только
 
 TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/agents`, `/secrets`, `/lang`, `/status`, `/scope`.
 
-## 7. Следующий этап — LLM и оркестрация (Этап 3)
+## 7. Следующий этап — Продуктовые playbooks и отчеты (Этап 4)
 
-Stage 2b завершен (4 из 5 пунктов): secrets vault, Docker sandbox, scoped egress proxy с DNS pinning и MCP работают и покрыты тестами. Остался отложенный пункт 5 — расширенный набор security tools, который вводится только после отдельного threat review (может выполняться параллельно с Этапом 3).
+Этап 3 завершен: четыре API-семейства (openai-compatible, anthropic, gemini, ollama) за единым ChatRequest/ChatResponse контрактом, versioned model registry (13 моделей + custom endpoints), Ollama first-class local, capability negotiation, ModelRouter (retry/fallback), budgets, оркестратор Planner/Executor/Parser/Verifier с закрытой command schema, blackboard, depth limit и data route/cost/context display. Acceptance Этапа 3 формализован в `tests/integration/test_stage3_acceptance.py`. Отложенные пункты Stage 2b (расширенный набор security tools) требуют отдельного threat review и могут выполняться параллельно.
 
-Следующий вертикальный срез — Этап 3, slice 4 (завершены slice 1: provider abstraction/registry/Ollama; slice 2: Anthropic + Gemini families, ModelRouter retry/fallback, budgets; slice 3: Planner/Executor/Parser/Verifier, command schema, blackboard, subagent depth):
+Следующий вертикальный срез — Этап 4:
 
-- streaming responses;
-- Planner/Executor/Parser/Verifier, shared blackboard и subagent contexts (ограничение рекурсии);
-- data route/cost/context accounting поверх usage events;
-- playbook не должен зависеть от vendor-specific API. Подробные acceptance criteria — в `md/development-plan.md`.
+- Bug Bounty: program rules, asset ledger/diff, dedup, evidence package, report.
+- CTF/HTB: категории, hypothesis log, artifacts, flag ledger, replay и writeup.
+- Red Team: ROE, attack path, checkpoints, evidence и debrief.
+- Operation Planning: ATT&CK/Kill Chain mapping, test cases, detection expectations, runbook.
+- Отчеты содержат только validated findings и не раскрывают секреты или out-of-scope данные.
+
+Подробные acceptance criteria — в `md/development-plan.md` (раздел 6).
 
 ## 8. Инварианты и правила изменений
 

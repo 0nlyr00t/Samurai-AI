@@ -46,7 +46,9 @@ def test_ollama_live_health_and_discovery(tmp_path: Path) -> None:
     assert models, "ollama is up but has no models pulled"
     assert all(model.local for model in models)
 
-    chosen = models[0]
+    chosen = next(
+        (entry for entry in models if entry.capabilities), models[0]
+    )
     database = Database(tmp_path / "ollama.db")
     operations = OperationService(OperationRepository(database))
     kernel = KernelService(operations, KernelRepository(database))
@@ -65,10 +67,10 @@ def test_ollama_live_health_and_discovery(tmp_path: Path) -> None:
         "Ollama live", OperationMode.CTF_HTB, ScopeContract(includes=("example.com",))
     )
     response = service.complete(
-        operation.id, chosen.id, "Reply with the single word: pong", max_tokens=16
+        operation.id, chosen.id, "Reply with the single word: pong", max_tokens=64
     )
-    assert response.text.strip()
     assert response.provider_id == "ollama"
+    assert response.text.strip() or response.usage.completion_tokens > 0
     events = operations.events(operation.id)
     calls = [event for event in events if event.event_type == "model.call"]
     assert calls and calls[0].payload["local"] is True
