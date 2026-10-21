@@ -10,7 +10,9 @@ from samurai_ai.i18n import Translator
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
+from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
@@ -107,6 +109,8 @@ class SamuraiApp(App[None]):
         execution: ToolExecutionService,
         vault: VaultService,
         agents: AgentRunRepository,
+        playbooks: PlaybookService,
+        reports: ReportService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -117,6 +121,8 @@ class SamuraiApp(App[None]):
         self.execution = execution
         self.vault = vault
         self.agents = agents
+        self.playbooks = playbooks
+        self.reports = reports
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -231,6 +237,12 @@ class SamuraiApp(App[None]):
             return
         if name == "/secrets":
             self._show_secrets()
+            return
+        if name == "/assets":
+            self._show_assets()
+            return
+        if name == "/report":
+            self._show_reports()
             return
         if name == "/reconcile":
             self._show_reconcile()
@@ -479,6 +491,35 @@ class SamuraiApp(App[None]):
             journal.write(
                 f"[secret] {entry.id} | {entry.name} | scope={scope} | "
                 f"by={entry.created_by} | {entry.created_at.isoformat()}"
+            )
+
+    def _show_assets(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[assets] " + self.translator.t("status.no-operation"))
+            return
+        entries = self.playbooks.list_assets(self.operation.id)
+        if not entries:
+            journal.write("[assets] " + self.translator.t("assets.empty"))
+            return
+        for entry in entries:
+            journal.write(
+                f"[asset] {entry.id} | {entry.kind.value} | {entry.value} | {entry.source}"
+            )
+
+    def _show_reports(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[report] " + self.translator.t("status.no-operation"))
+            return
+        reports = self.reports.reports.list_reports(self.operation.id)
+        if not reports:
+            journal.write("[report] " + self.translator.t("report.empty"))
+            return
+        for report in reports:
+            journal.write(
+                f"[report] {report.id} | {report.format.value} | "
+                f"findings={len(report.finding_ids)} | {report.created_at.isoformat()}"
             )
 
     def _show_reconcile(self) -> None:

@@ -13,7 +13,9 @@ from samurai_ai.cli_execution import handle_execution_command, register_executio
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
 from samurai_ai.cli_models import handle_model_command, register_model_commands
+from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
+from samurai_ai.cli_reports import handle_report_command, register_report_commands
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
@@ -28,7 +30,9 @@ from samurai_ai.domain.operations import (
     OperationStatus,
     OperationTransitionError,
 )
+from samurai_ai.domain.playbooks import PlaybookError
 from samurai_ai.domain.recovery import RecoveryStateError
+from samurai_ai.domain.reports import ReportError, ReportNotFoundError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
 from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
@@ -37,12 +41,14 @@ from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
+from samurai_ai.services.playbooks import PlaybookService, ProgramRulesNotFoundError
 from samurai_ai.services.recovery import (
     PlanNotFoundError,
     RecoveryActionNotFoundError,
     RecoveryService,
     SnapshotNotFoundError,
 )
+from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
@@ -52,7 +58,9 @@ from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
 from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
+from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
+from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
@@ -106,6 +114,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_mcp_commands(subcommands)
     register_model_commands(subcommands)
     register_agent_commands(subcommands)
+    register_playbook_commands(subcommands)
+    register_report_commands(subcommands)
     return parser
 
 
@@ -121,6 +131,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         mcp_service,
         model_service,
         agent_orchestrator,
+        playbook_service,
+        report_service,
     ) = _make_services(args.db)
 
     try:
@@ -155,6 +167,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent_result = handle_agent_command(args, agent_orchestrator, model_service)
         if agent_result is not None:
             return agent_result
+        playbook_result = handle_playbook_command(args, playbook_service)
+        if playbook_result is not None:
+            return playbook_result
+        report_result = handle_report_command(args, report_service)
+        if report_result is not None:
+            return report_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -174,6 +192,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             execution_service,
             vault_service,
             agent_orchestrator.runs,
+            playbook_service,
+            report_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -201,6 +221,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ModelNotFoundError,
         AgentError,
         AgentRunNotFoundError,
+        PlaybookError,
+        ProgramRulesNotFoundError,
+        PlaybookConflictError,
+        ReportError,
+        ReportNotFoundError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -271,6 +296,8 @@ def _make_services(
     McpService,
     ModelService,
     AgentOrchestrator,
+    PlaybookService,
+    ReportService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -302,7 +329,21 @@ def _make_services(
     agents = AgentOrchestrator(
         models, kernel, execution, operations, AgentRunRepository(database)
     )
-    return operations, kernel, settings, recovery, execution, vault, mcp, models, agents
+    playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
+    reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)
+    return (
+        operations,
+        kernel,
+        settings,
+        recovery,
+        execution,
+        vault,
+        mcp,
+        models,
+        agents,
+        playbooks,
+        reports,
+    )
 
 
 def _emit_operation(operation: Operation, json_output: bool) -> None:

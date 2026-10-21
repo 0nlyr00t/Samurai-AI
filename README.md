@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b** и **Stage 2a — Managed Tool Execution Core**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3** и **Stage 4a — Bug Bounty playbook и отчеты**.
 
 Уже реализовано:
 
@@ -32,13 +32,24 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - findings workflow от candidate до reported;
 - snapshots/restore/fork, recovery reconcile и plan/scope diff;
 - versioned tool registry, `process.exec` без shell и `http.fetch` через scope broker;
+- Docker sandbox profiles со signed allowlist, scoped egress proxy с DNS pinning;
+- MCP stdio/HTTP client и persistent secrets vault (AES-256-GCM);
 - prompt-injection warnings и `untrusted-external` trust label;
+- LLM provider abstraction (openai-compatible, anthropic, gemini, ollama),
+  ModelRouter с retry/fallback, per-operation budgets и оркестратор
+  Planner/Executor/Parser/Verifier с закрытой command schema;
+- Bug Bounty playbook: program rules, scope-enforced asset ledger с diff,
+  dedup находок по fingerprint, governed gates;
+- отчеты (Markdown/JSON) только из validated findings, evidence package
+  с manifest SHA-256, redaction секретов и блокировка out-of-scope данных;
 - RU/EN first-run выбор языка и переключение через `/lang`;
-- SQLite migrations v1–v4, append-only events и optimistic concurrency;
-- CLI и TUI с реальными kernel/recovery/tool-представлениями;
-- 124 unit/integration/CLI/TUI tests.
+- SQLite migrations v1–v9, append-only events и optimistic concurrency;
+- CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
+- 352 unit/integration/CLI/TUI tests.
 
-Еще не реализовано: LLM orchestration, MCP, Docker sandbox, persistent secrets vault, полный egress enforcement и standalone binary.
+Еще не реализовано: CTF/HTB, Red Team и Operation Planning playbooks, расширенный
+набор security tools (после threat review), LLM streaming, полный egress
+enforcement на Docker Desktop for Mac и standalone binary.
 
 ## Быстрый старт для разработки
 

@@ -12,9 +12,11 @@
 
 **Этап 3 завершен:** LLM и оркестрация. Реализованы provider abstraction и versioned model registry (13 моделей, 4 API-семейства: openai-compatible с OpenAI/DeepSeek/xAI/Moonshot-Kimi/Mistral/OpenRouter/Qwen и custom endpoints SQLite v7, anthropic, gemini), Ollama как first-class local provider (discovery, local data route, offline-friendly degradation), capability negotiation (block до запуска), ModelRouter с retry/fallback и `model.fallback` событиями, per-operation budgets (`ModelBudget`, usage из replay `model.call` событий, `BudgetExceededError` без потери состояния), оркестратор Planner/Executor/Parser/Verifier с закрытой command schema (`request_tool_run`/`note`/`propose_finding`/`complete_task`/`fail` через governed services), shared blackboard из журнала с namespace isolation, subagent contexts с depth limit, `agent_runs` (SQLite v8), data route/cost/context display в `agent show`, CLI `model`/`agent` и TUI `/agents`. LLM-трафик pinned на зарегистрированный base_url; API keys в vault + redaction. Проверки: 301 test (включая acceptance `test_stage3_acceptance.py` и opt-in Ollama/docker), ruff, strict mypy, CLI smoke — успешно.
 
-Текущие ограничения: scoped sandbox на Docker Desktop for Mac не дает hard egress enforcement (контейнер может обойти proxy через bridge NAT; полный enforcement требует Linux-harness с internal network + in-network proxy); MCP Streamable HTTP поддержан без SSE-streaming responses; LLM streaming не реализован (capability объявлена); Anthropic health — минимальный POST probe; mid-run resume агента = новый run с сохраненным blackboard; `process.exec` не имеет сетевого доступа и допускает только allowlisted executables.
+**Этап 4a завершен:** Bug Bounty playbook и отчеты. Реализованы `BountyProgramRules` и one-shot `playbook init` (план из template recon → asset-inventory → testing → validation → reporting с gates и artifact requirements, rules как governed артефакт `program-rules`), scope-enforced asset ledger (domain/url/ip/service нормализация, `asset.rejected` без записи, retire через append-only `asset_retirements`, `asset diff` по временной отметке), dedup находок по sha256-fingerprint (title+asset+category, `finding.duplicate-candidate`, `--force` + kernel `mark_duplicate`), отчеты Markdown/JSON только из validated findings (статусы verification/reporting, `ReportStateError` без validated), redaction через `SecretRedactor` со значениями vault, блокировка out-of-scope ссылок (`report.rejected`, файл не пишется), evidence package export с SHA-256 manifest, отчет как governed артефакт `final-report` (привязка к gate/task плана), SQLite v9 (program_rules, asset_ledger_entries + retirements, finding_fingerprints, reports — immutable), CLI `playbook`/`asset`/`finding propose`/`report`, TUI `/assets` и `/report`. Проверки: 352 tests (включая acceptance `test_stage4_acceptance.py`), ruff, strict mypy, CLI smoke, package build — успешно.
 
-Следующий рабочий этап — **Этап 4, продуктовые playbooks и отчеты** (после threat review расширенного набора security tools как параллельной задачи).
+Текущие ограничения: scoped sandbox на Docker Desktop for Mac не дает hard egress enforcement (контейнер может обойти proxy через bridge NAT; полный enforcement требует Linux-harness с internal network + in-network proxy); MCP Streamable HTTP поддержан без SSE-streaming responses; LLM streaming не реализован (capability объявлена); Anthropic health — минимальный POST probe; mid-run resume агента = новый run с сохраненным blackboard; `process.exec` не имеет сетевого доступа и допускает только allowlisted executables; agent `propose_finding` не проходит playbook dedup (dedup только в operator CLI `finding propose`); asset diff удаления учитываются только через retire, а не через изменение scope.
+
+Следующий рабочий этап — **Этап 4b, CTF/HTB playbook** (категории, hypothesis log, artifacts, flag ledger, replay и writeup), затем Red Team и Operation Planning playbooks (после threat review расширенного набора security tools как параллельной задачи).
 
 ## 1. Архитектурный курс
 
@@ -141,7 +143,7 @@
 
 ### Объем
 
-- Bug Bounty: program rules, asset ledger/diff, dedup, evidence package, report.
+- ~~Bug Bounty: program rules, asset ledger/diff, dedup, evidence package, report~~ — завершено в Этапе 4a.
 - CTF/HTB: категории, hypothesis log, artifacts, flag ledger, replay и writeup.
 - Red Team: ROE, attack path, checkpoints, evidence и debrief.
 - Operation Planning: ATT&CK/Kill Chain mapping, test cases, detection expectations, runbook.

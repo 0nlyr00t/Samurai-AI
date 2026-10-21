@@ -95,6 +95,20 @@ def register_kernel_commands(
     )
     finding_duplicate.add_argument("finding_id")
     finding_duplicate.add_argument("original_id")
+    finding_propose = finding_commands.add_parser(
+        "propose", help="Propose a finding with dedup against the playbook ledger"
+    )
+    finding_propose.add_argument("operation_id")
+    finding_propose.add_argument("title")
+    finding_propose.add_argument(
+        "--severity", choices=[severity.value for severity in FindingSeverity], default="info"
+    )
+    finding_propose.add_argument("--summary", default="")
+    finding_propose.add_argument("--remediation", default="")
+    finding_propose.add_argument("--asset", required=True)
+    finding_propose.add_argument("--category", default="general")
+    finding_propose.add_argument("--evidence", default="")
+    finding_propose.add_argument("--force", action="store_true")
 
     approval = subcommands.add_parser("approval", help="Manage approvals")
     approval_commands = approval.add_subparsers(dest="approval_command", required=True)
@@ -135,6 +149,8 @@ def handle_kernel_command(args: argparse.Namespace, kernel: KernelService) -> in
     if args.command == "artifact":
         return _handle_artifact(args, kernel)
     if args.command == "finding":
+        if args.finding_command == "propose":
+            return None
         return _handle_finding(args, kernel)
     if args.command == "approval":
         return _handle_approval(args, kernel)
