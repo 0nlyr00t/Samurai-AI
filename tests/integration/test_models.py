@@ -366,7 +366,7 @@ def test_migration_v6_to_v7_adds_model_endpoints(vault_env: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8}
+        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9}
         connection.execute(
             """
             INSERT INTO model_endpoints(

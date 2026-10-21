@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, and **Stage 2a — Managed Tool Execution Core** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, and **Stage 4a — Bug Bounty playbook and reports** are complete.
 
 Implemented:
 
@@ -32,13 +32,24 @@ Implemented:
 - a findings workflow from candidate to reported;
 - snapshots/restore/fork, recovery reconcile, and plan/scope diff;
 - a versioned tool registry, shell-free `process.exec`, and `http.fetch` through the scope broker;
+- Docker sandbox profiles with a signed allowlist, scoped egress proxy with DNS pinning;
+- an MCP stdio/HTTP client and a persistent secrets vault (AES-256-GCM);
 - prompt-injection warnings and an `untrusted-external` trust label;
+- LLM provider abstraction (openai-compatible, anthropic, gemini, ollama),
+  a ModelRouter with retry/fallback, per-operation budgets, and a
+  Planner/Executor/Parser/Verifier orchestrator with a closed command schema;
+- the Bug Bounty playbook: program rules, a scope-enforced asset ledger with
+  diff, fingerprint-based finding dedup, and governed gates;
+- reports (Markdown/JSON) built only from validated findings, an evidence
+  package with a SHA-256 manifest, secret redaction, and out-of-scope blocking;
 - RU/EN first-run language selection and `/lang` switching;
-- SQLite migrations v1–v4, append-only events, and optimistic concurrency;
-- CLI and TUI with real kernel/recovery/tool views;
-- 124 unit/integration/CLI/TUI tests.
+- SQLite migrations v1–v9, append-only events, and optimistic concurrency;
+- CLI and TUI with real kernel/recovery/tool/agent/playbook views;
+- 352 unit/integration/CLI/TUI tests.
 
-Not implemented yet: LLM orchestration, MCP, Docker sandbox, persistent secrets vault, full egress enforcement, and the standalone binary.
+Not implemented yet: the CTF/HTB, Red Team, and Operation Planning playbooks,
+the extended security tool set (pending a threat review), LLM streaming, full
+egress enforcement on Docker Desktop for Mac, and the standalone binary.
 
 ## Development quick start
 

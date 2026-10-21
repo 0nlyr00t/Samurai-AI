@@ -6,12 +6,16 @@ from textual.widgets import Input, RichLog, Static
 
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
-from samurai_ai.domain.operations import OperationMode
+from samurai_ai.domain.operations import OperationEvent, OperationMode
+from samurai_ai.domain.playbooks import AssetKind, AssetLedgerEntry
+from samurai_ai.domain.reports import BountyReport, ReportFormat
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
@@ -19,7 +23,9 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
+from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
+from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
@@ -40,6 +46,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         service, kernel, recovery, ToolRunRepository(database), vault=vault
     )
     agents = AgentRunRepository(database)
+    playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
+    reports = ReportService(service, kernel, playbooks, ReportRepository(database))
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -85,11 +93,29 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     agents.add(agent_run)
     agent_run.finish(AgentRunStatus.COMPLETED)
     agents.finish(agent_run)
+    playbooks.playbooks.add_asset(
+        AssetLedgerEntry(
+            operation_id=operation.id, kind=AssetKind.DOMAIN, value="www.example.com"
+        ),
+        OperationEvent(operation_id=operation.id, event_type="asset.recorded", payload={}),
+    )
+    reports.reports.add_report(
+        BountyReport(
+            operation_id=operation.id,
+            format=ReportFormat.MARKDOWN,
+            sha256="ab" * 32,
+            size_bytes=2,
+            path="reports/tui/rep_tui.md",
+            finding_ids=("find_1",),
+            asset_count=1,
+        ),
+        OperationEvent(operation_id=operation.id, event_type="report.generated", payload={}),
+    )
 
     async def exercise() -> None:
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
-            operation.id,
+            playbooks, reports, operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -128,6 +154,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/runs", tool_result.run.id),
                     ("/agents", agent_run.id),
                     ("/secrets", secret.id),
+                    ("/assets", "www.example.com"),
+                    ("/report", "findings=1"),
                 ):
                     command_input.value = command
                     await pilot.press("enter")

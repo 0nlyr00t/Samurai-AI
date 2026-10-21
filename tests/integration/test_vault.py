@@ -82,7 +82,7 @@ def test_migration_v4_to_v5_adds_secret_entries(vault_env: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8}
+        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9}
         connection.execute(
             """
             INSERT INTO secret_entries(

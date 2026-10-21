@@ -9,7 +9,9 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
@@ -17,7 +19,9 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
+from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
+from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import LanguagePromptScreen, SamuraiApp
 
@@ -32,6 +36,8 @@ def make_stack(
     ToolExecutionService,
     VaultService,
     AgentRunRepository,
+    PlaybookService,
+    ReportService,
 ]:
     database = Database(tmp_path / name)
     operation_repository = OperationRepository(database)
@@ -47,15 +53,17 @@ def make_stack(
         service, kernel, recovery, ToolRunRepository(database), vault=vault
     )
     agents = AgentRunRepository(database)
-    return service, kernel, settings, recovery, execution, vault, agents
+    playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
+    reports = ReportService(service, kernel, playbooks, ReportRepository(database))
+    return service, kernel, settings, recovery, execution, vault, agents, playbooks, reports
 
 
 def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SAMURAI_LANG", raising=False)
-    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
+    stack = make_stack(tmp_path)
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, agents)
+        app = SamuraiApp(*stack)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
@@ -63,7 +71,7 @@ def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> N
             await pilot.click("#lang-ru")
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)
-            assert settings.get_locale() == "ru"
+            assert stack[2].get_locale() == "ru"
 
             journal = app.query_one("#journal", RichLog)
             command_input = app.query_one("#command-input", Input)
@@ -87,10 +95,10 @@ def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> N
 
 def test_first_run_language_choice_english_via_keyboard(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SAMURAI_LANG", raising=False)
-    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
+    stack = make_stack(tmp_path)
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, agents)
+        app = SamuraiApp(*stack)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
@@ -100,18 +108,18 @@ def test_first_run_language_choice_english_via_keyboard(tmp_path: Path, monkeypa
             await pilot.press("enter")
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)
-            assert settings.get_locale() == "en"
+            assert stack[2].get_locale() == "en"
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
 
 
 def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
-    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
-    settings.set_locale("ru")
+    stack = make_stack(tmp_path)
+    stack[2].set_locale("ru")
 
     async def exercise() -> None:
-        app = SamuraiApp(service, kernel, settings, recovery, execution, vault, agents)
+        app = SamuraiApp(*stack)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)
@@ -137,19 +145,16 @@ def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
 
 
 def test_lang_command_switches_language_without_losing_operation(tmp_path: Path) -> None:
-    service, kernel, settings, recovery, execution, vault, agents = make_stack(tmp_path)
-    settings.set_locale("en")
-    operation = service.create(
+    stack = make_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
         "Lang lab",
         OperationMode.CTF_HTB,
         ScopeContract(includes=("*.example.com",)),
     )
 
     async def exercise() -> None:
-        app = SamuraiApp(
-            service, kernel, settings, recovery, execution, vault, agents,
-            operation.id,
-        )
+        app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             journal = app.query_one("#journal", RichLog)
@@ -166,7 +171,7 @@ def test_lang_command_switches_language_without_losing_operation(tmp_path: Path)
                 command_input.value = "/lang ru"
                 await pilot.press("enter")
                 await pilot.pause()
-                assert settings.get_locale() == "ru"
+                assert stack[2].get_locale() == "ru"
                 assert any("Язык изменён на ru" in message for message in messages)
 
                 command_input.value = "/help"
@@ -183,7 +188,7 @@ def test_lang_command_switches_language_without_losing_operation(tmp_path: Path)
                 await pilot.press("enter")
                 await pilot.pause()
                 assert any("Неподдерживаемый язык" in message for message in messages)
-                assert settings.get_locale() == "ru"
+                assert stack[2].get_locale() == "ru"
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())

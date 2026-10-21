@@ -269,6 +269,105 @@ CREATE INDEX IF NOT EXISTS agent_runs_operation_id
 ON agent_runs(operation_id, created_at, id);
 """
 
+_MIGRATION_9 = """
+CREATE TABLE IF NOT EXISTS program_rules (
+    operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS asset_ledger_entries (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    value TEXT NOT NULL,
+    source TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(operation_id, kind, value)
+);
+
+CREATE TRIGGER IF NOT EXISTS asset_ledger_entries_no_update
+BEFORE UPDATE ON asset_ledger_entries
+BEGIN
+    SELECT RAISE(ABORT, 'asset ledger entries are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS asset_ledger_entries_no_delete
+BEFORE DELETE ON asset_ledger_entries
+BEGIN
+    SELECT RAISE(ABORT, 'asset ledger entries are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS asset_retirements (
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    value TEXT NOT NULL,
+    retired_at TEXT NOT NULL,
+    PRIMARY KEY (operation_id, kind, value)
+);
+
+CREATE TRIGGER IF NOT EXISTS asset_retirements_no_update
+BEFORE UPDATE ON asset_retirements
+BEGIN
+    SELECT RAISE(ABORT, 'asset retirements are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS asset_retirements_no_delete
+BEFORE DELETE ON asset_retirements
+BEGIN
+    SELECT RAISE(ABORT, 'asset retirements are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS finding_fingerprints (
+    finding_id TEXT PRIMARY KEY REFERENCES findings(id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    category TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS finding_fingerprints_lookup
+ON finding_fingerprints(operation_id, fingerprint);
+
+CREATE TRIGGER IF NOT EXISTS finding_fingerprints_no_update
+BEFORE UPDATE ON finding_fingerprints
+BEGIN
+    SELECT RAISE(ABORT, 'finding fingerprints are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS finding_fingerprints_no_delete
+BEFORE DELETE ON finding_fingerprints
+BEGIN
+    SELECT RAISE(ABORT, 'finding fingerprints are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS reports (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    format TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS reports_no_update
+BEFORE UPDATE ON reports
+BEGIN
+    SELECT RAISE(ABORT, 'reports are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS reports_no_delete
+BEFORE DELETE ON reports
+BEGIN
+    SELECT RAISE(ABORT, 'reports are immutable');
+END;
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -278,6 +377,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (6, _MIGRATION_6),
     (7, _MIGRATION_7),
     (8, _MIGRATION_8),
+    (9, _MIGRATION_9),
 )
 
 
