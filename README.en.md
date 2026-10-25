@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, and **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, and **Stage 5a — parallel specialized agents** are complete.
 
 Implemented:
 
@@ -54,14 +54,20 @@ Implemented:
   cases with ATT&CK/kill chain mapping and detection expectations, stop
   points, and a runbook (Markdown/JSON) generated in planning status with
   redaction and export;
+- parallel specialized agents (swarm): a bounded thread pool over
+  independent plan tasks, general/recon/testing/analysis specializations
+  (prompt-level only; governance is identical), ready-task auto-selection,
+  model approval preflight, a wall-time vs sequential-estimate report with
+  speedup, SQLite v13, the `swarm ready/run/list/show` CLI and TUI `/swarm`;
 - RU/EN first-run language selection and `/lang` switching;
-- SQLite migrations v1–v12, append-only events, and optimistic concurrency;
+- SQLite migrations v1–v13, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 454 unit/integration/CLI/TUI tests.
+- 481 unit/integration/CLI/TUI tests.
 
-Not implemented yet: parallel agents and campaign memory (Stage 5),
-the extended security tool set (pending a threat review), LLM streaming, full
-egress enforcement on Docker Desktop for Mac, and the standalone binary.
+Not implemented yet: campaign memory, custom playbooks, and CALDERA/VECTR
+integrations (Stage 5b+), the extended security tool set (pending a threat
+review), LLM streaming, full egress enforcement on Docker Desktop for Mac,
+and the standalone binary.
 
 ## Development quick start
 

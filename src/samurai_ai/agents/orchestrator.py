@@ -24,6 +24,7 @@ from samurai_ai.agents.parser import (
     parse_executor_output,
     parse_planner_output,
 )
+from samurai_ai.agents.specializations import profile_for
 from samurai_ai.domain.agents import (
     AgentCommand,
     AgentDepthError,
@@ -49,6 +50,7 @@ from samurai_ai.domain.execution import (
 from samurai_ai.domain.kernel import ArtifactError, FindingSeverity, KernelError
 from samurai_ai.domain.models import CapabilityError, ModelCapability
 from samurai_ai.domain.operations import OperationEvent
+from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.models import ModelService
@@ -116,6 +118,8 @@ class AgentOrchestrator:
         max_depth: int = DEFAULT_MAX_DEPTH,
         approval_id: str | None = None,
         created_by: str = "operator",
+        specialization: AgentSpecialization = AgentSpecialization.GENERAL,
+        swarm_id: str | None = None,
     ) -> AgentRun:
         if not candidates:
             raise AgentError("agent run requires at least one model candidate")
@@ -151,6 +155,8 @@ class AgentOrchestrator:
             task_id=task_id,
             parent_run_id=parent_run_id,
             depth=depth,
+            swarm_id=swarm_id,
+            specialization=specialization,
             model_route=tuple(candidates),
             created_by=created_by,
         )
@@ -163,6 +169,8 @@ class AgentOrchestrator:
                 "task_id": task_id,
                 "candidates": list(candidates),
                 "depth": depth,
+                "specialization": specialization.value,
+                "swarm_id": swarm_id,
             },
         )
         del operation
@@ -201,7 +209,8 @@ class AgentOrchestrator:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         context = self._blackboard_excerpt(blackboard, run.id)
         prompt = (
-            f"{_PLANNER_INSTRUCTION}\nTask: {task_title}\n"
+            f"{_PLANNER_INSTRUCTION}{profile_for(run.specialization).planner_focus}\n"
+            f"Task: {task_title}\n"
             f"Blackboard:\n{context or '(empty)'}"
         )
         output = self._call_model(
@@ -250,7 +259,8 @@ class AgentOrchestrator:
     ) -> tuple[AgentCommand, ...]:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         prompt = (
-            f"{_EXECUTOR_INSTRUCTION}\nCurrent step: {step}\n"
+            f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
+            f"Current step: {step}\n"
             f"Blackboard:\n{self._blackboard_excerpt(blackboard, run.id) or '(empty)'}"
         )
         commands = self._call_model(

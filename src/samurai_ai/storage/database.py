@@ -534,6 +534,30 @@ BEGIN
 END;
 """
 
+_MIGRATION_13 = """
+CREATE TABLE IF NOT EXISTS swarm_runs (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    workers INTEGER NOT NULL,
+    task_ids TEXT NOT NULL,
+    model_route TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS swarm_runs_operation_id
+ON swarm_runs(operation_id, created_at, id);
+
+ALTER TABLE agent_runs ADD COLUMN swarm_id TEXT;
+
+ALTER TABLE agent_runs ADD COLUMN specialization TEXT NOT NULL DEFAULT 'general';
+
+CREATE INDEX IF NOT EXISTS agent_runs_swarm_id
+ON agent_runs(swarm_id);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -547,6 +571,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (10, _MIGRATION_10),
     (11, _MIGRATION_11),
     (12, _MIGRATION_12),
+    (13, _MIGRATION_13),
 )
 
 

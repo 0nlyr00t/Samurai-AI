@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -65,6 +66,8 @@ class ModelService:
         self.endpoints = endpoints
         self.settings = settings
         self.provider_factory = provider_factory
+        self._budget_locks: dict[str, threading.Lock] = {}
+        self._budget_locks_guard = threading.Lock()
 
     def list_providers(self) -> list[dict[str, Any]]:
         rows = []
@@ -253,10 +256,23 @@ class ModelService:
         return response
 
     def _check_budget(self, operation_id: str) -> None:
-        budget = self.get_budget(operation_id)
-        if budget.is_unset():
-            return
-        check_budget(budget, self.usage(operation_id))
+        # Serialized per operation so concurrent swarm members cannot interleave
+        # usage reads. The check is still not atomic with the subsequent model
+        # call: under parallelism the budget may be exceeded by at most the
+        # number of in-flight calls, and every call is recorded in usage.
+        with self._budget_lock(operation_id):
+            budget = self.get_budget(operation_id)
+            if budget.is_unset():
+                return
+            check_budget(budget, self.usage(operation_id))
+
+    def _budget_lock(self, operation_id: str) -> threading.Lock:
+        with self._budget_locks_guard:
+            lock = self._budget_locks.get(operation_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._budget_locks[operation_id] = lock
+            return lock
 
     def _any_remote(self, candidates: list[str]) -> bool:
         for candidate in candidates:
