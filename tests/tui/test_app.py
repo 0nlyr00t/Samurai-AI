@@ -8,6 +8,7 @@ from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
 from samurai_ai.domain.operations import OperationEvent, OperationMode
+from samurai_ai.domain.planning import KillChainPhase, PlannedTest, Runbook
 from samurai_ai.domain.playbooks import AssetKind, AssetLedgerEntry
 from samurai_ai.domain.redteam import AttackStep, Debrief
 from samurai_ai.domain.reports import BountyReport, ReportFormat
@@ -16,6 +17,7 @@ from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.redteam import RedTeamService
@@ -28,6 +30,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
+from samurai_ai.storage.planning import PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamRepository
@@ -56,6 +59,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     reports = ReportService(service, kernel, playbooks, ReportRepository(database))
     ctf = CtfService(service, kernel, CtfRepository(database))
     redteam = RedTeamService(service, kernel, RedTeamRepository(database))
+    planning = PlanningService(service, kernel, PlanningRepository(database))
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -150,11 +154,35 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         ),
         OperationEvent(operation_id=operation.id, event_type="debrief.generated", payload={}),
     )
+    test_case = PlannedTest(
+        operation_id=operation.id,
+        name="TUI recon",
+        technique_id="T1595",
+        kill_chain_phase=KillChainPhase.RECONNAISSANCE,
+    )
+    planning.planning.add_test_case(
+        test_case,
+        OperationEvent(
+            operation_id=operation.id, event_type="test-case.added", payload={}
+        ),
+    )
+    planning.planning.add_runbook(
+        Runbook(
+            operation_id=operation.id,
+            format=ReportFormat.MARKDOWN,
+            sha256="ef" * 32,
+            size_bytes=2,
+            path="reports/tui/rb_tui.md",
+            test_case_ids=(test_case.id,),
+            stop_points=1,
+        ),
+        OperationEvent(operation_id=operation.id, event_type="runbook.generated", payload={}),
+    )
 
     async def exercise() -> None:
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
-            playbooks, reports, ctf, redteam, operation.id,
+            playbooks, reports, ctf, redteam, planning, operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -199,6 +227,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/flags", "HTB{tui_fl4g}"),
                     ("/attack-path", "T1566"),
                     ("/debrief", "steps=1"),
+                    ("/test-cases", "T1595"),
+                    ("/runbook", "stops=1"),
                 ):
                     command_input.value = command
                     await pilot.press("enter")
