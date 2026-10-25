@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4a — Bug Bounty playbook и отчеты**, **Stage 4b — CTF/HTB playbook** и **Stage 4c — Red Team playbook**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3** и **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**.
 
 Уже реализовано:
 
@@ -48,14 +48,17 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - Red Team playbook: ROE с blocking approval до старта исполнения, attack path
   с ATT&CK mapping и зависимостями, detection expectations и outcomes,
   checkpoints, debrief с open gaps, redaction и SHA-256 export;
+- Operation Planning playbook: сценарии без активных действий, test cases
+  с ATT&CK/kill chain mapping и detection expectations, stop points,
+  runbook (Markdown/JSON) в статусе planning с redaction и export;
 - RU/EN first-run выбор языка и переключение через `/lang`;
-- SQLite migrations v1–v11, append-only events и optimistic concurrency;
+- SQLite migrations v1–v12, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 426 unit/integration/CLI/TUI tests.
+- 454 unit/integration/CLI/TUI tests.
 
-Еще не реализовано: Operation Planning playbook, расширенный
-набор security tools (после threat review), LLM streaming, полный egress
-enforcement на Docker Desktop for Mac и standalone binary.
+Еще не реализовано: параллельные агенты и campaign memory (Stage 5),
+расширенный набор security tools (после threat review), LLM streaming,
+полный egress enforcement на Docker Desktop for Mac и standalone binary.
 
 ## Быстрый старт для разработки
 

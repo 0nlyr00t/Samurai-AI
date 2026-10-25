@@ -11,6 +11,7 @@ from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
+from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.redteam import RedTeamService
@@ -115,6 +116,7 @@ class SamuraiApp(App[None]):
         reports: ReportService,
         ctf: CtfService,
         redteam: RedTeamService,
+        planning: PlanningService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -129,6 +131,7 @@ class SamuraiApp(App[None]):
         self.reports = reports
         self.ctf = ctf
         self.redteam = redteam
+        self.planning = planning
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -261,6 +264,12 @@ class SamuraiApp(App[None]):
             return
         if name == "/debrief":
             self._show_debriefs()
+            return
+        if name == "/test-cases":
+            self._show_test_cases()
+            return
+        if name == "/runbook":
+            self._show_runbooks()
             return
         if name == "/reconcile":
             self._show_reconcile()
@@ -595,6 +604,39 @@ class SamuraiApp(App[None]):
                 f"[debrief] {debrief.id} | {debrief.format.value} | "
                 f"steps={debrief.step_count} | gaps={len(debrief.open_gaps)} | "
                 f"{debrief.created_at.isoformat()}"
+            )
+
+    def _show_test_cases(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[test-cases] " + self.translator.t("status.no-operation"))
+            return
+        cases = self.planning.list_test_cases(self.operation.id)
+        if not cases:
+            journal.write("[test-cases] " + self.translator.t("test-cases.empty"))
+            return
+        for case in cases:
+            marker = " | STOP" if case.stop_before else ""
+            journal.write(
+                f"[test-case] {case.id} | {case.status.value} | "
+                f"{case.technique_id} | {case.kill_chain_phase.value} | "
+                f"{case.name}{marker}"
+            )
+
+    def _show_runbooks(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[runbook] " + self.translator.t("status.no-operation"))
+            return
+        runbooks = self.planning.list_runbooks(self.operation.id)
+        if not runbooks:
+            journal.write("[runbook] " + self.translator.t("runbook.empty"))
+            return
+        for runbook in runbooks:
+            journal.write(
+                f"[runbook] {runbook.id} | {runbook.format.value} | "
+                f"cases={len(runbook.test_case_ids)} | stops={runbook.stop_points} | "
+                f"{runbook.created_at.isoformat()}"
             )
 
     def _show_reconcile(self) -> None:

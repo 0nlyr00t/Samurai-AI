@@ -489,6 +489,51 @@ BEGIN
 END;
 """
 
+_MIGRATION_12 = """
+CREATE TABLE IF NOT EXISTS plan_scenarios (
+    operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS test_cases (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS test_cases_operation
+ON test_cases(operation_id, status);
+
+CREATE TABLE IF NOT EXISTS runbooks (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    format TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS runbooks_no_update
+BEFORE UPDATE ON runbooks
+BEGIN
+    SELECT RAISE(ABORT, 'runbooks are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS runbooks_no_delete
+BEFORE DELETE ON runbooks
+BEGIN
+    SELECT RAISE(ABORT, 'runbooks are immutable');
+END;
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -501,6 +546,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (9, _MIGRATION_9),
     (10, _MIGRATION_10),
     (11, _MIGRATION_11),
+    (12, _MIGRATION_12),
 )
 
 

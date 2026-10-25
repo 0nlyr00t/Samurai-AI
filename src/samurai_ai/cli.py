@@ -14,6 +14,7 @@ from samurai_ai.cli_execution import handle_execution_command, register_executio
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
 from samurai_ai.cli_models import handle_model_command, register_model_commands
+from samurai_ai.cli_planning import handle_planning_command, register_planning_commands
 from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
 from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
@@ -38,6 +39,12 @@ from samurai_ai.domain.operations import (
     OperationStatus,
     OperationTransitionError,
 )
+from samurai_ai.domain.planning import (
+    PlannedTestNotFoundError,
+    PlanningError,
+    RunbookNotFoundError,
+    ScenarioNotFoundError,
+)
 from samurai_ai.domain.playbooks import PlaybookError
 from samurai_ai.domain.recovery import RecoveryStateError
 from samurai_ai.domain.redteam import (
@@ -57,6 +64,7 @@ from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
+from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService, ProgramRulesNotFoundError
 from samurai_ai.services.recovery import (
     PlanNotFoundError,
@@ -76,6 +84,7 @@ from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
 from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
+from samurai_ai.storage.planning import PlanningConflictError, PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamConflictError, RedTeamRepository
@@ -137,6 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_report_commands(subcommands)
     register_ctf_commands(subcommands)
     register_redteam_commands(subcommands)
+    register_planning_commands(subcommands)
     return parser
 
 
@@ -156,6 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_service,
         ctf_service,
         redteam_service,
+        planning_service,
     ) = _make_services(args.db)
 
     try:
@@ -202,6 +213,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         redteam_result = handle_redteam_command(args, redteam_service)
         if redteam_result is not None:
             return redteam_result
+        planning_result = handle_planning_command(args, planning_service)
+        if planning_result is not None:
+            return planning_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -225,6 +239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_service,
             ctf_service,
             redteam_service,
+            planning_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -268,6 +283,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         CheckpointNotFoundError,
         DebriefNotFoundError,
         RedTeamConflictError,
+        PlanningError,
+        ScenarioNotFoundError,
+        PlannedTestNotFoundError,
+        RunbookNotFoundError,
+        PlanningConflictError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -342,6 +362,7 @@ def _make_services(
     ReportService,
     CtfService,
     RedTeamService,
+    PlanningService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -377,6 +398,7 @@ def _make_services(
     reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)
     ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
+    planning = PlanningService(operations, kernel, PlanningRepository(database), vault)
     return (
         operations,
         kernel,
@@ -391,6 +413,7 @@ def _make_services(
         reports,
         ctf,
         redteam,
+        planning,
     )
 
 

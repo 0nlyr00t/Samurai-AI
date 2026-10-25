@@ -136,4 +136,4 @@ def test_migration_10_applies_on_existing_v9_database(tmp_path: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
