@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from samurai_ai.domain.swarm import AgentSpecialization
+
 
 class AgentError(ValueError):
     pass
@@ -104,6 +106,8 @@ class AgentRun(BaseModel):
     task_id: str
     parent_run_id: str | None = None
     depth: int = Field(default=0, ge=0)
+    swarm_id: str | None = None
+    specialization: AgentSpecialization = AgentSpecialization.GENERAL
     status: AgentRunStatus = AgentRunStatus.RUNNING
     model_route: tuple[str, ...] = ()
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

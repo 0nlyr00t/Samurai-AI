@@ -20,6 +20,7 @@ from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_c
 from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
 from samurai_ai.cli_reports import handle_report_command, register_report_commands
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
+from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
 from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
@@ -56,6 +57,7 @@ from samurai_ai.domain.redteam import (
 )
 from samurai_ai.domain.reports import ReportError, ReportNotFoundError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
+from samurai_ai.domain.swarm import SwarmError, SwarmNotFoundError
 from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
 from samurai_ai.services.ctf import CtfService
@@ -75,6 +77,7 @@ from samurai_ai.services.recovery import (
 from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
+from samurai_ai.services.swarm import SwarmService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfConflictError, CtfRepository
@@ -89,6 +92,7 @@ from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookReposito
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamConflictError, RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
@@ -147,6 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_ctf_commands(subcommands)
     register_redteam_commands(subcommands)
     register_planning_commands(subcommands)
+    register_swarm_commands(subcommands)
     return parser
 
 
@@ -167,6 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ctf_service,
         redteam_service,
         planning_service,
+        swarm_service,
     ) = _make_services(args.db)
 
     try:
@@ -216,6 +222,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         planning_result = handle_planning_command(args, planning_service)
         if planning_result is not None:
             return planning_result
+        swarm_result = handle_swarm_command(args, swarm_service)
+        if swarm_result is not None:
+            return swarm_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -240,6 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ctf_service,
             redteam_service,
             planning_service,
+            swarm_service.swarms,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -288,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         PlannedTestNotFoundError,
         RunbookNotFoundError,
         PlanningConflictError,
+        SwarmError,
+        SwarmNotFoundError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -363,6 +375,7 @@ def _make_services(
     CtfService,
     RedTeamService,
     PlanningService,
+    SwarmService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -399,6 +412,7 @@ def _make_services(
     ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     planning = PlanningService(operations, kernel, PlanningRepository(database), vault)
+    swarm = SwarmService(operations, kernel, agents, SwarmRunRepository(database))
     return (
         operations,
         kernel,
@@ -414,6 +428,7 @@ def _make_services(
         ctf,
         redteam,
         planning,
+        swarm,
     )
 
 

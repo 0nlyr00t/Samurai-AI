@@ -28,6 +28,7 @@ from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import LanguagePromptScreen, SamuraiApp
 
@@ -47,6 +48,7 @@ def make_stack(
     CtfService,
     RedTeamService,
     PlanningService,
+    SwarmRunRepository,
 ]:
     database = Database(tmp_path / name)
     operation_repository = OperationRepository(database)
@@ -67,6 +69,7 @@ def make_stack(
     ctf = CtfService(service, kernel, CtfRepository(database))
     redteam = RedTeamService(service, kernel, RedTeamRepository(database))
     planning = PlanningService(service, kernel, PlanningRepository(database))
+    swarms = SwarmRunRepository(database)
     return (
         service,
         kernel,
@@ -80,6 +83,7 @@ def make_stack(
         ctf,
         redteam,
         planning,
+        swarms,
     )
 
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
@@ -29,7 +30,9 @@ from samurai_ai.domain.kernel import (
 )
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationStatus
 from samurai_ai.services.operations import OperationService
-from samurai_ai.storage.kernel import KernelRepository
+from samurai_ai.storage.kernel import KernelConflictError, KernelRepository
+
+_PLAN_CONFLICT_RETRIES = 3
 
 
 class KernelPreconditionError(KernelError):
@@ -135,81 +138,87 @@ class KernelService:
         return self.kernel.get_current_plan(operation_id)
 
     def start_task(self, operation_id: str, task_id: str) -> OperationPlan:
-        plan = self._get_plan(operation_id)
-        task = plan.task_by_id(task_id)
-        if task is None:
-            raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
-        if task.status != TaskStatus.PENDING:
-            raise TaskStateError(
-                f"task {task_id} cannot start from {task.status.value}"
-            )
-        for dependency_id in task.depends_on:
-            dependency = plan.task_by_id(dependency_id)
-            if dependency is None or dependency.status not in (
-                TaskStatus.DONE,
-                TaskStatus.SKIPPED,
-            ):
+        def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
+            task = plan.task_by_id(task_id)
+            if task is None:
+                raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
+            if task.status != TaskStatus.PENDING:
                 raise TaskStateError(
-                    f"task {task_id} cannot start before dependency {dependency_id} finishes"
+                    f"task {task_id} cannot start from {task.status.value}"
                 )
-        expected_version = plan.version
-        task.status = TaskStatus.IN_PROGRESS
-        plan.touch()
-        event = OperationEvent(
-            operation_id=operation_id,
-            event_type="task.started",
-            payload={"plan_id": plan.id, "task_id": task_id},
-        )
-        self.kernel.save_plan(plan, expected_version, event)
-        return plan
+            for dependency_id in task.depends_on:
+                dependency = plan.task_by_id(dependency_id)
+                if dependency is None or dependency.status not in (
+                    TaskStatus.DONE,
+                    TaskStatus.SKIPPED,
+                ):
+                    raise TaskStateError(
+                        f"task {task_id} cannot start before dependency {dependency_id} finishes"
+                    )
+            task.status = TaskStatus.IN_PROGRESS
+            return "task.started", {"plan_id": plan.id, "task_id": task_id}
+
+        return self._apply_plan_mutation(operation_id, mutate)
 
     def complete_task(self, operation_id: str, task_id: str) -> OperationPlan:
-        plan = self._get_plan(operation_id)
-        task = plan.task_by_id(task_id)
-        if task is None:
-            raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
-        if task.status != TaskStatus.IN_PROGRESS:
-            raise TaskStateError(
-                f"task {task_id} cannot complete from {task.status.value}"
-            )
-        for requirement in task.required_artifacts:
-            if not self.kernel.artifact_exists(operation_id, requirement, task_id=task_id):
-                raise ArtifactError(
-                    f"task {task_id} is missing required artifact {requirement!r}"
+        def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
+            task = plan.task_by_id(task_id)
+            if task is None:
+                raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
+            if task.status != TaskStatus.IN_PROGRESS:
+                raise TaskStateError(
+                    f"task {task_id} cannot complete from {task.status.value}"
                 )
-        expected_version = plan.version
-        task.status = TaskStatus.DONE
-        plan.touch()
-        event = OperationEvent(
-            operation_id=operation_id,
-            event_type="task.completed",
-            payload={"plan_id": plan.id, "task_id": task_id},
-        )
-        self.kernel.save_plan(plan, expected_version, event)
-        return plan
+            for requirement in task.required_artifacts:
+                if not self.kernel.artifact_exists(operation_id, requirement, task_id=task_id):
+                    raise ArtifactError(
+                        f"task {task_id} is missing required artifact {requirement!r}"
+                    )
+            task.status = TaskStatus.DONE
+            return "task.completed", {"plan_id": plan.id, "task_id": task_id}
+
+        return self._apply_plan_mutation(operation_id, mutate)
 
     def pass_gate(self, operation_id: str, gate_id: str) -> OperationPlan:
-        plan = self._get_plan(operation_id)
-        gate = plan.gate_by_id(gate_id)
-        if gate is None:
-            raise GateStateError(f"unknown gate {gate_id} in plan {plan.id}")
-        if gate.status == GateStatus.PASSED:
+        def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
+            gate = plan.gate_by_id(gate_id)
+            if gate is None:
+                raise GateStateError(f"unknown gate {gate_id} in plan {plan.id}")
+            if gate.status == GateStatus.PASSED:
+                return "", {}
+            for requirement in gate.required_artifacts:
+                if not self.kernel.artifact_exists(operation_id, requirement, gate_id=gate_id):
+                    raise ArtifactError(
+                        f"gate {gate_id} is missing required artifact {requirement!r}"
+                    )
+            gate.status = GateStatus.PASSED
+            return "gate.passed", {"plan_id": plan.id, "gate_id": gate_id}
+
+        return self._apply_plan_mutation(operation_id, mutate)
+
+    def _apply_plan_mutation(
+        self,
+        operation_id: str,
+        mutate: Callable[[OperationPlan], tuple[str, dict[str, Any]]],
+    ) -> OperationPlan:
+        for attempt in range(_PLAN_CONFLICT_RETRIES):
+            plan = self._get_plan(operation_id)
+            expected_version = plan.version
+            event_type, payload = mutate(plan)
+            if not event_type:
+                return plan
+            plan.touch()
+            event = OperationEvent(
+                operation_id=operation_id, event_type=event_type, payload=payload
+            )
+            try:
+                self.kernel.save_plan(plan, expected_version, event)
+            except KernelConflictError:
+                if attempt == _PLAN_CONFLICT_RETRIES - 1:
+                    raise
+                continue
             return plan
-        for requirement in gate.required_artifacts:
-            if not self.kernel.artifact_exists(operation_id, requirement, gate_id=gate_id):
-                raise ArtifactError(
-                    f"gate {gate_id} is missing required artifact {requirement!r}"
-                )
-        expected_version = plan.version
-        gate.status = GateStatus.PASSED
-        plan.touch()
-        event = OperationEvent(
-            operation_id=operation_id,
-            event_type="gate.passed",
-            payload={"plan_id": plan.id, "gate_id": gate_id},
-        )
-        self.kernel.save_plan(plan, expected_version, event)
-        return plan
+        raise KernelConflictError(f"plan for operation {operation_id} is contended")
 
     def request_approval(
         self,

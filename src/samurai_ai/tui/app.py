@@ -19,6 +19,7 @@ from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.swarm import SwarmRunRepository
 
 
 class LanguagePromptScreen(ModalScreen[str]):
@@ -117,6 +118,7 @@ class SamuraiApp(App[None]):
         ctf: CtfService,
         redteam: RedTeamService,
         planning: PlanningService,
+        swarms: SwarmRunRepository,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -132,6 +134,7 @@ class SamuraiApp(App[None]):
         self.ctf = ctf
         self.redteam = redteam
         self.planning = planning
+        self.swarms = swarms
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -243,6 +246,9 @@ class SamuraiApp(App[None]):
             return
         if name == "/agents":
             self._show_agents()
+            return
+        if name == "/swarm":
+            self._show_swarms()
             return
         if name == "/secrets":
             self._show_secrets()
@@ -505,6 +511,26 @@ class SamuraiApp(App[None]):
                 f"[agent] {run.id} | {run.task_id} | {run.status.value} | "
                 f"depth={run.depth} | route={','.join(run.model_route)}"
             )
+
+    def _show_swarms(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[swarm] " + self.translator.t("status.no-operation"))
+            return
+        swarms = self.swarms.list_swarms(self.operation.id)
+        if not swarms:
+            journal.write("[swarm] " + self.translator.t("swarm.empty"))
+            return
+        for swarm in swarms:
+            journal.write(
+                f"[swarm] {swarm.id} | {swarm.status.value} | workers={swarm.workers} | "
+                f"tasks={','.join(swarm.task_ids)}"
+            )
+            for member in self.agents.list_swarm_members(swarm.id):
+                journal.write(
+                    f"  [member] {member.task_id} | {member.id} | {member.status.value} | "
+                    f"{member.specialization.value}"
+                )
 
     def _show_secrets(self) -> None:
         journal = self.query_one("#journal", RichLog)

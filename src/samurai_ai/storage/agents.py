@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
+from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.storage.database import Database
 
 
@@ -23,8 +24,9 @@ class AgentRunRepository:
                 """
                 INSERT INTO agent_runs(
                     id, operation_id, task_id, parent_run_id, depth, status,
-                    model_route, created_at, created_by, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    model_route, created_at, created_by, finished_at,
+                    swarm_id, specialization
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.id,
@@ -37,6 +39,8 @@ class AgentRunRepository:
                     run.created_at.isoformat(),
                     run.created_by,
                     None,
+                    run.swarm_id,
+                    run.specialization.value,
                 ),
             )
 
@@ -78,6 +82,18 @@ class AgentRunRepository:
             ).fetchall()
         return [self._to_run(row) for row in rows]
 
+    def list_swarm_members(self, swarm_id: str) -> list[AgentRun]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE swarm_id = ?
+                ORDER BY created_at, id
+                """,
+                (swarm_id,),
+            ).fetchall()
+        return [self._to_run(row) for row in rows]
+
     @staticmethod
     def _to_run(row: sqlite3.Row) -> AgentRun:
         return AgentRun(
@@ -86,6 +102,8 @@ class AgentRunRepository:
             task_id=row["task_id"],
             parent_run_id=row["parent_run_id"],
             depth=row["depth"],
+            swarm_id=row["swarm_id"],
+            specialization=AgentSpecialization(row["specialization"]),
             status=AgentRunStatus(row["status"]),
             model_route=tuple(json.loads(row["model_route"])),
             created_at=datetime.fromisoformat(row["created_at"]),

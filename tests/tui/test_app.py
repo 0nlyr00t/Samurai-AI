@@ -13,6 +13,7 @@ from samurai_ai.domain.playbooks import AssetKind, AssetLedgerEntry
 from samurai_ai.domain.redteam import AttackStep, Debrief
 from samurai_ai.domain.reports import BountyReport, ReportFormat
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.swarm import AgentSpecialization, SwarmRun
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
@@ -35,6 +36,7 @@ from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
@@ -105,6 +107,24 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     agents.add(agent_run)
     agent_run.finish(AgentRunStatus.COMPLETED)
     agents.finish(agent_run)
+    swarms = SwarmRunRepository(database)
+    swarm = SwarmRun(
+        operation_id=operation.id,
+        workers=1,
+        task_ids=("recon",),
+        model_route=("fake/agent@v1",),
+    )
+    swarms.add(swarm)
+    swarm_member = AgentRun(
+        operation_id=operation.id,
+        task_id="recon",
+        model_route=("fake/agent@v1",),
+        swarm_id=swarm.id,
+        specialization=AgentSpecialization.RECON,
+    )
+    agents.add(swarm_member)
+    swarm_member.finish(AgentRunStatus.COMPLETED)
+    agents.finish(swarm_member)
     playbooks.playbooks.add_asset(
         AssetLedgerEntry(
             operation_id=operation.id, kind=AssetKind.DOMAIN, value="www.example.com"
@@ -182,7 +202,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     async def exercise() -> None:
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
-            playbooks, reports, ctf, redteam, planning, operation.id,
+            playbooks, reports, ctf, redteam, planning, swarms, operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -220,6 +240,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/tools", "sandbox.exec"),
                     ("/runs", tool_result.run.id),
                     ("/agents", agent_run.id),
+                    ("/swarm", swarm.id),
+                    ("/swarm", swarm_member.id),
                     ("/secrets", secret.id),
                     ("/assets", "www.example.com"),
                     ("/report", "findings=1"),
