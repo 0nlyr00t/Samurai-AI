@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3** и **Stage 4a — Bug Bounty playbook и отчеты**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4a — Bug Bounty playbook и отчеты** и **Stage 4b — CTF/HTB playbook**.
 
 Уже реализовано:
 
@@ -42,12 +42,15 @@ Samurai AI — local-first TUI harness для авторизованных Red T
   dedup находок по fingerprint, governed gates;
 - отчеты (Markdown/JSON) только из validated findings, evidence package
   с manifest SHA-256, redaction секретов и блокировка out-of-scope данных;
+- CTF/HTB playbook: категории по BRD, hypothesis log с конечным автоматом,
+  immutable flag ledger с regex-валидацией формата и proof-артефактами,
+  replay из журнала событий, writeup (Markdown/JSON) с redaction и export;
 - RU/EN first-run выбор языка и переключение через `/lang`;
-- SQLite migrations v1–v9, append-only events и optimistic concurrency;
+- SQLite migrations v1–v10, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 352 unit/integration/CLI/TUI tests.
+- 389 unit/integration/CLI/TUI tests.
 
-Еще не реализовано: CTF/HTB, Red Team и Operation Planning playbooks, расширенный
+Еще не реализовано: Red Team и Operation Planning playbooks, расширенный
 набор security tools (после threat review), LLM streaming, полный egress
 enforcement на Docker Desktop for Mac и standalone binary.
 

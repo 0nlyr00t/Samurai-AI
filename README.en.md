@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, and **Stage 4a — Bug Bounty playbook and reports** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4a — Bug Bounty playbook and reports**, and **Stage 4b — CTF/HTB playbook** are complete.
 
 Implemented:
 
@@ -42,12 +42,16 @@ Implemented:
   diff, fingerprint-based finding dedup, and governed gates;
 - reports (Markdown/JSON) built only from validated findings, an evidence
   package with a SHA-256 manifest, secret redaction, and out-of-scope blocking;
+- the CTF/HTB playbook: BRD challenge categories, a hypothesis log with a
+  state machine, an immutable flag ledger with regex format validation and
+  proof artifacts, a journal-derived replay, and redacted Markdown/JSON
+  writeups with export;
 - RU/EN first-run language selection and `/lang` switching;
-- SQLite migrations v1–v9, append-only events, and optimistic concurrency;
+- SQLite migrations v1–v10, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 352 unit/integration/CLI/TUI tests.
+- 389 unit/integration/CLI/TUI tests.
 
-Not implemented yet: the CTF/HTB, Red Team, and Operation Planning playbooks,
+Not implemented yet: the Red Team and Operation Planning playbooks,
 the extended security tool set (pending a threat review), LLM streaming, full
 egress enforcement on Docker Desktop for Mac, and the standalone binary.
 

@@ -368,6 +368,72 @@ BEGIN
 END;
 """
 
+_MIGRATION_10 = """
+CREATE TABLE IF NOT EXISTS ctf_challenges (
+    operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS hypotheses (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS hypotheses_operation
+ON hypotheses(operation_id, status);
+
+CREATE TABLE IF NOT EXISTS flag_ledger (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(operation_id, name)
+);
+
+CREATE TRIGGER IF NOT EXISTS flag_ledger_no_update
+BEFORE UPDATE ON flag_ledger
+BEGIN
+    SELECT RAISE(ABORT, 'flag ledger entries are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS flag_ledger_no_delete
+BEFORE DELETE ON flag_ledger
+BEGIN
+    SELECT RAISE(ABORT, 'flag ledger entries are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS ctf_writeups (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    format TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS ctf_writeups_no_update
+BEFORE UPDATE ON ctf_writeups
+BEGIN
+    SELECT RAISE(ABORT, 'ctf writeups are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ctf_writeups_no_delete
+BEFORE DELETE ON ctf_writeups
+BEGIN
+    SELECT RAISE(ABORT, 'ctf writeups are immutable');
+END;
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -378,6 +444,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (7, _MIGRATION_7),
     (8, _MIGRATION_8),
     (9, _MIGRATION_9),
+    (10, _MIGRATION_10),
 )
 
 

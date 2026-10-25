@@ -6,6 +6,7 @@ from textual.widgets import Button, Input, RichLog
 
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -15,6 +16,7 @@ from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.ctf import CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
@@ -38,6 +40,7 @@ def make_stack(
     AgentRunRepository,
     PlaybookService,
     ReportService,
+    CtfService,
 ]:
     database = Database(tmp_path / name)
     operation_repository = OperationRepository(database)
@@ -55,7 +58,19 @@ def make_stack(
     agents = AgentRunRepository(database)
     playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
     reports = ReportService(service, kernel, playbooks, ReportRepository(database))
-    return service, kernel, settings, recovery, execution, vault, agents, playbooks, reports
+    ctf = CtfService(service, kernel, CtfRepository(database))
+    return (
+        service,
+        kernel,
+        settings,
+        recovery,
+        execution,
+        vault,
+        agents,
+        playbooks,
+        reports,
+        ctf,
+    )
 
 
 def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> None:
