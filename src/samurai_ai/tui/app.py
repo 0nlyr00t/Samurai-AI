@@ -7,6 +7,7 @@ from textual.widgets import Button, Input, RichLog, Static
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
 from samurai_ai.domain.operations import Operation
 from samurai_ai.i18n import Translator
+from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
@@ -111,6 +112,7 @@ class SamuraiApp(App[None]):
         agents: AgentRunRepository,
         playbooks: PlaybookService,
         reports: ReportService,
+        ctf: CtfService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -123,6 +125,7 @@ class SamuraiApp(App[None]):
         self.agents = agents
         self.playbooks = playbooks
         self.reports = reports
+        self.ctf = ctf
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -243,6 +246,12 @@ class SamuraiApp(App[None]):
             return
         if name == "/report":
             self._show_reports()
+            return
+        if name == "/hypotheses":
+            self._show_hypotheses()
+            return
+        if name == "/flags":
+            self._show_flags()
             return
         if name == "/reconcile":
             self._show_reconcile()
@@ -521,6 +530,32 @@ class SamuraiApp(App[None]):
                 f"[report] {report.id} | {report.format.value} | "
                 f"findings={len(report.finding_ids)} | {report.created_at.isoformat()}"
             )
+
+    def _show_hypotheses(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[hypotheses] " + self.translator.t("status.no-operation"))
+            return
+        hypotheses = self.ctf.list_hypotheses(self.operation.id)
+        if not hypotheses:
+            journal.write("[hypotheses] " + self.translator.t("hypotheses.empty"))
+            return
+        for item in hypotheses:
+            journal.write(
+                f"[hypothesis] {item.id} | {item.status.value} | {item.title}"
+            )
+
+    def _show_flags(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[flags] " + self.translator.t("status.no-operation"))
+            return
+        flags = self.ctf.list_flags(self.operation.id)
+        if not flags:
+            journal.write("[flags] " + self.translator.t("flags.empty"))
+            return
+        for flag in flags:
+            journal.write(f"[flag] {flag.id} | {flag.name} | {flag.value}")
 
     def _show_reconcile(self) -> None:
         journal = self.query_one("#journal", RichLog)

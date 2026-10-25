@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
+from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
@@ -20,6 +21,12 @@ from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_comm
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
 from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
+from samurai_ai.domain.ctf import (
+    ChallengeNotFoundError,
+    CtfError,
+    HypothesisNotFoundError,
+    WriteupNotFoundError,
+)
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.mcp import McpServerNotFoundError
@@ -36,6 +43,7 @@ from samurai_ai.domain.reports import ReportError, ReportNotFoundError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
 from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
+from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
@@ -52,6 +60,7 @@ from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.ctf import CtfConflictError, CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
@@ -116,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_agent_commands(subcommands)
     register_playbook_commands(subcommands)
     register_report_commands(subcommands)
+    register_ctf_commands(subcommands)
     return parser
 
 
@@ -133,6 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent_orchestrator,
         playbook_service,
         report_service,
+        ctf_service,
     ) = _make_services(args.db)
 
     try:
@@ -173,6 +184,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_result = handle_report_command(args, report_service)
         if report_result is not None:
             return report_result
+        ctf_result = handle_ctf_command(args, ctf_service)
+        if ctf_result is not None:
+            return ctf_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -194,6 +208,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             agent_orchestrator.runs,
             playbook_service,
             report_service,
+            ctf_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -226,6 +241,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         PlaybookConflictError,
         ReportError,
         ReportNotFoundError,
+        CtfError,
+        ChallengeNotFoundError,
+        HypothesisNotFoundError,
+        WriteupNotFoundError,
+        CtfConflictError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -298,6 +318,7 @@ def _make_services(
     AgentOrchestrator,
     PlaybookService,
     ReportService,
+    CtfService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -331,6 +352,7 @@ def _make_services(
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
     reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)
+    ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     return (
         operations,
         kernel,
@@ -343,6 +365,7 @@ def _make_services(
         agents,
         playbooks,
         reports,
+        ctf,
     )
 
 

@@ -349,7 +349,7 @@ def test_v1_database_migrates_to_v2(tmp_path: Path) -> None:
         versions = {
             row["version"] for row in migrated.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9}
+        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
         tables = {
             row["name"]
             for row in migrated.execute("SELECT name FROM sqlite_master WHERE type = 'table'")

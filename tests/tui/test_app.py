@@ -5,11 +5,13 @@ from unittest.mock import patch
 from textual.widgets import Input, RichLog, Static
 
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
+from samurai_ai.domain.ctf import FlagRecord, Hypothesis
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
 from samurai_ai.domain.operations import OperationEvent, OperationMode
 from samurai_ai.domain.playbooks import AssetKind, AssetLedgerEntry
 from samurai_ai.domain.reports import BountyReport, ReportFormat
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -19,6 +21,7 @@ from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.ctf import CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
@@ -48,6 +51,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     agents = AgentRunRepository(database)
     playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
     reports = ReportService(service, kernel, playbooks, ReportRepository(database))
+    ctf = CtfService(service, kernel, CtfRepository(database))
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -111,11 +115,22 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         ),
         OperationEvent(operation_id=operation.id, event_type="report.generated", payload={}),
     )
+    hypothesis = Hypothesis(operation_id=operation.id, title="TUI hypothesis")
+    ctf.ctf.add_hypothesis(
+        hypothesis,
+        OperationEvent(
+            operation_id=operation.id, event_type="hypothesis.proposed", payload={}
+        ),
+    )
+    ctf.ctf.add_flag(
+        FlagRecord(operation_id=operation.id, name="user", value="HTB{tui_fl4g}"),
+        OperationEvent(operation_id=operation.id, event_type="flag.captured", payload={}),
+    )
 
     async def exercise() -> None:
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
-            playbooks, reports, operation.id,
+            playbooks, reports, ctf, operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -156,6 +171,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/secrets", secret.id),
                     ("/assets", "www.example.com"),
                     ("/report", "findings=1"),
+                    ("/hypotheses", hypothesis.id),
+                    ("/flags", "HTB{tui_fl4g}"),
                 ):
                     command_input.value = command
                     await pilot.press("enter")

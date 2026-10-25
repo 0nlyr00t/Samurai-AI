@@ -87,7 +87,7 @@ def test_migration_v4_creates_tool_runs_table(tmp_path: Path) -> None:
         versions = {
             row["version"] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9}
+        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
         tables = {
             row["name"]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
