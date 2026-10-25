@@ -9,6 +9,7 @@ from samurai_ai.domain.ctf import FlagRecord, Hypothesis
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
 from samurai_ai.domain.operations import OperationEvent, OperationMode
 from samurai_ai.domain.playbooks import AssetKind, AssetLedgerEntry
+from samurai_ai.domain.redteam import AttackStep, Debrief
 from samurai_ai.domain.reports import BountyReport, ReportFormat
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.ctf import CtfService
@@ -17,6 +18,7 @@ from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
@@ -28,6 +30,7 @@ from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
+from samurai_ai.storage.redteam import RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
@@ -52,6 +55,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
     reports = ReportService(service, kernel, playbooks, ReportRepository(database))
     ctf = CtfService(service, kernel, CtfRepository(database))
+    redteam = RedTeamService(service, kernel, RedTeamRepository(database))
     operation = service.create(
         "TUI lab",
         OperationMode.CTF_HTB,
@@ -126,11 +130,31 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         FlagRecord(operation_id=operation.id, name="user", value="HTB{tui_fl4g}"),
         OperationEvent(operation_id=operation.id, event_type="flag.captured", payload={}),
     )
+    attack_step = AttackStep(
+        operation_id=operation.id, name="TUI phish", technique_id="T1566"
+    )
+    redteam.redteam.add_step(
+        attack_step,
+        OperationEvent(
+            operation_id=operation.id, event_type="attack-step.added", payload={}
+        ),
+    )
+    redteam.redteam.add_debrief(
+        Debrief(
+            operation_id=operation.id,
+            format=ReportFormat.MARKDOWN,
+            sha256="cd" * 32,
+            size_bytes=2,
+            path="reports/tui/deb_tui.md",
+            step_count=1,
+        ),
+        OperationEvent(operation_id=operation.id, event_type="debrief.generated", payload={}),
+    )
 
     async def exercise() -> None:
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
-            playbooks, reports, ctf, operation.id,
+            playbooks, reports, ctf, redteam, operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -173,6 +197,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/report", "findings=1"),
                     ("/hypotheses", hypothesis.id),
                     ("/flags", "HTB{tui_fl4g}"),
+                    ("/attack-path", "T1566"),
+                    ("/debrief", "steps=1"),
                 ):
                     command_input.value = command
                     await pilot.press("enter")

@@ -16,6 +16,7 @@ from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
 from samurai_ai.cli_models import handle_model_command, register_model_commands
 from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
+from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
 from samurai_ai.cli_reports import handle_report_command, register_report_commands
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
@@ -39,6 +40,13 @@ from samurai_ai.domain.operations import (
 )
 from samurai_ai.domain.playbooks import PlaybookError
 from samurai_ai.domain.recovery import RecoveryStateError
+from samurai_ai.domain.redteam import (
+    AttackStepNotFoundError,
+    CheckpointNotFoundError,
+    DebriefNotFoundError,
+    RedTeamError,
+    RoeNotFoundError,
+)
 from samurai_ai.domain.reports import ReportError, ReportNotFoundError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
 from samurai_ai.domain.vault import VaultError
@@ -56,6 +64,7 @@ from samurai_ai.services.recovery import (
     RecoveryService,
     SnapshotNotFoundError,
 )
+from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
@@ -69,6 +78,7 @@ from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
+from samurai_ai.storage.redteam import RedTeamConflictError, RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
@@ -126,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_playbook_commands(subcommands)
     register_report_commands(subcommands)
     register_ctf_commands(subcommands)
+    register_redteam_commands(subcommands)
     return parser
 
 
@@ -144,6 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         playbook_service,
         report_service,
         ctf_service,
+        redteam_service,
     ) = _make_services(args.db)
 
     try:
@@ -187,6 +199,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ctf_result = handle_ctf_command(args, ctf_service)
         if ctf_result is not None:
             return ctf_result
+        redteam_result = handle_redteam_command(args, redteam_service)
+        if redteam_result is not None:
+            return redteam_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -209,6 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             playbook_service,
             report_service,
             ctf_service,
+            redteam_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -246,6 +262,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         HypothesisNotFoundError,
         WriteupNotFoundError,
         CtfConflictError,
+        RedTeamError,
+        RoeNotFoundError,
+        AttackStepNotFoundError,
+        CheckpointNotFoundError,
+        DebriefNotFoundError,
+        RedTeamConflictError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -319,6 +341,7 @@ def _make_services(
     PlaybookService,
     ReportService,
     CtfService,
+    RedTeamService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -353,6 +376,7 @@ def _make_services(
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
     reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)
     ctf = CtfService(operations, kernel, CtfRepository(database), vault)
+    redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     return (
         operations,
         kernel,
@@ -366,6 +390,7 @@ def _make_services(
         playbooks,
         reports,
         ctf,
+        redteam,
     )
 
 

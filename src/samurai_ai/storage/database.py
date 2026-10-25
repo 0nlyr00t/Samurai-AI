@@ -434,6 +434,61 @@ BEGIN
 END;
 """
 
+_MIGRATION_11 = """
+CREATE TABLE IF NOT EXISTS red_team_roe (
+    operation_id TEXT PRIMARY KEY REFERENCES operations(id) ON DELETE CASCADE,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attack_steps (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS attack_steps_operation
+ON attack_steps(operation_id, status);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS debriefs (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    format TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS debriefs_no_update
+BEFORE UPDATE ON debriefs
+BEGIN
+    SELECT RAISE(ABORT, 'debriefs are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS debriefs_no_delete
+BEFORE DELETE ON debriefs
+BEGIN
+    SELECT RAISE(ABORT, 'debriefs are immutable');
+END;
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -445,6 +500,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (8, _MIGRATION_8),
     (9, _MIGRATION_9),
     (10, _MIGRATION_10),
+    (11, _MIGRATION_11),
 )
 
 
