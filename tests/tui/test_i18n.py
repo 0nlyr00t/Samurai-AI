@@ -12,6 +12,7 @@ from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
@@ -23,6 +24,7 @@ from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
+from samurai_ai.storage.redteam import RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import LanguagePromptScreen, SamuraiApp
@@ -41,6 +43,7 @@ def make_stack(
     PlaybookService,
     ReportService,
     CtfService,
+    RedTeamService,
 ]:
     database = Database(tmp_path / name)
     operation_repository = OperationRepository(database)
@@ -59,6 +62,7 @@ def make_stack(
     playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
     reports = ReportService(service, kernel, playbooks, ReportRepository(database))
     ctf = CtfService(service, kernel, CtfRepository(database))
+    redteam = RedTeamService(service, kernel, RedTeamRepository(database))
     return (
         service,
         kernel,
@@ -70,6 +74,7 @@ def make_stack(
         playbooks,
         reports,
         ctf,
+        redteam,
     )
 
 

@@ -13,6 +13,7 @@ from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.vault import VaultService
@@ -113,6 +114,7 @@ class SamuraiApp(App[None]):
         playbooks: PlaybookService,
         reports: ReportService,
         ctf: CtfService,
+        redteam: RedTeamService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -126,6 +128,7 @@ class SamuraiApp(App[None]):
         self.playbooks = playbooks
         self.reports = reports
         self.ctf = ctf
+        self.redteam = redteam
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -252,6 +255,12 @@ class SamuraiApp(App[None]):
             return
         if name == "/flags":
             self._show_flags()
+            return
+        if name == "/attack-path":
+            self._show_attack_path()
+            return
+        if name == "/debrief":
+            self._show_debriefs()
             return
         if name == "/reconcile":
             self._show_reconcile()
@@ -556,6 +565,37 @@ class SamuraiApp(App[None]):
             return
         for flag in flags:
             journal.write(f"[flag] {flag.id} | {flag.name} | {flag.value}")
+
+    def _show_attack_path(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[attack-path] " + self.translator.t("status.no-operation"))
+            return
+        steps = self.redteam.list_steps(self.operation.id)
+        if not steps:
+            journal.write("[attack-path] " + self.translator.t("attack-path.empty"))
+            return
+        for step in steps:
+            journal.write(
+                f"[step] {step.id} | {step.status.value} | {step.technique_id} | "
+                f"{step.name} | detection={step.detection.value}"
+            )
+
+    def _show_debriefs(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        if not self.operation:
+            journal.write("[debrief] " + self.translator.t("status.no-operation"))
+            return
+        debriefs = self.redteam.list_debriefs(self.operation.id)
+        if not debriefs:
+            journal.write("[debrief] " + self.translator.t("debrief.empty"))
+            return
+        for debrief in debriefs:
+            journal.write(
+                f"[debrief] {debrief.id} | {debrief.format.value} | "
+                f"steps={debrief.step_count} | gaps={len(debrief.open_gaps)} | "
+                f"{debrief.created_at.isoformat()}"
+            )
 
     def _show_reconcile(self) -> None:
         journal = self.query_one("#journal", RichLog)
