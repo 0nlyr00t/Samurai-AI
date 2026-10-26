@@ -81,9 +81,15 @@ class ProviderDefinition(BaseModel):
     @field_validator("base_url")
     @classmethod
     def validate_base_url(cls, value: str) -> str:
+        value = value.rstrip("/")
+        # Operators often paste the full completion endpoint copied from API
+        # examples; the client appends /chat/completions itself.
+        for suffix in ("/chat/completions",):
+            if value.endswith(suffix):
+                value = value[: -len(suffix)]
         if not value.startswith(("http://", "https://")):
             raise ModelError(f"provider base_url must be http(s): {value!r}")
-        return value.rstrip("/")
+        return value
 
 
 class ModelDefinition(BaseModel):

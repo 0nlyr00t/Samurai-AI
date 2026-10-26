@@ -387,6 +387,30 @@ def test_model_picker_persists_default(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_double_ctrl_c_quits(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                await pilot.press("ctrl+c")
+                await pilot.pause()
+                assert app.is_running
+                assert any("Ctrl+C" in str(message) for message in messages)
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert not app.is_running
+
+    asyncio.run(exercise())
+
+
 def test_custom_endpoint_wizard(tmp_path: Path) -> None:
     class _FakeProvider:
         async def health(self) -> bool:

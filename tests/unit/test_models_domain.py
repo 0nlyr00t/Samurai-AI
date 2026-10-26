@@ -21,6 +21,7 @@ from samurai_ai.domain.models import (
     ModelDefinition,
     ModelError,
     ModelNotFoundError,
+    ProviderDefinition,
     parse_model_id,
 )
 
@@ -31,6 +32,21 @@ def test_parse_model_id() -> None:
     for bad in ("gpt-4o", "openai/gpt-4o", "opena i/g@v1", "openai/@v1"):
         with pytest.raises(ModelError, match="invalid model id"):
             parse_model_id(bad)
+
+
+def test_provider_base_url_strips_completion_suffix() -> None:
+    provider = ProviderDefinition(
+        id="giga",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://api.giga.chat/osav1/chat/completions",
+    )
+    assert provider.base_url == "https://api.giga.chat/osav1"
+    plain = ProviderDefinition(
+        id="x2",
+        api_family=ApiFamily.OPENAI_COMPATIBLE,
+        base_url="https://api.example.com/v1/",
+    )
+    assert plain.base_url == "https://api.example.com/v1"
 
 
 def test_parse_model_id_with_slashed_model_name() -> None:
