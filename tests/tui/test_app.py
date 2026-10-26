@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Button, Input, OptionList, RichLog, Static
 
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
@@ -36,7 +36,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.memory import MemoryRepository
-from samurai_ai.storage.models import ModelEndpointRepository
+from samurai_ai.storage.models import CustomModelRepository, ModelEndpointRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.planning import PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
@@ -300,7 +300,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     asyncio.run(exercise())
 
 
-def _minimal_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
+def _minimal_stack(tmp_path: Path, provider_factory=None):  # type: ignore[no-untyped-def]
     database = Database(tmp_path / "tui2.db")
     operation_repository = OperationRepository(database)
     service = OperationService(operation_repository)
@@ -315,9 +315,12 @@ def _minimal_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
         service, kernel, recovery, ToolRunRepository(database), vault=vault
     )
     endpoints = ModelEndpointRepository(database)
+    custom_models = CustomModelRepository(database)
     models = ModelService(
-        ModelRegistry(endpoints), vault, kernel, service, endpoints,
-        recovery_repository,
+        ModelRegistry(endpoints, custom_models=custom_models),
+        vault, kernel, service, endpoints,
+        recovery_repository, provider_factory=provider_factory,
+        custom_models=custom_models,
     )
     playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
     return (
@@ -363,6 +366,7 @@ def test_model_picker_persists_default(tmp_path: Path) -> None:
             command_input = app.query_one("#command-input", Input)
             command_input.value = "/model"
             await pilot.press("enter")
+            await app.workers.wait_for_complete()
             await pilot.pause()
             from samurai_ai.tui.app import ModelPickerScreen
             assert isinstance(app.screen, ModelPickerScreen)
@@ -378,6 +382,75 @@ def test_model_picker_persists_default(tmp_path: Path) -> None:
             assert stack[2].get_value("model.reasoning_effort") == "high"
             status_bar = app.query_one("#status-bar", Static)
             assert "model=" in str(status_bar.render())
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_custom_endpoint_wizard(tmp_path: Path) -> None:
+    class _FakeProvider:
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["giga-osa/deepseek-v4.1-flash-uncensored", "giga-lite"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+
+    stack = _minimal_stack(
+        tmp_path, provider_factory=lambda provider: _FakeProvider()
+    )
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "/model"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            from samurai_ai.tui.app import CustomEndpointScreen, ModelPickerScreen
+
+            assert isinstance(app.screen, ModelPickerScreen)
+            # first option is the "+ add custom endpoint" sentinel
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, CustomEndpointScreen)
+            screen = app.screen
+
+            screen.query_one("#ce-id", Input).value = "giga"
+            screen.query_one("#ce-url", Input).value = "https://api.giga.test/osav1"
+            screen.query_one("#ce-key", Input).value = "wizard-secret"
+            screen.query_one("#ce-tls", OptionList).highlighted = 1  # TLS off
+            screen.query_one("#ce-fetch", Button).press()
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            options = screen.query_one("#ce-models", OptionList)
+            assert options.display
+            assert options.has_focus
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert (
+                settings.get_value("model.default")
+                == "giga/giga-osa/deepseek-v4.1-flash-uncensored@v1"
+            )
+            assert vault.get("giga-api-key") == "wizard-secret"
+            providers = {row["id"]: row for row in models.list_providers()}
+            assert providers["giga"]["verify_tls"] is False
+            status_bar = app.query_one("#status-bar", Static)
+            assert "giga/giga-osa/deepseek-v4.1-flash-uncensored@v1" in str(
+                status_bar.render()
+            )
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())

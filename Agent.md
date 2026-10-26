@@ -181,7 +181,7 @@ samurai mcp tools <name> [--operation <id>]
 samurai mcp invoke <server> <tool> --operation <id> --param k=v [--approval-id <id>]
 samurai model providers
 samurai model list [--provider <id>] [--discover]
-samurai model register <id> --base-url <url> [--secret-name <name>]
+samurai model register <id> --base-url <url> [--secret-name <name>] [--insecure]
 samurai model add <provider>/<model>[@vN] [--display-name <name>] [--context-limit N] [--max-output-tokens N]
 samurai model remove <id>   # endpoint id или custom model id (содержит '/')
 samurai model health <provider-or-model-id>

@@ -117,7 +117,9 @@ class OllamaProvider:
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self.provider = provider
-        self.broker = broker or broker_for_base_url(provider.base_url)
+        self.broker = broker or broker_for_base_url(
+            provider.base_url, verify_tls=provider.verify_tls
+        )
         self.timeout = timeout
 
     async def health(self) -> bool:

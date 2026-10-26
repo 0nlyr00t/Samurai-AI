@@ -32,6 +32,12 @@ def register_model_commands(
     register.add_argument("--base-url", dest="base_url", required=True)
     register.add_argument("--secret-name", dest="secret_name")
     register.add_argument("--display-name", dest="display_name", default="")
+    register.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification for this endpoint "
+        "(e.g. networks with a national MITM root certificate)",
+    )
 
     add = model_commands.add_parser(
         "add",
@@ -95,9 +101,10 @@ def handle_model_command(args: argparse.Namespace, models: ModelService) -> int 
             for row in rows:
                 local = "local" if row["local"] else "remote"
                 state = "enabled" if row["enabled"] else "disabled"
+                tls = "" if row["verify_tls"] else "\ttls=off"
                 print(
                     f"{row['id']}\t{row['api_family']}\t{local}\t{state}\t"
-                    f"auth={row['auth']}\t{row['base_url']}"
+                    f"auth={row['auth']}\t{row['base_url']}{tls}"
                 )
         return 0
     if args.model_command == "list":
@@ -122,12 +129,17 @@ def handle_model_command(args: argparse.Namespace, models: ModelService) -> int 
         return 0
     if args.model_command == "register":
         endpoint = models.register_endpoint(
-            args.id, args.base_url, args.secret_name, args.display_name
+            args.id,
+            args.base_url,
+            args.secret_name,
+            args.display_name,
+            verify_tls=not args.insecure,
         )
         if args.json_output:
             _print_json(endpoint.model_dump(mode="json"))
         else:
-            print(f"registered\t{endpoint.id}\t{endpoint.base_url}")
+            tls = "" if endpoint.verify_tls else "\ttls=off"
+            print(f"registered\t{endpoint.id}\t{endpoint.base_url}{tls}")
         return 0
     if args.model_command == "add":
         model = models.add_model(

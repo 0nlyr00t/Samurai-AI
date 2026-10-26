@@ -70,9 +70,16 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(
-        self, host: str, port: int, addresses: list[str], timeout: float
+        self, host: str, port: int, addresses: list[str], timeout: float,
+        verify_tls: bool = True,
     ) -> None:
         self._ssl_context = ssl.create_default_context()
+        if not verify_tls:
+            # Explicit operator opt-out per endpoint (e.g. networks that
+            # require a national MITM root certificate). Hostname checking
+            # and certificate validation are both disabled for this endpoint.
+            self._ssl_context.check_hostname = False
+            self._ssl_context.verify_mode = ssl.CERT_NONE
         super().__init__(host, port=port, timeout=timeout, context=self._ssl_context)
         self._pinned_addresses = addresses
         self._pinned_timeout = timeout
@@ -95,9 +102,15 @@ def _dial_pinned(addresses: list[str], port: int, timeout: float) -> socket.sock
 
 
 class HttpEgressBroker:
-    def __init__(self, scope: ScopeContract, resolver: Resolver = default_resolver) -> None:
+    def __init__(
+        self,
+        scope: ScopeContract,
+        resolver: Resolver = default_resolver,
+        verify_tls: bool = True,
+    ) -> None:
         self.scope = scope
         self.resolver = resolver
+        self.verify_tls = verify_tls
 
     def resolve_and_check(self, hostname: str) -> list[str]:
         addresses = self.resolver(hostname)
@@ -199,7 +212,9 @@ class HttpEgressBroker:
         path = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
         connection: http.client.HTTPConnection
         if parts.scheme.lower() == "https":
-            connection = _PinnedHTTPSConnection(hostname, port, addresses, timeout)
+            connection = _PinnedHTTPSConnection(
+                hostname, port, addresses, timeout, verify_tls=self.verify_tls
+            )
         else:
             connection = _PinnedHTTPConnection(hostname, port, addresses, timeout)
         host_header = hostname if parts.port is None else f"{hostname}:{parts.port}"

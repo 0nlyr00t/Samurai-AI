@@ -9,7 +9,7 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization, SwarmRun, SwarmStatus
 from samurai_ai.services.operations import OperationService
 from samurai_ai.storage.agents import AgentRunRepository
-from samurai_ai.storage.database import Database
+from samurai_ai.storage.database import _MIGRATIONS, Database
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.swarm import SwarmRunConflictError, SwarmRunRepository
 
@@ -119,7 +119,7 @@ def test_migration_13_applies(tmp_path: Path) -> None:
             row["name"]
             for row in connection.execute("PRAGMA table_info(agent_runs)")
         }
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+    assert versions == set(range(1, len(_MIGRATIONS) + 1))
     assert {"swarm_id", "specialization"} <= columns
 
 
@@ -130,6 +130,8 @@ def test_migration_13_from_v12_database(tmp_path: Path) -> None:
     with database.connect() as connection:
         connection.execute("DELETE FROM schema_migrations WHERE version >= 13")
         connection.execute("DROP TABLE swarm_runs")
+        connection.execute("DROP TABLE IF EXISTS custom_models")
+        connection.execute("ALTER TABLE model_endpoints DROP COLUMN verify_tls")
         connection.execute(
             """
             CREATE TABLE agent_runs_v8 AS

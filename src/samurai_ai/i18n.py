@@ -100,6 +100,24 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.picker-hint": "Arrows to move, Tab switches column, Enter applies, Esc cancels",
         "model.selected": "default model: {model} | reasoning: {reasoning}",
         "model.empty": "No models available; check provider health",
+        "model.picker-add-custom": "+ Add custom OpenAI-compatible endpoint…",
+        "model.custom-title": "Add custom OpenAI-compatible endpoint",
+        "model.custom-id": "endpoint id (lowercase, e.g. giga)",
+        "model.custom-url": "base URL (e.g. https://api.example.com/v1)",
+        "model.custom-key": "API key (optional; stored encrypted in the vault)",
+        "model.custom-tls": "TLS certificate verification",
+        "model.custom-tls-on": "on (recommended)",
+        "model.custom-tls-off": "off — accept any certificate (MITM roots)",
+        "model.custom-fetch": "Connect & fetch models",
+        "model.custom-fetching": "connecting and fetching models…",
+        "model.custom-pick": "Pick a model with arrows and Enter — or type a name below",
+        "model.custom-no-models": (
+            "endpoint registered, but no models discovered; "
+            "type the model name below and press Enter"
+        ),
+        "model.custom-manual": "or type a model name and press Enter",
+        "model.custom-invalid": "endpoint id and base URL are required",
+        "model.custom-failed": "failed: {error}",
         "reconcile.report": (
             "actions-marked-unknown={actions} | tool-runs-marked-failed={runs} | "
             "resumable-tasks={tasks} | pending-approvals={approvals}"
@@ -207,6 +225,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "model.selected": "модель по умолчанию: {model} | рассуждения: {reasoning}",
         "model.empty": "Нет доступных моделей; проверьте health провайдеров",
+        "model.picker-add-custom": "+ Добавить свой OpenAI-совместимый endpoint…",
+        "model.custom-title": "Добавление своего OpenAI-совместимого endpoint",
+        "model.custom-id": "id endpoint'а (строчными, например giga)",
+        "model.custom-url": "base URL (например https://api.example.com/v1)",
+        "model.custom-key": "API-ключ (необязательно; хранится в зашифрованном vault)",
+        "model.custom-tls": "Проверка TLS-сертификата",
+        "model.custom-tls-on": "вкл (рекомендуется)",
+        "model.custom-tls-off": "выкл — принимать любой сертификат (MITM-руты)",
+        "model.custom-fetch": "Подключиться и получить модели",
+        "model.custom-fetching": "подключение и получение списка моделей…",
+        "model.custom-pick": (
+            "Выберите модель стрелками и Enter — или введите имя ниже"
+        ),
+        "model.custom-no-models": (
+            "endpoint зарегистрирован, но модели не получены; "
+            "введите имя модели ниже и нажмите Enter"
+        ),
+        "model.custom-manual": "или введите имя модели и нажмите Enter",
+        "model.custom-invalid": "нужны endpoint id и base URL",
+        "model.custom-failed": "ошибка: {error}",
         "reconcile.report": (
             "отмечено-unknown={actions} | tool-runs-failed={runs} | "
             "возобновимые-задачи={tasks} | ожидающие-согласования={approvals}"

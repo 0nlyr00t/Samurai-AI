@@ -38,8 +38,8 @@ class ModelEndpointRepository:
                 """
                 INSERT INTO model_endpoints(
                     id, api_family, base_url, secret_name, display_name, enabled,
-                    created_at, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    verify_tls, created_at, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     endpoint.id,
@@ -48,6 +48,7 @@ class ModelEndpointRepository:
                     endpoint.secret_name,
                     endpoint.display_name or endpoint.id,
                     1 if endpoint.enabled else 0,
+                    1 if endpoint.verify_tls else 0,
                     datetime.now().astimezone().isoformat(),
                     created_by,
                 ),
@@ -89,6 +90,7 @@ class ModelEndpointRepository:
             secret_name=row["secret_name"],
             enabled=bool(row["enabled"]),
             local=False,
+            verify_tls=bool(row["verify_tls"]),
         )
 
 

@@ -115,7 +115,9 @@ class GeminiProvider:
     ) -> None:
         self.provider = provider
         self.api_key = api_key
-        self.broker = broker or broker_for_base_url(provider.base_url)
+        self.broker = broker or broker_for_base_url(
+            provider.base_url, verify_tls=provider.verify_tls
+        )
         self.timeout = timeout
         self.redactor = SecretRedactor()
         if api_key:

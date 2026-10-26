@@ -13,7 +13,7 @@ from samurai_ai.domain.planning import (
 from samurai_ai.domain.reports import ReportFormat
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.operations import OperationService
-from samurai_ai.storage.database import Database
+from samurai_ai.storage.database import _MIGRATIONS, Database
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.planning import PlanningConflictError, PlanningRepository
 
@@ -112,4 +112,4 @@ def test_migration_12_applies(tmp_path: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+    assert versions == set(range(1, len(_MIGRATIONS) + 1))

@@ -5,7 +5,7 @@ import pytest
 
 from samurai_ai.domain.memory import MemoryEntry, MemoryKind
 from samurai_ai.domain.skills import Skill
-from samurai_ai.storage.database import Database
+from samurai_ai.storage.database import _MIGRATIONS, Database
 from samurai_ai.storage.memory import MemoryConflictError, MemoryRepository
 from samurai_ai.storage.skills import SkillRepository
 
@@ -116,5 +116,5 @@ def test_migration_14_applies(tmp_path: Path) -> None:
         columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")
         }
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+    assert versions == set(range(1, len(_MIGRATIONS) + 1))
     assert {"workspace", "skills"} <= columns

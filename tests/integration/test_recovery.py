@@ -64,7 +64,7 @@ def test_migration_v3_creates_recovery_tables(tmp_path: Path) -> None:
         versions = {
             row["version"] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+        assert versions == set(range(1, len(_MIGRATIONS) + 1))
         tables = {
             row["name"]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -122,7 +122,7 @@ def test_v2_database_migrates_to_v3(tmp_path: Path) -> None:
         versions = {
             row["version"] for row in migrated.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+        assert versions == set(range(1, len(_MIGRATIONS) + 1))
         tables = {
             row["name"]
             for row in migrated.execute("SELECT name FROM sqlite_master WHERE type = 'table'")

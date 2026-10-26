@@ -642,6 +642,10 @@ CREATE INDEX IF NOT EXISTS custom_models_provider_id
 ON custom_models(provider_id, id);
 """
 
+_MIGRATION_16 = """
+ALTER TABLE model_endpoints ADD COLUMN verify_tls INTEGER NOT NULL DEFAULT 1;
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -658,6 +662,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (13, _MIGRATION_13),
     (14, _MIGRATION_14),
     (15, _MIGRATION_15),
+    (16, _MIGRATION_16),
 )
 
 

@@ -78,7 +78,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v14, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 573 unit/integration/CLI/TUI tests.
+- 578 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), security tools волны 2 (subfinder/nmap/ffuf —

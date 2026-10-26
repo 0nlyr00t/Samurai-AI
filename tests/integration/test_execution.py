@@ -23,7 +23,7 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
-from samurai_ai.storage.database import Database
+from samurai_ai.storage.database import _MIGRATIONS, Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
@@ -87,7 +87,7 @@ def test_migration_v4_creates_tool_runs_table(tmp_path: Path) -> None:
         versions = {
             row["version"] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+        assert versions == set(range(1, len(_MIGRATIONS) + 1))
         tables = {
             row["name"]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
