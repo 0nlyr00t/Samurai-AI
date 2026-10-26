@@ -81,8 +81,9 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - 551 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
-CALDERA/VECTR (только export), расширенный набор security tools (после
-threat review), LLM streaming, полный egress enforcement на
+CALDERA/VECTR (только export), security tools адаптеры из
+`md/threat-review-security-tools.md` (review пройден, реализация — следующий
+этап), LLM streaming, полный egress enforcement на
 Docker Desktop for Mac и OS-пакеты installers (есть bare standalone binary).
 
 ## Быстрый старт для разработки
@@ -134,6 +135,7 @@ Playbook не должен зависеть от vendor-specific API.
 - `md/requirements.md` — бизнес-требования.
 - `md/development-plan.md` — roadmap, этапы и acceptance criteria.
 - `md/compatibility.md` — политика совместимости, проверка подписей релизов.
+- `md/threat-review-security-tools.md` — threat review расширенного набора security tools.
 - `Agent.md` — handoff для продолжения разработки.
 - `README.en.md` — English README.
 

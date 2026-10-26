@@ -86,8 +86,9 @@ Implemented:
 - 551 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
-integrations (export-only), the extended security tool set (pending a
-threat review), LLM streaming, full egress enforcement on Docker Desktop
+integrations (export-only), the security tool adapters from
+`md/threat-review-security-tools.md` (review passed, implementation is the
+next stage), LLM streaming, full egress enforcement on Docker Desktop
 for Mac, and OS package installers (a bare standalone binary is available).
 
 ## Development quick start
@@ -139,6 +140,7 @@ The product must offer an **RU/EN** language choice on first launch, persist the
 - `md/requirements.md` — business requirements.
 - `md/development-plan.md` — roadmap, phases, and acceptance criteria.
 - `md/compatibility.md` — compatibility policy and release signature verification.
+- `md/threat-review-security-tools.md` — threat review of the extended security tool set (RU).
 - `Agent.md` — development handoff.
 - `README.md` — Russian README.
 
