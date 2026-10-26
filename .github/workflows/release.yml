@@ -71,6 +71,7 @@ jobs:
     needs: [python-dist, binary]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: "*"
