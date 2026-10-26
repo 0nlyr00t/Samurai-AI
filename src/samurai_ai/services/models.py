@@ -89,6 +89,7 @@ class ModelService:
                     "enabled": provider.enabled,
                     "auth": auth,
                     "secret_name": provider.secret_name,
+                    "verify_tls": provider.verify_tls,
                 }
             )
         return rows
@@ -114,6 +115,7 @@ class ModelService:
         secret_name: str | None,
         display_name: str = "",
         created_by: str = "operator",
+        verify_tls: bool = True,
     ) -> ProviderDefinition:
         if self.endpoints is None:
             raise ModelError("model endpoint persistence is not configured")
@@ -123,6 +125,7 @@ class ModelService:
             base_url=base_url,
             display_name=display_name,
             secret_name=secret_name,
+            verify_tls=verify_tls,
         )
         self.endpoints.add(endpoint, created_by)
         return endpoint

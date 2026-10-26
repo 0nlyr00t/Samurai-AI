@@ -69,6 +69,7 @@ class ProviderDefinition(BaseModel):
     default_headers: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
     local: bool = False
+    verify_tls: bool = True
 
     @field_validator("id")
     @classmethod

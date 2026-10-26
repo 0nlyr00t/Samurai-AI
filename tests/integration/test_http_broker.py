@@ -1,6 +1,8 @@
 import threading
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -206,3 +208,70 @@ def test_fetch_denies_excluded_resolved_address(http_server: str) -> None:
     )
     with pytest.raises(ToolScopeError, match="excluded"):
         broker.fetch("http://pinned.test/ok")
+
+
+def _self_signed_cert(tmp_path: Path) -> tuple[Path, Path]:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "pinned.test")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC) - timedelta(days=1))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("pinned.test")]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = tmp_path / "cert.pem"
+    key_path = tmp_path / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+    )
+    return cert_path, key_path
+
+
+def test_https_fetch_tls_verify_toggle(tmp_path: Path) -> None:
+    import ssl as ssl_module
+
+    cert_path, key_path = _self_signed_cert(tmp_path)
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    context = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_port
+    try:
+        def resolver(hostname: str) -> list[str]:
+            return ["127.0.0.1"]
+
+        scope = ScopeContract(includes=("pinned.test",))
+        url = f"https://pinned.test:{port}/ok"
+
+        strict = HttpEgressBroker(scope, resolver=resolver)
+        with pytest.raises(ToolExecutionError, match="http request failed"):
+            strict.fetch(url)
+
+        relaxed = HttpEgressBroker(scope, resolver=resolver, verify_tls=False)
+        response = relaxed.fetch(url)
+        assert response.status == 200
+        assert response.body == b"hello"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

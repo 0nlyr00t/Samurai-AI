@@ -378,7 +378,7 @@ def test_migration_v6_to_v7_adds_model_endpoints(vault_env: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+        assert versions == set(range(1, len(_MIGRATIONS) + 1))
         connection.execute(
             """
             INSERT INTO model_endpoints(
@@ -478,3 +478,52 @@ def test_migration_15_applies(vault_env: Path) -> None:
     assert stored.capabilities == frozenset(
         {ModelCapability.TOOLS, ModelCapability.STREAMING}
     )
+
+
+def test_endpoint_verify_tls_roundtrip(vault_env: Path) -> None:
+    _, _, models, _ = make_stack(vault_env / "tls.db")
+    models.register_endpoint("strict", "https://example.com/v1", None)
+    models.register_endpoint(
+        "relaxed", "https://example.org/v1", None, verify_tls=False
+    )
+    rows = {row["id"]: row for row in models.list_providers()}
+    assert rows["strict"]["verify_tls"] is True
+    assert rows["relaxed"]["verify_tls"] is False
+    assert models.registry.get_provider("relaxed").verify_tls is False
+
+
+def test_migration_16_defaults_verify_tls_on(vault_env: Path) -> None:
+    database_path = vault_env / "migration16.db"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for version, script in _MIGRATIONS[:15]:
+            connection.executescript(script)
+            connection.execute(
+                "INSERT INTO schema_migrations(version) VALUES (?)", (version,)
+            )
+        connection.execute(
+            """
+            INSERT INTO model_endpoints(
+                id, api_family, base_url, secret_name, display_name, enabled,
+                created_at, created_by
+            ) VALUES ('legacy-tls', 'openai-compatible', 'https://legacy.test/v1',
+                      NULL, 'legacy-tls', 1, '2026-01-01T00:00:00', 'test')
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    Database(database_path).initialize()
+
+    endpoint = ModelEndpointRepository(Database(database_path)).get("legacy-tls")
+    assert endpoint is not None
+    assert endpoint.verify_tls is True

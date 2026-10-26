@@ -15,7 +15,7 @@ from samurai_ai.domain.reports import ReportFormat
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.operations import OperationService
 from samurai_ai.storage.ctf import CtfConflictError, CtfRepository
-from samurai_ai.storage.database import Database
+from samurai_ai.storage.database import _MIGRATIONS, Database
 from samurai_ai.storage.operations import OperationRepository
 
 
@@ -136,4 +136,4 @@ def test_migration_10_applies_on_existing_v9_database(tmp_path: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+    assert versions == set(range(1, len(_MIGRATIONS) + 1))

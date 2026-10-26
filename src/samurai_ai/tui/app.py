@@ -1,3 +1,4 @@
+import asyncio
 import re
 
 from rich.text import Text
@@ -5,7 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, OptionList, RichLog, Static
+from textual.widgets import Button, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
@@ -26,6 +27,7 @@ from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.models import CustomModelConflictError
 from samurai_ai.storage.swarm import SwarmRunRepository
 
 
@@ -76,6 +78,8 @@ class LanguagePromptScreen(ModalScreen[str]):
 
 REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 
+ADD_CUSTOM_ID = "__add_custom__"
+
 
 class ModelPickerScreen(ModalScreen[tuple[str, str]]):
     """Arrow-key model and reasoning picker, in the spirit of opencode."""
@@ -119,16 +123,27 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         model_ids: list[str],
         current_model: str | None,
         current_reasoning: str,
+        add_custom_label: str | None = None,
     ) -> None:
         super().__init__()
         self.translator = translator
         self.model_ids = model_ids
+        self.add_custom_label = add_custom_label
         self.current_model = current_model
         self.current_reasoning = current_reasoning
-        self.selected_model = current_model or (model_ids[0] if model_ids else "")
+        self.selected_model = current_model or (
+            model_ids[0] if model_ids else ADD_CUSTOM_ID
+        )
         self.selected_reasoning = current_reasoning
 
     def compose(self) -> ComposeResult:
+        model_options: list[Option] = []
+        if self.add_custom_label is not None:
+            model_options.append(Option(self.add_custom_label, id="m-add"))
+        model_options.extend(
+            Option(model_id, id=f"m{index}")
+            for index, model_id in enumerate(self.model_ids)
+        )
         with Vertical(id="model-dialog"):
             yield Static(self.translator.t("model.picker-title"), id="model-title")
             with Horizontal(id="model-columns"):
@@ -136,13 +151,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
                     yield Static(
                         self.translator.t("model.picker-models"), classes="picker-label"
                     )
-                    yield OptionList(
-                        *[
-                            Option(model_id, id=f"m{index}")
-                            for index, model_id in enumerate(self.model_ids)
-                        ],
-                        id="model-options",
-                    )
+                    yield OptionList(*model_options, id="model-options")
                 with Vertical(classes="picker-column"):
                     yield Static(
                         self.translator.t("model.picker-reasoning"),
@@ -160,7 +169,8 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
     def on_mount(self) -> None:
         models = self.query_one("#model-options", OptionList)
         if self.current_model in self.model_ids:
-            models.highlighted = self.model_ids.index(self.current_model)
+            offset = 1 if self.add_custom_label is not None else 0
+            models.highlighted = self.model_ids.index(self.current_model) + offset
         reasoning = self.query_one("#reasoning-options", OptionList)
         reasoning.highlighted = REASONING_LEVELS.index(self.current_reasoning)
         models.focus()
@@ -170,7 +180,14 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
     ) -> None:
         if event.option_list.id == "model-options" and event.option is not None:
             index = event.option_list.highlighted
-            if index is not None and 0 <= index < len(self.model_ids):
+            if index is None:
+                return
+            if self.add_custom_label is not None:
+                if index == 0:
+                    self.selected_model = ADD_CUSTOM_ID
+                    return
+                index -= 1
+            if 0 <= index < len(self.model_ids):
                 self.selected_model = self.model_ids[index]
         elif event.option_list.id == "reasoning-options" and event.option is not None:
             index = event.option_list.highlighted
@@ -180,11 +197,227 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
     def on_option_list_option_selected(
         self, event: OptionList.OptionSelected
     ) -> None:
+        if (
+            event.option_list.id == "model-options"
+            and event.option is not None
+            and event.option.id == "m-add"
+        ):
+            self.dismiss((ADD_CUSTOM_ID, self.selected_reasoning))
+            return
         self.dismiss((self.selected_model, self.selected_reasoning))
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key == "escape":
             self.dismiss(None)
+
+
+class CustomEndpointScreen(ModalScreen[str | None]):
+    """Interactive wizard for adding a custom OpenAI-compatible endpoint.
+
+    Endpoint id, base URL, API key (stored encrypted in the vault), a TLS
+    verification toggle, then live model discovery with arrow-key selection
+    or manual entry. Dismisses with the chosen default model id (or None).
+    """
+
+    CSS = """
+    CustomEndpointScreen {
+        align: center middle;
+    }
+    #ce-dialog {
+        width: 78;
+        height: auto;
+        padding: 1 2;
+        border: solid #5bc0be;
+        background: #0a0a0a;
+    }
+    #ce-title {
+        text-style: bold;
+        color: #4fa8ff;
+        padding-bottom: 1;
+    }
+    .ce-label {
+        color: #888888;
+        padding-top: 1;
+    }
+    #ce-tls {
+        height: auto;
+        background: #0a0a0a;
+    }
+    #ce-fetch {
+        margin-top: 1;
+    }
+    #ce-status {
+        color: #ffd43b;
+        padding-top: 1;
+    }
+    #ce-models {
+        height: 8;
+        background: #0a0a0a;
+        display: none;
+    }
+    #ce-manual {
+        display: none;
+    }
+    """
+
+    def __init__(
+        self,
+        translator: Translator,
+        models: ModelService,
+        vault: VaultService,
+        settings: SettingsService,
+    ) -> None:
+        super().__init__()
+        self.translator = translator
+        self.models = models
+        self.vault = vault
+        self.settings = settings
+        self._endpoint_id: str | None = None
+        self._model_names: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="ce-dialog"):
+            yield Static(self.translator.t("model.custom-title"), id="ce-title")
+            yield Input(placeholder=self.translator.t("model.custom-id"), id="ce-id")
+            yield Input(placeholder=self.translator.t("model.custom-url"), id="ce-url")
+            yield Input(
+                placeholder=self.translator.t("model.custom-key"),
+                id="ce-key",
+                password=True,
+            )
+            yield Static(self.translator.t("model.custom-tls"), classes="ce-label")
+            yield OptionList(
+                Option(self.translator.t("model.custom-tls-on"), id="tls-on"),
+                Option(self.translator.t("model.custom-tls-off"), id="tls-off"),
+                id="ce-tls",
+            )
+            yield Button(self.translator.t("model.custom-fetch"), id="ce-fetch")
+            yield Static("", id="ce-status")
+            yield OptionList(id="ce-models")
+            yield Input(
+                placeholder=self.translator.t("model.custom-manual"), id="ce-manual"
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#ce-tls", OptionList).highlighted = 0
+        self.query_one("#ce-id", Input).focus()
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key == "escape":
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "ce-manual":
+            self._finalize(event.value.strip())
+        elif event.input.id in ("ce-id", "ce-url", "ce-key"):
+            self._connect()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "ce-fetch":
+            self._connect()
+
+    def _connect(self) -> None:
+        status = self.query_one("#ce-status", Static)
+        endpoint_id = self.query_one("#ce-id", Input).value.strip()
+        base_url = self.query_one("#ce-url", Input).value.strip()
+        api_key = self.query_one("#ce-key", Input).value.strip()
+        tls = self.query_one("#ce-tls", OptionList)
+        verify_tls = tls.highlighted in (None, 0)
+        if not endpoint_id or not base_url:
+            status.update(self.translator.t("model.custom-invalid"))
+            return
+        if self.models.endpoints is None:
+            status.update(
+                self.translator.t(
+                    "model.custom-failed", error="endpoint persistence not configured"
+                )
+            )
+            return
+        if any(
+            provider.id == endpoint_id
+            for provider in self.models.registry.static_providers
+        ):
+            status.update(
+                self.translator.t(
+                    "model.custom-failed", error=f"id {endpoint_id!r} is reserved"
+                )
+            )
+            return
+        try:
+            if self.models.endpoints.get(endpoint_id) is not None:
+                self.models.remove_endpoint(endpoint_id)
+            secret_name = None
+            if api_key:
+                secret_name = f"{endpoint_id}-api-key"
+                existing = {entry.name for entry in self.vault.list_metadata()}
+                if secret_name in existing:
+                    self.vault.remove(secret_name)
+                self.vault.add(secret_name, api_key)
+            self.models.register_endpoint(
+                endpoint_id, base_url, secret_name, verify_tls=verify_tls
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            status.update(self.translator.t("model.custom-failed", error=str(exc)))
+            return
+        self._endpoint_id = endpoint_id
+        self.query_one("#ce-manual", Input).display = True
+        self.run_worker(self._discover(endpoint_id), exclusive=True)
+
+    async def _discover(self, endpoint_id: str) -> None:
+        status = self.query_one("#ce-status", Static)
+        button = self.query_one("#ce-fetch", Button)
+        button.disabled = True
+        status.update(self.translator.t("model.custom-fetching"))
+        try:
+            discovered = await asyncio.to_thread(
+                self.models.discover_models, endpoint_id
+            )
+            self._model_names = [entry.model_name for entry in discovered]
+        except Exception as exc:  # noqa: BLE001 - discovery is best-effort
+            self._model_names = []
+            status.update(self.translator.t("model.custom-failed", error=str(exc)))
+        finally:
+            button.disabled = False
+        options = self.query_one("#ce-models", OptionList)
+        options.clear_options()
+        if self._model_names:
+            options.add_options(
+                Option(name, id=f"c{index}")
+                for index, name in enumerate(self._model_names)
+            )
+            options.display = True
+            options.highlighted = 0
+            status.update(self.translator.t("model.custom-pick"))
+            options.focus()
+        else:
+            options.display = False
+            if self._endpoint_id is not None:
+                status.update(self.translator.t("model.custom-no-models"))
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        if event.option_list.id != "ce-models" or event.option is None:
+            return
+        index = int(str(event.option.id or "c0")[1:])
+        if 0 <= index < len(self._model_names):
+            self._finalize(self._model_names[index])
+
+    def _finalize(self, model_name: str) -> None:
+        if not model_name or self._endpoint_id is None:
+            return
+        status = self.query_one("#ce-status", Static)
+        try:
+            model = self.models.add_model(f"{self._endpoint_id}/{model_name}")
+        except CustomModelConflictError:
+            model, _ = self.models.resolve_model(
+                f"{self._endpoint_id}/{model_name}@v1"
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            status.update(self.translator.t("model.custom-failed", error=str(exc)))
+            return
+        self.settings.set_value("model.default", model.id)
+        self.dismiss(model.id)
 
 
 class SamuraiApp(App[None]):
@@ -922,21 +1155,29 @@ class SamuraiApp(App[None]):
         status_bar.update(status_text)
 
     def _show_model_picker(self) -> None:
+        self.run_worker(self._open_model_picker(), exclusive=True)
+
+    async def _open_model_picker(self) -> None:
         model_ids = [model.id for model in self.models.list_models()]
         for provider in self.models.list_providers():
             if provider["local"] or provider["auth"] == "configured":
                 try:
-                    discovered = self.models.discover_models(provider["id"])
+                    discovered = await asyncio.to_thread(
+                        self.models.discover_models, provider["id"]
+                    )
+                    model_ids.extend(model.id for model in discovered)
                 except Exception:  # noqa: BLE001 - discovery is best-effort
                     continue
-                model_ids.extend(model.id for model in discovered)
-        if not model_ids:
-            self._write_line("[model] " + self.translator.t("model.empty"))
-            return
         current = self.models.default_model()
         reasoning = self.models.default_reasoning_effort() or "off"
         self.push_screen(
-            ModelPickerScreen(self.translator, model_ids, current, reasoning),
+            ModelPickerScreen(
+                self.translator,
+                model_ids,
+                current,
+                reasoning,
+                add_custom_label=self.translator.t("model.picker-add-custom"),
+            ),
             self._on_model_chosen,
         )
 
@@ -944,6 +1185,14 @@ class SamuraiApp(App[None]):
         if choice is None:
             return
         model_id, reasoning = choice
+        if model_id == ADD_CUSTOM_ID:
+            self.push_screen(
+                CustomEndpointScreen(
+                    self.translator, self.models, self.vault, self.settings
+                ),
+                self._on_custom_endpoint_done,
+            )
+            return
         self.settings.set_value("model.default", model_id)
         self.settings.set_value("model.reasoning_effort", reasoning)
         self._write_line(
@@ -951,6 +1200,18 @@ class SamuraiApp(App[None]):
             + self.translator.t("model.selected", model=model_id, reasoning=reasoning)
         )
         self._refresh_chrome()
+        self.query_one("#command-input", Input).focus()
+
+    def _on_custom_endpoint_done(self, model_id: str | None) -> None:
+        if model_id:
+            reasoning = self.models.default_reasoning_effort() or "off"
+            self._write_line(
+                "[model] "
+                + self.translator.t(
+                    "model.selected", model=model_id, reasoning=reasoning
+                )
+            )
+            self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
 
 

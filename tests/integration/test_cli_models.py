@@ -322,6 +322,28 @@ def test_cli_model_add_and_remove_custom_model(home: Path, capsys) -> None:
     assert "not found" in capsys.readouterr().err
 
 
+def test_cli_model_register_insecure(home: Path, capsys, fake_server: str) -> None:
+    database = str(home / "insecure.db")
+    assert (
+        main(
+            [
+                "--db", database, "model", "register", "mitm",
+                "--base-url", f"{fake_server}/v1", "--insecure",
+            ]
+        )
+        == 0
+    )
+    assert "tls=off" in capsys.readouterr().out
+
+    assert main(["--db", database, "--json", "model", "providers"]) == 0
+    providers = json.loads(capsys.readouterr().out)
+    row = next(entry for entry in providers if entry["id"] == "mitm")
+    assert row["verify_tls"] is False
+
+    assert main(["--db", database, "model", "providers"]) == 0
+    assert "tls=off" in capsys.readouterr().out
+
+
 def test_cli_model_add_slashed_name_on_custom_endpoint(
     home: Path, capsys, fake_server: str
 ) -> None:

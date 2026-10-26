@@ -31,12 +31,12 @@ DEFAULT_TIMEOUT = 60.0
 _MAX_ERROR_SNIPPET = 200
 
 
-def broker_for_base_url(base_url: str) -> HttpEgressBroker:
+def broker_for_base_url(base_url: str, verify_tls: bool = True) -> HttpEgressBroker:
     parts = urllib.parse.urlsplit(base_url)
     host = parts.hostname
     if not host:
         raise ModelError(f"provider base_url must contain a host: {base_url!r}")
-    return HttpEgressBroker(ScopeContract(includes=(host,)))
+    return HttpEgressBroker(ScopeContract(includes=(host,)), verify_tls=verify_tls)
 
 
 def build_completion_payload(
@@ -119,7 +119,9 @@ class OpenAICompatProvider:
     ) -> None:
         self.provider = provider
         self.api_key = api_key
-        self.broker = broker or broker_for_base_url(provider.base_url)
+        self.broker = broker or broker_for_base_url(
+            provider.base_url, verify_tls=provider.verify_tls
+        )
         self.timeout = timeout
         self.redactor = SecretRedactor()
         if api_key:
