@@ -158,6 +158,11 @@ class ToolExecutionService:
     ) -> Approval:
         action = f"tool.run {definition.id}"
         if approval_id is None:
+            for existing in self.kernel.kernel.list_approvals(
+                operation_id, ApprovalStatus.APPROVED
+            ):
+                if existing.action == action and existing.task_id == task_id:
+                    return existing
             approval = self.kernel.request_approval(
                 operation_id,
                 action,

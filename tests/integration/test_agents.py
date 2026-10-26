@@ -188,8 +188,12 @@ def test_full_orchestrated_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert "agent.note" in types
     assert "agent.run.finish" in types
     notes = [event for event in events if event.event_type == "agent.note"]
-    assert notes[0].payload["key"] == "shared.result"
-    assert notes[0].payload["value"] == "probe done"
+    by_key = {event.payload["key"]: event.payload["value"] for event in notes}
+    assert by_key["shared.result"] == "probe done"
+    # the executor sees the tool result through the auto-note feedback loop
+    tool_notes = [key for key in by_key if ".tool-result.local.echo" in key]
+    assert tool_notes
+    assert "agent-echo" in by_key[tool_notes[0]]
 
     calls = [event for event in events if event.event_type == "model.call"]
     assert calls and all(event.payload["agent_run_id"] == run.id for event in calls)
