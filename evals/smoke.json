@@ -15,7 +15,9 @@
       "script": {
         "responses": [
           "{\"steps\": [\"probe the endpoint\"]}",
-          "{\"steps\": [\"probe the endpoint\"]}",
+          "{\"steps\": [\"probe the endpoint\"]}"
+        ],
+        "executor_responses": [
           "{\"commands\": [{\"type\": \"note\", \"key\": \"probe\", \"value\": \"done\"}, {\"type\": \"complete_task\"}]}",
           "{\"commands\": [{\"type\": \"note\", \"key\": \"probe\", \"value\": \"done\"}, {\"type\": \"complete_task\"}]}"
         ]

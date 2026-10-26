@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates**, and **Stage 6b — fault injection, prompt-injection containment, soak, and migration/backup/restore suites** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates**, **Stage 6b — fault injection, prompt-injection containment, soak, and migration/backup/restore suites**, and **Stage 6c — the standalone binary, reproducible builds, signed releases, and the compatibility policy (`md/compatibility.md`)** are complete.
 
 Implemented:
 
@@ -88,7 +88,7 @@ Implemented:
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), the extended security tool set (pending a
 threat review), LLM streaming, full egress enforcement on Docker Desktop
-for Mac, and the standalone binary (Stage 6).
+for Mac, and OS package installers (a bare standalone binary is available).
 
 ## Development quick start
 
@@ -122,7 +122,7 @@ uv build
 
 ## Target distribution
 
-The final product is intended to ship as a standalone per-platform `samurai` executable/installer without requiring Python or uv. Docker, security tools, MCP servers, and Ollama will remain optional dependencies detected through health checks.
+The product ships as a standalone per-platform `samurai` executable (PyInstaller one-file, no Python or uv required on the target machine): build locally with `bash packaging/build_binary.sh`; release builds for linux-x86_64/darwin-arm64/windows-x86_64 are produced by `.github/workflows/release.yml` on `v*` tags and signed with Sigstore keyless (verification — `md/compatibility.md`). The sdist/wheel are bit-reproducible (`packaging/check_reproducible.sh` in CI). Docker, security tools, MCP servers, and Ollama remain optional dependencies detected through health checks.
 
 ## Models
 
@@ -138,6 +138,7 @@ The product must offer an **RU/EN** language choice on first launch, persist the
 
 - `md/requirements.md` — business requirements.
 - `md/development-plan.md` — roadmap, phases, and acceptance criteria.
+- `md/compatibility.md` — compatibility policy and release signature verification.
 - `Agent.md` — development handoff.
 - `README.md` — Russian README.
 

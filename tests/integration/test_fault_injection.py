@@ -20,11 +20,13 @@ CANARY = "CANARY-SECRET-7f3a9d"
 
 
 def _suite(fault: dict, *, after_planner: bool = False, workers: int = 1) -> EvalSuite:
-    responses = [PLANNER, EXECUTOR] if after_planner else [PLANNER]
+    script: dict = {"responses": [PLANNER, EXECUTOR] if after_planner else [PLANNER]}
     tasks = [{"id": "recon", "title": "Recon"}]
     if workers > 1:
         tasks.append({"id": "testing", "title": "Testing"})
-        responses = [PLANNER, PLANNER, EXECUTOR, EXECUTOR]
+        script = {"responses": [PLANNER, PLANNER],
+                  "executor_responses": [EXECUTOR, EXECUTOR]}
+    script["fault"] = fault
     return EvalSuite.model_validate(
         {
             "name": "faults",
@@ -36,7 +38,7 @@ def _suite(fault: dict, *, after_planner: bool = False, workers: int = 1) -> Eva
                     "scope_includes": ["example.com"],
                     "tasks": tasks,
                     "workers": workers,
-                    "script": {"responses": responses, "fault": fault},
+                    "script": script,
                     "expectations": {"expect_solve": False},
                 }
             ],

@@ -52,6 +52,7 @@ class EvalProviderScript(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     responses: list[str] = Field(min_length=1)
+    executor_responses: list[str] | None = None
     latency_ms: int = Field(default=0, ge=0)
     prompt_tokens: int = Field(default=40, ge=0)
     completion_tokens: int = Field(default=8, ge=0)

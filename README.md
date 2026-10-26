@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами** и **Stage 6b — fault injection, prompt-injection containment, soak и migration/backup/restore suites**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами**, **Stage 6b — fault injection, prompt-injection containment, soak и migration/backup/restore suites** и **Stage 6c — standalone binary, воспроизводимые сборки, подписанные релизы и политика совместимости (`md/compatibility.md`)**.
 
 Уже реализовано:
 
@@ -83,7 +83,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), расширенный набор security tools (после
 threat review), LLM streaming, полный egress enforcement на
-Docker Desktop for Mac и standalone binary (Stage 6).
+Docker Desktop for Mac и OS-пакеты installers (есть bare standalone binary).
 
 ## Быстрый старт для разработки
 
@@ -117,7 +117,7 @@ uv build
 
 ## Целевая поставка
 
-Финальный продукт должен поставляться как standalone per-platform `samurai` executable/installer без установленных Python и uv. Docker, security tools, MCP servers и Ollama останутся optional dependencies с health checks.
+Продукт поставляется как standalone per-platform `samurai` executable (PyInstaller one-file, без Python и uv на целевой машине): локальная сборка — `bash packaging/build_binary.sh`, релизные сборки linux-x86_64/darwin-arm64/windows-x86_64 собираются в `.github/workflows/release.yml` по тегу `v*` и подписываются Sigstore keyless (проверка — `md/compatibility.md`). sdist/wheel воспроизводимы побитно (`packaging/check_reproducible.sh` в CI). Docker, security tools, MCP servers и Ollama остаются optional dependencies с health checks.
 
 ## Модели
 
@@ -133,6 +133,7 @@ Playbook не должен зависеть от vendor-specific API.
 
 - `md/requirements.md` — бизнес-требования.
 - `md/development-plan.md` — roadmap, этапы и acceptance criteria.
+- `md/compatibility.md` — политика совместимости, проверка подписей релизов.
 - `Agent.md` — handoff для продолжения разработки.
 - `README.en.md` — English README.
 
