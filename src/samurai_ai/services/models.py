@@ -24,6 +24,7 @@ from samurai_ai.domain.execution import ApprovalRequiredError, ToolStateError
 from samurai_ai.domain.kernel import Approval, ApprovalStatus, RiskClass
 from samurai_ai.domain.models import (
     ApiFamily,
+    ModelCapability,
     ModelDefinition,
     ModelError,
     ModelNotFoundError,
@@ -36,7 +37,7 @@ from samurai_ai.domain.vault import SecretNotFoundError
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.vault import VaultService
-from samurai_ai.storage.models import ModelEndpointRepository
+from samurai_ai.storage.models import CustomModelRepository, ModelEndpointRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 
 
@@ -58,6 +59,7 @@ class ModelService:
         endpoints: ModelEndpointRepository | None = None,
         settings: RecoveryRepository | None = None,
         provider_factory: Callable[[ProviderDefinition], ProviderImpl] | None = None,
+        custom_models: CustomModelRepository | None = None,
     ) -> None:
         self.registry = registry
         self.vault = vault
@@ -66,6 +68,7 @@ class ModelService:
         self.endpoints = endpoints
         self.settings = settings
         self.provider_factory = provider_factory
+        self.custom_models = custom_models
         self._budget_locks: dict[str, threading.Lock] = {}
         self._budget_locks_guard = threading.Lock()
 
@@ -127,6 +130,57 @@ class ModelService:
     def remove_endpoint(self, endpoint_id: str) -> None:
         if self.endpoints is None or not self.endpoints.delete(endpoint_id):
             raise ModelNotFoundError(f"model endpoint not found: {endpoint_id}")
+
+    def add_model(
+        self,
+        model_id: str,
+        display_name: str = "",
+        context_limit: int = 32768,
+        max_output_tokens: int = 4096,
+        created_by: str = "operator",
+    ) -> ModelDefinition:
+        """Whitelist a provider-side model name not present in the static registry.
+
+        Accepts ids with or without the ``@v<N>`` suffix (defaults to ``@v1``)
+        and model names containing slashes (for example
+        ``giga/giga-osa/deepseek-v4.1-flash-uncensored``).
+        """
+        if self.custom_models is None:
+            raise ModelError("custom model persistence is not configured")
+        if "@" not in model_id:
+            model_id = f"{model_id}@v1"
+        provider_id, _ = parse_model_id(model_id)
+        provider = self.registry.get_provider(provider_id)
+        if provider.api_family is ApiFamily.OLLAMA:
+            raise ModelError(
+                "ollama models are discovered at runtime; no registration needed"
+            )
+        if any(model.id == model_id for model in self.registry.static_models):
+            raise ModelError(f"model already registered: {model_id}")
+        model = ModelDefinition(
+            id=model_id,
+            provider_id=provider_id,
+            display_name=display_name or model_id,
+            api_family=provider.api_family,
+            context_limit=context_limit,
+            max_output_tokens=max_output_tokens,
+            capabilities=frozenset(
+                {
+                    ModelCapability.TOOLS,
+                    ModelCapability.STRUCTURED_OUTPUT,
+                    ModelCapability.STREAMING,
+                }
+            ),
+            local=provider.local,
+        )
+        self.custom_models.add(model, created_by)
+        return model
+
+    def remove_model(self, model_id: str) -> None:
+        if "@" not in model_id:
+            model_id = f"{model_id}@v1"
+        if self.custom_models is None or not self.custom_models.delete(model_id):
+            raise ModelNotFoundError(f"custom model not found: {model_id}")
 
     def health(self, target: str) -> dict[str, Any]:
         try:

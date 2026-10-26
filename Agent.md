@@ -93,7 +93,7 @@ uv run samurai tui
 - `src/samurai_ai/storage/execution.py` — ToolRunRepository и recovery-compatible runs.
 - `src/samurai_ai/storage/vault.py` — VaultRepository для encrypted secret entries.
 - `src/samurai_ai/storage/mcp.py` — McpServerRepository и deferred tool schema cache (app_settings).
-- `src/samurai_ai/storage/models.py` — ModelEndpointRepository для custom OpenAI-compatible endpoints.
+- `src/samurai_ai/storage/models.py` — ModelEndpointRepository для custom OpenAI-compatible endpoints и CustomModelRepository для operator-whitelisted имён моделей (SQLite v15).
 - `src/samurai_ai/storage/agents.py` — AgentRunRepository для agent_runs (миграция v8).
 - `src/samurai_ai/services/operations.py` — сервисный сценарий операций.
 - `src/samurai_ai/services/kernel.py` — KernelService, policy preconditions и summary.
@@ -182,7 +182,8 @@ samurai mcp invoke <server> <tool> --operation <id> --param k=v [--approval-id <
 samurai model providers
 samurai model list [--provider <id>] [--discover]
 samurai model register <id> --base-url <url> [--secret-name <name>]
-samurai model remove <id>
+samurai model add <provider>/<model>[@vN] [--display-name <name>] [--context-limit N] [--max-output-tokens N]
+samurai model remove <id>   # endpoint id или custom model id (содержит '/')
 samurai model health <provider-or-model-id>
 samurai model complete <model-id> --operation <id> --prompt "..." [--fallback <id>] [--approval-id <id>]
 samurai model budget <operation-id> [--max-tokens N] [--max-cost X] [--max-calls N]

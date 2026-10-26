@@ -33,6 +33,22 @@ def test_parse_model_id() -> None:
             parse_model_id(bad)
 
 
+def test_parse_model_id_with_slashed_model_name() -> None:
+    assert parse_model_id("giga/giga-osa/deepseek-v4.1-flash-uncensored@v1") == (
+        "giga",
+        "giga-osa/deepseek-v4.1-flash-uncensored",
+    )
+    assert parse_model_id("openrouter/anthropic/claude-sonnet-4@v1") == (
+        "openrouter",
+        "anthropic/claude-sonnet-4",
+    )
+    model = ModelDefinition(
+        id="giga/giga-osa/deepseek-v4.1-flash-uncensored@v1",
+        provider_id="giga",
+    )
+    assert model.model_name == "giga-osa/deepseek-v4.1-flash-uncensored"
+
+
 def test_static_registry_contents() -> None:
     registry = ModelRegistry()
     providers = {provider.id for provider in STATIC_PROVIDERS}

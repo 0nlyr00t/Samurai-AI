@@ -283,3 +283,72 @@ def test_cli_model_fallback_budget_usage(
     assert summary["calls"] == 1
     assert summary["prompt_tokens"] == 4
     assert summary["by_model"]["fake/fake-model@v1"]["calls"] == 1
+
+
+def test_cli_model_add_and_remove_custom_model(home: Path, capsys) -> None:
+    database = str(home / "custom-model.db")
+
+    assert main(["--db", database, "model", "add", "moonshot/kimi-k3"]) == 0
+    assert "added\tmoonshot/kimi-k3@v1" in capsys.readouterr().out
+
+    assert (
+        main(
+            ["--db", database, "--json", "model", "list", "--provider", "moonshot"]
+        )
+        == 0
+    )
+    ids = {model["id"] for model in json.loads(capsys.readouterr().out)}
+    assert "moonshot/kimi-k3@v1" in ids
+    assert "moonshot/kimi-k2@v1" in ids
+
+    assert main(["--db", database, "model", "add", "moonshot/kimi-k3"]) == 2
+    assert "already exists" in capsys.readouterr().err
+
+    assert main(["--db", database, "model", "add", "moonshot/kimi-k2@v1"]) == 2
+    assert "already registered" in capsys.readouterr().err
+
+    assert main(["--db", database, "model", "remove", "moonshot/kimi-k3"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            ["--db", database, "--json", "model", "list", "--provider", "moonshot"]
+        )
+        == 0
+    )
+    ids = {model["id"] for model in json.loads(capsys.readouterr().out)}
+    assert "moonshot/kimi-k3@v1" not in ids
+
+    assert main(["--db", database, "model", "remove", "moonshot/kimi-k3"]) == 2
+    assert "not found" in capsys.readouterr().err
+
+
+def test_cli_model_add_slashed_name_on_custom_endpoint(
+    home: Path, capsys, fake_server: str
+) -> None:
+    database = str(home / "slashed.db")
+    register_fake(database, fake_server, capsys)
+
+    assert (
+        main(
+            [
+                "--db", database, "model", "add",
+                "fake/giga-osa/deepseek-v4.1-flash-uncensored",
+                "--display-name", "Giga DeepSeek", "--context-limit", "64000",
+            ]
+        )
+        == 0
+    )
+    assert "added\tfake/giga-osa/deepseek-v4.1-flash-uncensored@v1" in (
+        capsys.readouterr().out
+    )
+
+    assert main(["--db", database, "--json", "model", "list"]) == 0
+    entries = json.loads(capsys.readouterr().out)
+    added = next(
+        entry
+        for entry in entries
+        if entry["id"] == "fake/giga-osa/deepseek-v4.1-flash-uncensored@v1"
+    )
+    assert added["provider_id"] == "fake"
+    assert added["context_limit"] == 64000
+    assert "tools" in added["capabilities"]

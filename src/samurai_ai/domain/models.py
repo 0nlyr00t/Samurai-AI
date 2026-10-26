@@ -6,7 +6,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _MODEL_ID = re.compile(
-    r"([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)/([A-Za-z0-9._:-]{1,128})@v([1-9][0-9]*)\Z"
+    r"([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)/([A-Za-z0-9._:/-]{1,128})@v([1-9][0-9]*)\Z"
 )
 _PROVIDER_ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 

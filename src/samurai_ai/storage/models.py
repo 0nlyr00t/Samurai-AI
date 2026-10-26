@@ -3,11 +3,20 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
-from samurai_ai.domain.models import ApiFamily, ProviderDefinition
+from samurai_ai.domain.models import (
+    ApiFamily,
+    ModelCapability,
+    ModelDefinition,
+    ProviderDefinition,
+)
 from samurai_ai.storage.database import Database
 
 
 class ModelEndpointConflictError(RuntimeError):
+    pass
+
+
+class CustomModelConflictError(RuntimeError):
     pass
 
 
@@ -80,4 +89,88 @@ class ModelEndpointRepository:
             secret_name=row["secret_name"],
             enabled=bool(row["enabled"]),
             local=False,
+        )
+
+
+class CustomModelRepository:
+    """Operator-registered model names layered on top of any provider.
+
+    Lets the operator whitelist new provider-side model names (for example a
+    freshly released model, or a name containing slashes like
+    ``giga-osa/deepseek-v4.1-flash-uncensored``) without a code change.
+    """
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+        self.database.initialize()
+
+    def add(self, model: ModelDefinition, created_by: str) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT id FROM custom_models WHERE id = ?", (model.id,)
+            ).fetchone()
+            if row is not None:
+                raise CustomModelConflictError(
+                    f"custom model already exists: {model.id}"
+                )
+            connection.execute(
+                """
+                INSERT INTO custom_models(
+                    id, provider_id, display_name, context_limit,
+                    max_output_tokens, capabilities, created_at, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    model.id,
+                    model.provider_id,
+                    model.display_name or model.id,
+                    model.context_limit,
+                    model.max_output_tokens,
+                    ",".join(sorted(cap.value for cap in model.capabilities)),
+                    datetime.now().astimezone().isoformat(),
+                    created_by,
+                ),
+            )
+
+    def get(self, model_id: str) -> ModelDefinition | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM custom_models WHERE id = ?", (model_id,)
+            ).fetchone()
+        return self._to_model(row) if row is not None else None
+
+    def list_all(self, provider_id: str | None = None) -> list[ModelDefinition]:
+        with self.database.connect() as connection:
+            if provider_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM custom_models ORDER BY id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM custom_models WHERE provider_id = ? ORDER BY id",
+                    (provider_id,),
+                ).fetchall()
+        return [self._to_model(row) for row in rows]
+
+    def delete(self, model_id: str) -> bool:
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM custom_models WHERE id = ?", (model_id,)
+            )
+            return cursor.rowcount == 1
+
+    @staticmethod
+    def _to_model(row: sqlite3.Row) -> ModelDefinition:
+        capabilities = frozenset(
+            ModelCapability(value)
+            for value in row["capabilities"].split(",")
+            if value
+        )
+        return ModelDefinition(
+            id=row["id"],
+            provider_id=row["provider_id"],
+            display_name=row["display_name"],
+            context_limit=row["context_limit"],
+            max_output_tokens=row["max_output_tokens"],
+            capabilities=capabilities,
         )

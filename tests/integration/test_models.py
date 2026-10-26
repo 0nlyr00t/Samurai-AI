@@ -27,7 +27,11 @@ from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.database import _MIGRATIONS, Database
 from samurai_ai.storage.kernel import KernelRepository
-from samurai_ai.storage.models import ModelEndpointRepository
+from samurai_ai.storage.models import (
+    CustomModelConflictError,
+    CustomModelRepository,
+    ModelEndpointRepository,
+)
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.vault import VaultRepository
@@ -159,7 +163,15 @@ def make_stack(
         VaultRepository(database), operations.repository, database_path.parent / "vault.key"
     )
     endpoints = ModelEndpointRepository(database)
-    models = ModelService(ModelRegistry(endpoints), vault, kernel, operations, endpoints)
+    custom_models = CustomModelRepository(database)
+    models = ModelService(
+        ModelRegistry(endpoints, custom_models=custom_models),
+        vault,
+        kernel,
+        operations,
+        endpoints,
+        custom_models=custom_models,
+    )
     return operations, kernel, models, vault
 
 
@@ -366,7 +378,7 @@ def test_migration_v6_to_v7_adds_model_endpoints(vault_env: Path) -> None:
         versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }
-        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+        assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
         connection.execute(
             """
             INSERT INTO model_endpoints(
@@ -383,3 +395,86 @@ def test_migration_v6_to_v7_adds_model_endpoints(vault_env: Path) -> None:
     endpoint = ModelEndpointRepository(Database(database_path)).get("legacy")
     assert endpoint is not None
     assert endpoint.enabled is True
+
+
+def test_custom_model_lifecycle(vault_env: Path) -> None:
+    _, _, models, _ = make_stack(vault_env / "custom-models.db")
+
+    added = models.add_model("moonshot/kimi-k3")
+    assert added.id == "moonshot/kimi-k3@v1"
+    assert ModelCapability.TOOLS in added.capabilities
+
+    model, provider = models.registry.get_model("moonshot/kimi-k3@v1")
+    assert provider.id == "moonshot"
+    assert model.context_limit == 32768
+    assert ModelCapability.TOOLS in model.capabilities
+    assert "moonshot/kimi-k3@v1" in {
+        entry.id for entry in models.list_models("moonshot")
+    }
+
+    with pytest.raises(CustomModelConflictError):
+        models.add_model("moonshot/kimi-k3@v1")
+    with pytest.raises(ModelError, match="already registered"):
+        models.add_model("moonshot/kimi-k2@v1")
+    with pytest.raises(ModelError, match="discovered at runtime"):
+        models.add_model("ollama/llama3.1:8b")
+    with pytest.raises(ModelNotFoundError):
+        models.add_model("no-such-provider/model@v1")
+
+    models.remove_model("moonshot/kimi-k3")
+    with pytest.raises(ModelNotFoundError):
+        models.registry.get_model("moonshot/kimi-k3@v1")
+    with pytest.raises(ModelNotFoundError):
+        models.remove_model("moonshot/kimi-k3")
+
+
+def test_custom_model_with_slashed_name(vault_env: Path) -> None:
+    _, _, models, _ = make_stack(vault_env / "slashed.db")
+    models.register_endpoint(
+        "giga", "http://127.0.0.1:9/osav1", None, display_name="Giga"
+    )
+
+    added = models.add_model(
+        "giga/giga-osa/deepseek-v4.1-flash-uncensored",
+        display_name="Giga DeepSeek",
+        context_limit=64000,
+    )
+    assert added.id == "giga/giga-osa/deepseek-v4.1-flash-uncensored@v1"
+    assert added.model_name == "giga-osa/deepseek-v4.1-flash-uncensored"
+    assert added.context_limit == 64000
+
+    model, provider = models.registry.get_model(
+        "giga/giga-osa/deepseek-v4.1-flash-uncensored@v1"
+    )
+    assert provider.id == "giga"
+    assert model.display_name == "Giga DeepSeek"
+    assert ModelCapability.TOOLS in model.capabilities
+
+
+def test_migration_15_applies(vault_env: Path) -> None:
+    database_path = vault_env / "migration15.db"
+    Database(database_path).initialize()
+    connection = sqlite3.connect(database_path)
+    try:
+        versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        assert 15 in versions
+        connection.execute(
+            """
+            INSERT INTO custom_models(
+                id, provider_id, display_name, context_limit, max_output_tokens,
+                capabilities, created_at, created_by
+            ) VALUES ('moonshot/kimi-k3@v1', 'moonshot', 'Kimi K3', 131072, 8192,
+                      'streaming,tools', '2026-01-01T00:00:00', 'test')
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    stored = CustomModelRepository(Database(database_path)).get("moonshot/kimi-k3@v1")
+    assert stored is not None
+    assert stored.capabilities == frozenset(
+        {ModelCapability.TOOLS, ModelCapability.STREAMING}
+    )

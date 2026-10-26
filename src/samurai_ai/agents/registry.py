@@ -1,8 +1,9 @@
 """Versioned static registry of LLM providers and models.
 
 Static, code-defined providers (OpenAI-compatible family) plus the local
-Ollama provider. Custom OpenAI-compatible endpoints registered by the
-operator via CLI are persisted in SQLite (migration v7) and merged here.
+Ollama provider. Custom OpenAI-compatible endpoints (migration v7) and
+operator-whitelisted custom model names (migration v15) registered via CLI
+are persisted in SQLite and merged here.
 Fail-closed: unknown provider or model ids raise ModelNotFoundError.
 """
 
@@ -16,7 +17,7 @@ from samurai_ai.domain.models import (
     ProviderDefinition,
     parse_model_id,
 )
-from samurai_ai.storage.models import ModelEndpointRepository
+from samurai_ai.storage.models import CustomModelRepository, ModelEndpointRepository
 
 STATIC_PROVIDERS: tuple[ProviderDefinition, ...] = (
     ProviderDefinition(
@@ -151,6 +152,16 @@ STATIC_MODELS: tuple[ModelDefinition, ...] = (
         cost_output_per_m=2.5,
     ),
     ModelDefinition(
+        id="moonshot/kimi-k2-thinking@v1",
+        provider_id="moonshot",
+        display_name="Kimi K2 Thinking",
+        context_limit=262144,
+        max_output_tokens=16384,
+        capabilities=frozenset({ModelCapability.TOOLS, ModelCapability.STREAMING}),
+        cost_input_per_m=0.6,
+        cost_output_per_m=2.5,
+    ),
+    ModelDefinition(
         id="mistral/mistral-large@v1",
         provider_id="mistral",
         display_name="Mistral Large",
@@ -231,8 +242,10 @@ class ModelRegistry:
         endpoints: ModelEndpointRepository | None = None,
         providers: tuple[ProviderDefinition, ...] | None = None,
         models: tuple[ModelDefinition, ...] | None = None,
+        custom_models: CustomModelRepository | None = None,
     ) -> None:
         self.endpoints = endpoints
+        self.custom_models = custom_models
         self.static_providers = providers if providers is not None else STATIC_PROVIDERS
         self.static_models = models if models is not None else STATIC_MODELS
 
@@ -251,6 +264,16 @@ class ModelRegistry:
         for model in self.static_models:
             if model.id == model_id:
                 return model, self.get_provider(model.provider_id)
+        if self.custom_models is not None:
+            custom = self.custom_models.get(model_id)
+            if custom is not None:
+                provider = self.get_provider(custom.provider_id)
+                return (
+                    custom.model_copy(
+                        update={"api_family": provider.api_family, "local": provider.local}
+                    ),
+                    provider,
+                )
         provider = self.get_provider(provider_id)
         if provider.api_family is ApiFamily.OLLAMA:
             raise ModelNotFoundError(
@@ -284,4 +307,12 @@ class ModelRegistry:
             for model in self.static_models
             if provider_id is None or model.provider_id == provider_id
         ]
+        if self.custom_models is not None:
+            for custom in self.custom_models.list_all(provider_id):
+                provider = self.get_provider(custom.provider_id)
+                models.append(
+                    custom.model_copy(
+                        update={"api_family": provider.api_family, "local": provider.local}
+                    )
+                )
         return models
