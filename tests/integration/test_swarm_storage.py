@@ -119,7 +119,7 @@ def test_migration_13_applies(tmp_path: Path) -> None:
             row["name"]
             for row in connection.execute("PRAGMA table_info(agent_runs)")
         }
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
     assert {"swarm_id", "specialization"} <= columns
 
 

@@ -33,7 +33,21 @@ def register_model_commands(
     register.add_argument("--secret-name", dest="secret_name")
     register.add_argument("--display-name", dest="display_name", default="")
 
-    remove = model_commands.add_parser("remove", help="Remove a custom endpoint")
+    add = model_commands.add_parser(
+        "add",
+        help="Whitelist a custom model name on a provider "
+        "(accepts names with slashes; @v1 is appended when omitted)",
+    )
+    add.add_argument("model_id")
+    add.add_argument("--display-name", dest="display_name", default="")
+    add.add_argument("--context-limit", dest="context_limit", type=int, default=32768)
+    add.add_argument(
+        "--max-output-tokens", dest="max_output_tokens", type=int, default=4096
+    )
+
+    remove = model_commands.add_parser(
+        "remove", help="Remove a custom endpoint or custom model (id with '/')"
+    )
     remove.add_argument("id")
 
     health = model_commands.add_parser("health", help="Check provider or model health")
@@ -115,7 +129,26 @@ def handle_model_command(args: argparse.Namespace, models: ModelService) -> int 
         else:
             print(f"registered\t{endpoint.id}\t{endpoint.base_url}")
         return 0
+    if args.model_command == "add":
+        model = models.add_model(
+            args.model_id,
+            display_name=args.display_name,
+            context_limit=args.context_limit,
+            max_output_tokens=args.max_output_tokens,
+        )
+        if args.json_output:
+            _print_json(model.model_dump(mode="json"))
+        else:
+            print(f"added\t{model.id}\tprovider={model.provider_id}")
+        return 0
     if args.model_command == "remove":
+        if "/" in args.id:
+            models.remove_model(args.id)
+            if args.json_output:
+                _print_json({"removed": args.id})
+            else:
+                print(f"removed\t{args.id}")
+            return 0
         models.remove_endpoint(args.id)
         if args.json_output:
             _print_json({"removed": args.id})

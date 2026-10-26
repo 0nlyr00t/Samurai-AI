@@ -97,7 +97,12 @@ from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
 from samurai_ai.storage.memory import MemoryConflictError, MemoryRepository
-from samurai_ai.storage.models import ModelEndpointRepository
+from samurai_ai.storage.models import (
+    CustomModelConflictError,
+    CustomModelRepository,
+    ModelEndpointConflictError,
+    ModelEndpointRepository,
+)
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.storage.planning import PlanningConflictError, PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookRepository
@@ -349,6 +354,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         MemoryError,
         MemoryNotFoundError,
         MemoryConflictError,
+        ModelEndpointConflictError,
+        CustomModelConflictError,
         SkillError,
         SkillNotFoundError,
         EvalError,
@@ -453,13 +460,15 @@ def _make_services(
     vault = VaultService(VaultRepository(database), operation_repository, vault_key_path())
     mcp = McpService(McpServerRepository(database))
     model_endpoints = ModelEndpointRepository(database)
+    custom_models = CustomModelRepository(database)
     models = ModelService(
-        ModelRegistry(model_endpoints),
+        ModelRegistry(model_endpoints, custom_models=custom_models),
         vault,
         kernel,
         operations,
         model_endpoints,
         recovery_repository,
+        custom_models=custom_models,
     )
     execution = ToolExecutionService(
         operations,

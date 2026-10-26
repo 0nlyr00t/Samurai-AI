@@ -33,6 +33,22 @@ def test_parse_model_id() -> None:
             parse_model_id(bad)
 
 
+def test_parse_model_id_with_slashed_model_name() -> None:
+    assert parse_model_id("provider/example-model@v1") == (
+        "provider",
+        "example-model",
+    )
+    assert parse_model_id("openrouter/anthropic/claude-sonnet-4@v1") == (
+        "openrouter",
+        "anthropic/claude-sonnet-4",
+    )
+    model = ModelDefinition(
+        id="provider/example-model@v1",
+        provider_id="provider",
+    )
+    assert model.model_name == "example-model"
+
+
 def test_static_registry_contents() -> None:
     registry = ModelRegistry()
     providers = {provider.id for provider in STATIC_PROVIDERS}

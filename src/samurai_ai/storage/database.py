@@ -626,6 +626,22 @@ ALTER TABLE agent_runs ADD COLUMN workspace TEXT;
 ALTER TABLE agent_runs ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';
 """
 
+_MIGRATION_15 = """
+CREATE TABLE IF NOT EXISTS custom_models (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    context_limit INTEGER NOT NULL,
+    max_output_tokens INTEGER NOT NULL,
+    capabilities TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS custom_models_provider_id
+ON custom_models(provider_id, id);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -641,6 +657,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (12, _MIGRATION_12),
     (13, _MIGRATION_13),
     (14, _MIGRATION_14),
+    (15, _MIGRATION_15),
 )
 
 
