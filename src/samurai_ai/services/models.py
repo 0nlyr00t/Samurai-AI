@@ -93,6 +93,17 @@ class ModelService:
     def list_models(self, provider_id: str | None = None) -> list[ModelDefinition]:
         return self.registry.list_models(provider_id)
 
+    def default_model(self) -> str | None:
+        if self.settings is None:
+            return None
+        return self.settings.get_setting("model.default")
+
+    def default_reasoning_effort(self) -> str | None:
+        if self.settings is None:
+            return None
+        value = self.settings.get_setting("model.reasoning_effort")
+        return value if value in ("off", "low", "medium", "high") else None
+
     def register_endpoint(
         self,
         endpoint_id: str,
@@ -184,6 +195,7 @@ class ModelService:
         prompt: str,
         *,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         approval_id: str | None = None,
         fallbacks: tuple[str, ...] = (),
         router: ModelRouter | None = None,
@@ -199,6 +211,7 @@ class ModelService:
             model_id=model.id,
             messages=(Message(role="user", content=prompt),),
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort or self.default_reasoning_effort(),
         )
 
         async def invoke(candidate_id: str) -> ChatResponse:
@@ -213,6 +226,7 @@ class ModelService:
                     messages=request.messages,
                     max_tokens=request.max_tokens,
                     temperature=request.temperature,
+                    reasoning_effort=request.reasoning_effort,
                 ),
             )
 

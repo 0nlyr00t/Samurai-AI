@@ -39,6 +39,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.test-cases": "/test-cases       Show planned test cases",
         "help.runbook": "/runbook          Show generated runbooks",
         "help.lang": "/lang [ru|en]     Show or change the interface language",
+        "help.model": "/model           Pick the default model and reasoning effort",
         "help.exit": "/exit             Close Samurai AI",
         "help.ctrl-o": "Ctrl-O            Toggle the event journal",
         "help.ctrl-c": "Ctrl-C            Close Samurai AI",
@@ -93,6 +94,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chooser.title": "Choose your language / Выберите язык",
         "chooser.english": "English",
         "chooser.russian": "Русский",
+        "model.picker-title": "Select model and reasoning",
+        "model.picker-models": "Model (from registry and provider APIs)",
+        "model.picker-reasoning": "Reasoning effort",
+        "model.picker-hint": "Arrows to move, Tab switches column, Enter applies, Esc cancels",
+        "model.selected": "default model: {model} | reasoning: {reasoning}",
+        "model.empty": "No models available; check provider health",
         "reconcile.report": (
             "actions-marked-unknown={actions} | tool-runs-marked-failed={runs} | "
             "resumable-tasks={tasks} | pending-approvals={approvals}"
@@ -136,6 +143,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.test-cases": "/test-cases       Показать запланированные test cases",
         "help.runbook": "/runbook          Показать сгенерированные runbook",
         "help.lang": "/lang [ru|en]     Показать или сменить язык интерфейса",
+        "help.model": "/model           Выбрать модель по умолчанию и уровень рассуждений",
         "help.exit": "/exit             Закрыть Samurai AI",
         "help.ctrl-o": "Ctrl-O            Переключить журнал событий",
         "help.ctrl-c": "Ctrl-C            Закрыть Samurai AI",
@@ -190,6 +198,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chooser.title": "Choose your language / Выберите язык",
         "chooser.english": "English",
         "chooser.russian": "Русский",
+        "model.picker-title": "Выбор модели и уровня рассуждений",
+        "model.picker-models": "Модель (из реестра и API провайдеров)",
+        "model.picker-reasoning": "Уровень рассуждений",
+        "model.picker-hint": (
+            "Стрелки — перемещение, Tab — другая колонка, "
+            "Enter — применить, Esc — отмена"
+        ),
+        "model.selected": "модель по умолчанию: {model} | рассуждения: {reasoning}",
+        "model.empty": "Нет доступных моделей; проверьте health провайдеров",
         "reconcile.report": (
             "отмечено-unknown={actions} | tool-runs-failed={runs} | "
             "возобновимые-задачи={tasks} | ожидающие-согласования={approvals}"
@@ -227,6 +244,7 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.test-cases",
     "help.runbook",
     "help.lang",
+    "help.model",
     "help.exit",
     "help.ctrl-o",
     "help.ctrl-c",

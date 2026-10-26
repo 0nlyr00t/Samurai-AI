@@ -250,7 +250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         planning_result = handle_planning_command(args, planning_service, export_service)
         if planning_result is not None:
             return planning_result
-        swarm_result = handle_swarm_command(args, swarm_service)
+        swarm_result = handle_swarm_command(args, swarm_service, model_service)
         if swarm_result is not None:
             return swarm_result
         memory_result = handle_memory_command(args, memory_service)
@@ -295,6 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             swarm_service.swarms,
             memory_service,
             skill_service,
+            model_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0

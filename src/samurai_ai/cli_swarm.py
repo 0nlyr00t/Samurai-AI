@@ -7,6 +7,7 @@ from typing import Any
 
 from samurai_ai.domain.kernel import ApprovalStatus
 from samurai_ai.domain.swarm import AgentSpecialization, SwarmError, SwarmRun
+from samurai_ai.services.models import ModelService
 from samurai_ai.services.swarm import SwarmService
 
 
@@ -73,7 +74,9 @@ def register_swarm_commands(
     show.add_argument("swarm_id")
 
 
-def handle_swarm_command(args: argparse.Namespace, swarms: SwarmService) -> int | None:
+def handle_swarm_command(
+    args: argparse.Namespace, swarms: SwarmService, models: ModelService
+) -> int | None:
     if args.command != "swarm":
         return None
     if args.swarm_command == "ready":
@@ -87,7 +90,15 @@ def handle_swarm_command(args: argparse.Namespace, swarms: SwarmService) -> int 
         return 0
     if args.swarm_command == "run":
         specializations = _parse_specs(args.specs)
-        route = [args.model_id, *args.fallbacks]
+        model_id = args.model_id or models.default_model()
+        if model_id is None:
+            print(
+                "error: no model selected; pass --model or pick a default "
+                "in the TUI via /model",
+                file=sys.stderr,
+            )
+            return 2
+        route = [model_id, *args.fallbacks]
         approval_id = args.approval_id
         if approval_id is None:
             approval = swarms.prepare_model_approval(args.operation_id, route)

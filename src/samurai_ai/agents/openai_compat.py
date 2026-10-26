@@ -55,6 +55,8 @@ def build_completion_payload(
         payload["temperature"] = request.temperature
     if request.response_format is not None:
         payload["response_format"] = request.response_format
+    if request.reasoning_effort and request.reasoning_effort != "off":
+        payload["reasoning_effort"] = request.reasoning_effort
     if request.tools:
         payload["tools"] = [
             {
