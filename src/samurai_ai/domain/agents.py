@@ -108,6 +108,8 @@ class AgentRun(BaseModel):
     depth: int = Field(default=0, ge=0)
     swarm_id: str | None = None
     specialization: AgentSpecialization = AgentSpecialization.GENERAL
+    workspace: str | None = None
+    skills: tuple[str, ...] = ()
     status: AgentRunStatus = AgentRunStatus.RUNNING
     model_route: tuple[str, ...] = ()
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

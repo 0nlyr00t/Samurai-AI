@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.playbooks import (
@@ -10,6 +10,7 @@ from samurai_ai.domain.playbooks import (
     AssetLedgerEntry,
     BountyProgramRules,
     FindingFingerprintRecord,
+    PlaybookTemplate,
 )
 from samurai_ai.storage.database import Database
 
@@ -216,6 +217,41 @@ class PlaybookRepository:
             category=row["category"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+    def add_custom_playbook(
+        self, template: PlaybookTemplate, sha256: str, created_by: str
+    ) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO custom_playbooks(name, title, sha256, data, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template.name,
+                    template.title,
+                    sha256,
+                    template.model_dump_json(),
+                    created_by,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+
+    def get_custom_playbook(self, name: str) -> PlaybookTemplate | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT data FROM custom_playbooks WHERE name = ?", (name,)
+            ).fetchone()
+        if row is None:
+            return None
+        return PlaybookTemplate.model_validate_json(row["data"])
+
+    def list_custom_playbooks(self) -> list[PlaybookTemplate]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT data FROM custom_playbooks ORDER BY name"
+            ).fetchall()
+        return [PlaybookTemplate.model_validate_json(row["data"]) for row in rows]
 
     @staticmethod
     def _append_event(connection: sqlite3.Connection, event: OperationEvent) -> None:

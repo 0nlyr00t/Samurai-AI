@@ -7,9 +7,10 @@ from textual.widgets import Input, RichLog, Static
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
+from samurai_ai.domain.memory import MemoryKind
 from samurai_ai.domain.operations import OperationEvent, OperationMode
 from samurai_ai.domain.planning import KillChainPhase, PlannedTest, Runbook
-from samurai_ai.domain.playbooks import AssetKind, AssetLedgerEntry
+from samurai_ai.domain.playbooks import AssetKind, AssetLedgerEntry, PlaybookTemplate
 from samurai_ai.domain.redteam import AttackStep, Debrief
 from samurai_ai.domain.reports import BountyReport, ReportFormat
 from samurai_ai.domain.scope import ScopeContract
@@ -17,6 +18,7 @@ from samurai_ai.domain.swarm import AgentSpecialization, SwarmRun
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
+from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService
@@ -24,18 +26,21 @@ from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
+from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
+from samurai_ai.storage.memory import MemoryRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.planning import PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
@@ -125,6 +130,17 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     agents.add(swarm_member)
     swarm_member.finish(AgentRunStatus.COMPLETED)
     agents.finish(swarm_member)
+    memory = CampaignMemoryService(MemoryRepository(database))
+    memory.add("tui-ws", "TUI methodology", kind=MemoryKind.METHODOLOGY)
+    skills = SkillService(SkillRepository(database))
+    skills.install("tui-skill", "TUI skill body", trusted=True)
+    custom_template = PlaybookTemplate(
+        name="tui-custom",
+        title="TUI custom playbook",
+        tasks=(PlanTask(id="solo", title="Solo task"),),
+        gates=(),
+    )
+    playbooks.playbooks.add_custom_playbook(custom_template, "ab" * 32, "operator")
     playbooks.playbooks.add_asset(
         AssetLedgerEntry(
             operation_id=operation.id, kind=AssetKind.DOMAIN, value="www.example.com"
@@ -202,7 +218,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     async def exercise() -> None:
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
-            playbooks, reports, ctf, redteam, planning, swarms, operation.id,
+            playbooks, reports, ctf, redteam, planning, swarms, memory, skills,
+            operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -242,6 +259,9 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     ("/agents", agent_run.id),
                     ("/swarm", swarm.id),
                     ("/swarm", swarm_member.id),
+                    ("/memory", "TUI methodology"),
+                    ("/skills", "tui-skill"),
+                    ("/playbooks", "tui-custom"),
                     ("/secrets", secret.id),
                     ("/assets", "www.example.com"),
                     ("/report", "findings=1"),

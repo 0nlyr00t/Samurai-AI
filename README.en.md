@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, and **Stage 5a — parallel specialized agents** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, and **Stage 5a/5b — parallel specialized agents, campaign memory, and custom playbooks/skills** are complete.
 
 Implemented:
 
@@ -59,15 +59,23 @@ Implemented:
   (prompt-level only; governance is identical), ready-task auto-selection,
   model approval preflight, a wall-time vs sequential-estimate report with
   speedup, SQLite v13, the `swarm ready/run/list/show` CLI and TUI `/swarm`;
+- campaign memory: workspace-scoped entries (methodology/decision/failure/note)
+  with retention and deletion, read-only for agents (a bounded redacted
+  digest in prompts, audited in agent.run.start), the `memory` CLI and
+  TUI `/memory`;
+- custom playbooks (JSON templates with structural validation, immutable
+  storage, `playbook install/use/list-custom`) and trusted versioned skills
+  (`--trusted` required, sha256 recorded, bounded injection into executor
+  prompts), TUI `/playbooks` and `/skills`, SQLite v14;
 - RU/EN first-run language selection and `/lang` switching;
-- SQLite migrations v1–v13, append-only events, and optimistic concurrency;
+- SQLite migrations v1–v14, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 481 unit/integration/CLI/TUI tests.
+- 506 unit/integration/CLI/TUI tests.
 
-Not implemented yet: campaign memory, custom playbooks, and CALDERA/VECTR
-integrations (Stage 5b+), the extended security tool set (pending a threat
-review), LLM streaming, full egress enforcement on Docker Desktop for Mac,
-and the standalone binary.
+Not implemented yet: CALDERA/VECTR integrations, headless mode, JSON events,
+CI/CD, and HTML/PDF reports (Stage 5c+), the extended security tool set
+(pending a threat review), LLM streaming, full egress enforcement on
+Docker Desktop for Mac, and the standalone binary.
 
 ## Development quick start
 

@@ -13,7 +13,7 @@ not implemented).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
 from samurai_ai.agents.blackboard import Blackboard, make_note_event
@@ -53,8 +53,10 @@ from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
+from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.skills import SkillService
 from samurai_ai.storage.agents import AgentRunRepository
 
 _T = TypeVar("_T")
@@ -89,6 +91,8 @@ class AgentOrchestrator:
         operations: OperationService,
         runs: AgentRunRepository,
         redactor: SecretRedactor | None = None,
+        memory: CampaignMemoryService | None = None,
+        skills: SkillService | None = None,
     ) -> None:
         self.models = models
         self.kernel = kernel
@@ -96,6 +100,8 @@ class AgentOrchestrator:
         self.operations = operations
         self.runs = runs
         self.redactor = redactor or SecretRedactor()
+        self.memory = memory
+        self.skills = skills
 
     def get_run(self, run_id: str) -> AgentRun:
         run = self.runs.get(run_id)
@@ -120,6 +126,8 @@ class AgentOrchestrator:
         created_by: str = "operator",
         specialization: AgentSpecialization = AgentSpecialization.GENERAL,
         swarm_id: str | None = None,
+        workspace: str | None = None,
+        skill_names: Sequence[str] = (),
     ) -> AgentRun:
         if not candidates:
             raise AgentError("agent run requires at least one model candidate")
@@ -150,6 +158,10 @@ class AgentOrchestrator:
                 model.id, ("structured-output", ModelCapability.TOOLS.value)
             )
 
+        extra_context, memory_entry_ids, skill_ids = self._resolve_context(
+            workspace, skill_names
+        )
+
         run = AgentRun(
             operation_id=operation_id,
             task_id=task_id,
@@ -157,6 +169,8 @@ class AgentOrchestrator:
             depth=depth,
             swarm_id=swarm_id,
             specialization=specialization,
+            workspace=workspace,
+            skills=tuple(skill_names),
             model_route=tuple(candidates),
             created_by=created_by,
         )
@@ -171,12 +185,18 @@ class AgentOrchestrator:
                 "depth": depth,
                 "specialization": specialization.value,
                 "swarm_id": swarm_id,
+                "workspace": workspace,
+                "skills": list(skill_names),
+                "memory_entry_ids": list(memory_entry_ids),
+                "skill_ids": list(skill_ids),
             },
         )
         del operation
         try:
-            steps = self._plan(operation_id, run, task.title, approval_id)
-            self._execute_steps(operation_id, run, steps[:max_steps], approval_id)
+            steps = self._plan(operation_id, run, task.title, approval_id, extra_context)
+            self._execute_steps(
+                operation_id, run, steps[:max_steps], approval_id, extra_context
+            )
             if run.status is AgentRunStatus.RUNNING:
                 run.finish(AgentRunStatus.COMPLETED)
         except BudgetExceededError as exc:
@@ -199,12 +219,42 @@ class AgentOrchestrator:
         )
         return run
 
+    def _resolve_context(
+        self, workspace: str | None, skill_names: Sequence[str]
+    ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        """Resolve memory digest and skill fragments before the run is recorded.
+
+        Fails fast (no run row, no events) when the workspace or a skill is
+        unavailable.
+        """
+        sections: list[str] = []
+        memory_entry_ids: tuple[str, ...] = ()
+        skill_ids: tuple[str, ...] = ()
+        if workspace is not None:
+            if self.memory is None:
+                raise AgentError("campaign memory is not configured")
+            digest, memory_entry_ids = self.memory.digest(workspace)
+            if digest:
+                sections.append(
+                    "Campaign memory (operator-curated, read-only):\n" + digest
+                )
+        if skill_names:
+            if self.skills is None:
+                raise AgentError("skills are not configured")
+            fragment, skill_ids = self.skills.prompt_fragment(skill_names)
+            if fragment:
+                sections.append(
+                    "Installed skills (trusted operator instructions):\n" + fragment
+                )
+        return "\n\n".join(sections), memory_entry_ids, skill_ids
+
     def _plan(
         self,
         operation_id: str,
         run: AgentRun,
         task_title: str,
         approval_id: str | None,
+        extra_context: str,
     ) -> tuple[str, ...]:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         context = self._blackboard_excerpt(blackboard, run.id)
@@ -213,6 +263,8 @@ class AgentOrchestrator:
             f"Task: {task_title}\n"
             f"Blackboard:\n{context or '(empty)'}"
         )
+        if extra_context:
+            prompt += f"\n\n{extra_context}"
         output = self._call_model(
             operation_id, run, prompt, parse_planner_output, approval_id
         )
@@ -229,12 +281,15 @@ class AgentOrchestrator:
         run: AgentRun,
         steps: tuple[str, ...],
         approval_id: str | None,
+        extra_context: str,
     ) -> None:
         consecutive_rejects = 0
         for index, step in enumerate(steps):
             if run.status is not AgentRunStatus.RUNNING:
                 return
-            commands = self._execute_step_prompt(operation_id, run, step, index, approval_id)
+            commands = self._execute_step_prompt(
+                operation_id, run, step, index, approval_id, extra_context
+            )
             for command in commands:
                 accepted = self._apply_command(operation_id, run, command)
                 if accepted:
@@ -256,6 +311,7 @@ class AgentOrchestrator:
         step: str,
         index: int,
         approval_id: str | None,
+        extra_context: str,
     ) -> tuple[AgentCommand, ...]:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         prompt = (
@@ -263,6 +319,8 @@ class AgentOrchestrator:
             f"Current step: {step}\n"
             f"Blackboard:\n{self._blackboard_excerpt(blackboard, run.id) or '(empty)'}"
         )
+        if extra_context:
+            prompt += f"\n\n{extra_context}"
         commands = self._call_model(
             operation_id, run, prompt, parse_executor_output, approval_id
         )

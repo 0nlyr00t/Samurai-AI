@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
@@ -10,7 +12,9 @@ from samurai_ai.domain.kernel import (
     Finding,
     FindingSeverity,
     FindingStatus,
+    GateStatus,
     OperationPlan,
+    TaskStatus,
 )
 from samurai_ai.domain.operations import OperationEvent, OperationMode
 from samurai_ai.domain.playbooks import (
@@ -23,6 +27,7 @@ from samurai_ai.domain.playbooks import (
     FindingFingerprintRecord,
     PlaybookError,
     PlaybookModeError,
+    PlaybookTemplate,
     bug_bounty_template,
     finding_fingerprint,
     normalize_asset_value,
@@ -118,6 +123,42 @@ class PlaybookService:
             created_by="operator",
         )
         return plan
+
+    def install_custom(self, path: Path, created_by: str = "operator") -> PlaybookTemplate:
+        raw = path.read_text(encoding="utf-8")
+        template = PlaybookTemplate.model_validate_json(raw)
+        # structural validation (unique ids, known dependencies, no cycles)
+        # lives in OperationPlan — reuse it before anything is stored
+        OperationPlan(
+            operation_id="install-validation",
+            title=template.title,
+            tasks=template.tasks,
+            gates=template.gates,
+        )
+        # custom templates always start from a clean state, whatever the file says
+        for task in template.tasks:
+            task.status = TaskStatus.PENDING
+        for gate in template.gates:
+            gate.status = GateStatus.PENDING
+        if self.playbooks.get_custom_playbook(template.name) is not None:
+            raise PlaybookError(
+                f"custom playbook {template.name!r} is already installed"
+            )
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        self.playbooks.add_custom_playbook(template, digest, created_by)
+        return template
+
+    def use_custom(self, operation_id: str, name: str) -> OperationPlan:
+        template = self.playbooks.get_custom_playbook(name)
+        if template is None:
+            raise PlaybookError(f"custom playbook not found: {name}")
+        self.operations.get(operation_id)
+        return self.kernel.create_plan(
+            operation_id, template.title, template.tasks, template.gates
+        )
+
+    def list_custom(self) -> list[PlaybookTemplate]:
+        return self.playbooks.list_custom_playbooks()
 
     def get_rules(self, operation_id: str) -> BountyProgramRules:
         self.operations.get(operation_id)

@@ -25,8 +25,8 @@ class AgentRunRepository:
                 INSERT INTO agent_runs(
                     id, operation_id, task_id, parent_run_id, depth, status,
                     model_route, created_at, created_by, finished_at,
-                    swarm_id, specialization
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    swarm_id, specialization, workspace, skills
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run.id,
@@ -41,6 +41,8 @@ class AgentRunRepository:
                     None,
                     run.swarm_id,
                     run.specialization.value,
+                    run.workspace,
+                    json.dumps(list(run.skills)),
                 ),
             )
 
@@ -104,6 +106,8 @@ class AgentRunRepository:
             depth=row["depth"],
             swarm_id=row["swarm_id"],
             specialization=AgentSpecialization(row["specialization"]),
+            workspace=row["workspace"],
+            skills=tuple(json.loads(row["skills"])),
             status=AgentRunStatus(row["status"]),
             model_route=tuple(json.loads(row["model_route"])),
             created_at=datetime.fromisoformat(row["created_at"]),

@@ -9,6 +9,7 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
+from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService
@@ -16,18 +17,21 @@ from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import SettingsService
+from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
+from samurai_ai.storage.memory import MemoryRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.planning import PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import LanguagePromptScreen, SamuraiApp
@@ -49,6 +53,8 @@ def make_stack(
     RedTeamService,
     PlanningService,
     SwarmRunRepository,
+    CampaignMemoryService,
+    SkillService,
 ]:
     database = Database(tmp_path / name)
     operation_repository = OperationRepository(database)
@@ -70,6 +76,8 @@ def make_stack(
     redteam = RedTeamService(service, kernel, RedTeamRepository(database))
     planning = PlanningService(service, kernel, PlanningRepository(database))
     swarms = SwarmRunRepository(database)
+    memory = CampaignMemoryService(MemoryRepository(database))
+    skills = SkillService(SkillRepository(database))
     return (
         service,
         kernel,
@@ -84,6 +92,8 @@ def make_stack(
         redteam,
         planning,
         swarms,
+        memory,
+        skills,
     )
 
 

@@ -558,6 +558,74 @@ CREATE INDEX IF NOT EXISTS agent_runs_swarm_id
 ON agent_runs(swarm_id);
 """
 
+_MIGRATION_14 = """
+CREATE TABLE IF NOT EXISTS campaign_memory (
+    id TEXT PRIMARY KEY,
+    workspace TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    tags TEXT NOT NULL,
+    retention_days INTEGER,
+    version INTEGER NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS campaign_memory_workspace
+ON campaign_memory(workspace, updated_at, id);
+
+CREATE TABLE IF NOT EXISTS custom_playbooks (
+    name TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS custom_playbooks_no_update
+BEFORE UPDATE ON custom_playbooks
+BEGIN
+    SELECT RAISE(ABORT, 'custom playbooks are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS custom_playbooks_no_delete
+BEFORE DELETE ON custom_playbooks
+BEGIN
+    SELECT RAISE(ABORT, 'custom playbooks are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS skills (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    trusted INTEGER NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(name, version)
+);
+
+CREATE TRIGGER IF NOT EXISTS skills_no_update
+BEFORE UPDATE ON skills
+BEGIN
+    SELECT RAISE(ABORT, 'skills are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS skills_no_delete
+BEFORE DELETE ON skills
+BEGIN
+    SELECT RAISE(ABORT, 'skills are immutable');
+END;
+
+ALTER TABLE agent_runs ADD COLUMN workspace TEXT;
+
+ALTER TABLE agent_runs ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -572,6 +640,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (11, _MIGRATION_11),
     (12, _MIGRATION_12),
     (13, _MIGRATION_13),
+    (14, _MIGRATION_14),
 )
 
 

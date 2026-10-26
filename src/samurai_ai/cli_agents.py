@@ -31,6 +31,20 @@ def register_agent_commands(
     )
     run.add_argument("--max-steps", dest="max_steps", type=int, default=8)
     run.add_argument("--approval-id", dest="approval_id")
+    run.add_argument(
+        "--workspace",
+        dest="workspace",
+        default=None,
+        help="campaign memory workspace to inject (read-only)",
+    )
+    run.add_argument(
+        "--skill",
+        action="append",
+        dest="skills",
+        default=[],
+        metavar="SKILL_NAME",
+        help="installed skill to inject into the executor prompt; repeatable",
+    )
 
     list_command = agent_commands.add_parser("list", help="List agent runs")
     list_command.add_argument("operation_id")
@@ -52,6 +66,8 @@ def handle_agent_command(
                 [args.model_id, *args.fallbacks],
                 max_steps=args.max_steps,
                 approval_id=args.approval_id,
+                workspace=args.workspace,
+                skill_names=tuple(args.skills),
             )
         except ApprovalRequiredError as exc:
             print(

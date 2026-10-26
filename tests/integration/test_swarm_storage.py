@@ -119,7 +119,7 @@ def test_migration_13_applies(tmp_path: Path) -> None:
             row["name"]
             for row in connection.execute("PRAGMA table_info(agent_runs)")
         }
-    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+    assert versions == {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
     assert {"swarm_id", "specialization"} <= columns
 
 
@@ -128,7 +128,7 @@ def test_migration_13_from_v12_database(tmp_path: Path) -> None:
     database = Database(database_path)
     database.initialize()
     with database.connect() as connection:
-        connection.execute("DELETE FROM schema_migrations WHERE version = 13")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 13")
         connection.execute("DROP TABLE swarm_runs")
         connection.execute(
             """
@@ -149,7 +149,7 @@ def test_migration_13_from_v12_database(tmp_path: Path) -> None:
         swarm_tables = connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='swarm_runs'"
         ).fetchall()
-    assert {"swarm_id", "specialization"} <= columns
+    assert {"swarm_id", "specialization", "workspace", "skills"} <= columns
     assert len(swarm_tables) == 1
     # существующие строки сохраняют дефолты
     operation_id = make_operation(database_path)
@@ -158,6 +158,8 @@ def test_migration_13_from_v12_database(tmp_path: Path) -> None:
     with sqlite3.connect(database_path) as raw:
         raw.execute("PRAGMA foreign_keys = ON")
         row = raw.execute(
-            "SELECT swarm_id, specialization FROM agent_runs WHERE id = ?", (legacy.id,)
+            "SELECT swarm_id, specialization, workspace, skills "
+            "FROM agent_runs WHERE id = ?",
+            (legacy.id,),
         ).fetchone()
-    assert row == (None, "general")
+    assert row == (None, "general", None, "[]")
