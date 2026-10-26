@@ -13,6 +13,7 @@ from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
+from samurai_ai.cli_memory import handle_memory_command, register_memory_commands
 from samurai_ai.cli_models import handle_model_command, register_model_commands
 from samurai_ai.cli_planning import handle_planning_command, register_planning_commands
 from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_commands
@@ -20,6 +21,7 @@ from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_c
 from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
 from samurai_ai.cli_reports import handle_report_command, register_report_commands
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
+from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
@@ -33,6 +35,7 @@ from samurai_ai.domain.ctf import (
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.mcp import McpServerNotFoundError
+from samurai_ai.domain.memory import MemoryError, MemoryNotFoundError
 from samurai_ai.domain.models import ModelError, ModelNotFoundError
 from samurai_ai.domain.operations import (
     Operation,
@@ -57,6 +60,7 @@ from samurai_ai.domain.redteam import (
 )
 from samurai_ai.domain.reports import ReportError, ReportNotFoundError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
+from samurai_ai.domain.skills import SkillError, SkillNotFoundError
 from samurai_ai.domain.swarm import SwarmError, SwarmNotFoundError
 from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
@@ -64,6 +68,7 @@ from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
+from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.planning import PlanningService
@@ -77,6 +82,7 @@ from samurai_ai.services.recovery import (
 from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
+from samurai_ai.services.skills import SkillService
 from samurai_ai.services.swarm import SwarmService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
@@ -85,6 +91,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
+from samurai_ai.storage.memory import MemoryConflictError, MemoryRepository
 from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.storage.planning import PlanningConflictError, PlanningRepository
@@ -92,6 +99,7 @@ from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookReposito
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamConflictError, RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
@@ -152,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_redteam_commands(subcommands)
     register_planning_commands(subcommands)
     register_swarm_commands(subcommands)
+    register_memory_commands(subcommands)
+    register_skill_commands(subcommands)
     return parser
 
 
@@ -173,6 +183,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         redteam_service,
         planning_service,
         swarm_service,
+        memory_service,
+        skill_service,
     ) = _make_services(args.db)
 
     try:
@@ -225,6 +237,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         swarm_result = handle_swarm_command(args, swarm_service)
         if swarm_result is not None:
             return swarm_result
+        memory_result = handle_memory_command(args, memory_service)
+        if memory_result is not None:
+            return memory_result
+        skill_result = handle_skill_command(args, skill_service)
+        if skill_result is not None:
+            return skill_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service)
         if args.command == "scope":
@@ -250,6 +268,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             redteam_service,
             planning_service,
             swarm_service.swarms,
+            memory_service,
+            skill_service,
             getattr(args, "operation_id", None),
         ).run()
         return 0
@@ -300,6 +320,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         PlanningConflictError,
         SwarmError,
         SwarmNotFoundError,
+        MemoryError,
+        MemoryNotFoundError,
+        MemoryConflictError,
+        SkillError,
+        SkillNotFoundError,
         ValidationError,
         json.JSONDecodeError,
         OSError,
@@ -376,6 +401,8 @@ def _make_services(
     RedTeamService,
     PlanningService,
     SwarmService,
+    CampaignMemoryService,
+    SkillService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -404,8 +431,16 @@ def _make_services(
         registry=default_registry(mcp.resolver()),
         vault=vault,
     )
+    memory_service = CampaignMemoryService(MemoryRepository(database), vault)
+    skill_service = SkillService(SkillRepository(database), vault)
     agents = AgentOrchestrator(
-        models, kernel, execution, operations, AgentRunRepository(database)
+        models,
+        kernel,
+        execution,
+        operations,
+        AgentRunRepository(database),
+        memory=memory_service,
+        skills=skill_service,
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
     reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)
@@ -429,6 +464,8 @@ def _make_services(
         redteam,
         planning,
         swarm,
+        memory_service,
+        skill_service,
     )
 
 

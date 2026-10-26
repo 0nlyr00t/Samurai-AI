@@ -97,6 +97,8 @@ class SwarmService:
         specializations: dict[str, AgentSpecialization] | None = None,
         approval_id: str | None = None,
         created_by: str = "operator",
+        workspace: str | None = None,
+        skill_names: Sequence[str] = (),
     ) -> SwarmRun:
         if not route:
             raise SwarmError("swarm requires at least one model candidate")
@@ -133,6 +135,8 @@ class SwarmService:
                 "specializations": {
                     task_id: spec.value for task_id, spec in sorted(specs.items())
                 },
+                "workspace": workspace,
+                "skills": list(skill_names),
             },
         )
         try:
@@ -154,6 +158,8 @@ class SwarmService:
                     specs.get(task.id, AgentSpecialization.GENERAL),
                     approval_id,
                     created_by,
+                    workspace,
+                    tuple(skill_names),
                 )
                 for task in selected
             }
@@ -248,6 +254,8 @@ class SwarmService:
         specialization: AgentSpecialization,
         approval_id: str | None,
         created_by: str,
+        workspace: str | None,
+        skill_names: tuple[str, ...],
     ) -> AgentRunStatus:
         try:
             run = self.orchestrator.run_task(
@@ -258,6 +266,8 @@ class SwarmService:
                 created_by=created_by,
                 specialization=specialization,
                 swarm_id=swarm_id,
+                workspace=workspace,
+                skill_names=skill_names,
             )
         except Exception as exc:
             self._append(

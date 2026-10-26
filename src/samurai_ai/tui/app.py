@@ -10,6 +10,7 @@ from samurai_ai.i18n import Translator
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
+from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService
@@ -17,6 +18,7 @@ from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
+from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
@@ -119,6 +121,8 @@ class SamuraiApp(App[None]):
         redteam: RedTeamService,
         planning: PlanningService,
         swarms: SwarmRunRepository,
+        memory: CampaignMemoryService,
+        skills: SkillService,
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -135,6 +139,8 @@ class SamuraiApp(App[None]):
         self.redteam = redteam
         self.planning = planning
         self.swarms = swarms
+        self.memory = memory
+        self.skills = skills
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -249,6 +255,15 @@ class SamuraiApp(App[None]):
             return
         if name == "/swarm":
             self._show_swarms()
+            return
+        if name == "/memory":
+            self._show_memory(argument.strip())
+            return
+        if name == "/skills":
+            self._show_skills()
+            return
+        if name == "/playbooks":
+            self._show_custom_playbooks()
             return
         if name == "/secrets":
             self._show_secrets()
@@ -531,6 +546,39 @@ class SamuraiApp(App[None]):
                     f"  [member] {member.task_id} | {member.id} | {member.status.value} | "
                     f"{member.specialization.value}"
                 )
+
+    def _show_memory(self, workspace: str) -> None:
+        journal = self.query_one("#journal", RichLog)
+        entries = self.memory.list_entries(workspace or None)
+        if not entries:
+            journal.write("[memory] " + self.translator.t("memory.empty"))
+            return
+        for entry in entries:
+            journal.write(
+                f"[memory] {entry.id} | {entry.workspace} | {entry.kind.value} | "
+                f"{entry.title}"
+            )
+
+    def _show_skills(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        installed = self.skills.list_skills()
+        if not installed:
+            journal.write("[skills] " + self.translator.t("skills.empty"))
+            return
+        for skill in installed:
+            journal.write(f"[skill] {skill.name} | v{skill.version}")
+
+    def _show_custom_playbooks(self) -> None:
+        journal = self.query_one("#journal", RichLog)
+        templates = self.playbooks.list_custom()
+        if not templates:
+            journal.write("[playbooks] " + self.translator.t("playbooks.custom-empty"))
+            return
+        for template in templates:
+            journal.write(
+                f"[playbook] {template.name} | {template.title} | "
+                f"tasks={len(template.tasks)} gates={len(template.gates)}"
+            )
 
     def _show_secrets(self) -> None:
         journal = self.query_one("#journal", RichLog)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime
+from pathlib import Path
 
 from samurai_ai.domain.kernel import FindingSeverity
 from samurai_ai.domain.playbooks import AssetKind
@@ -30,6 +31,16 @@ def register_playbook_commands(
     show.add_argument("operation_id")
     summary = playbook_commands.add_parser("summary", help="Show playbook summary")
     summary.add_argument("operation_id")
+    install = playbook_commands.add_parser(
+        "install", help="Install a custom playbook template from JSON"
+    )
+    install.add_argument("playbook_file", type=Path)
+    use = playbook_commands.add_parser(
+        "use", help="Create the operation plan from an installed custom playbook"
+    )
+    use.add_argument("operation_id")
+    use.add_argument("name")
+    playbook_commands.add_parser("list-custom", help="List installed custom playbooks")
 
     asset = subcommands.add_parser("asset", help="Manage the bug bounty asset ledger")
     asset_commands = asset.add_subparsers(dest="asset_command", required=True)
@@ -102,6 +113,38 @@ def _handle_playbook(args: argparse.Namespace, playbooks: PlaybookService) -> in
                 print(f"task\t{task.id}\t{task.risk_class.value}\t{task.title}")
             for gate in plan.gates:
                 print(f"gate\t{gate.id}\t{gate.name}")
+        return 0
+    if args.playbook_command == "install":
+        template = playbooks.install_custom(args.playbook_file)
+        if args.json_output:
+            _print_json(template.model_dump(mode="json"))
+        else:
+            print(
+                f"installed custom playbook {template.name}: "
+                f"{len(template.tasks)} tasks, {len(template.gates)} gates"
+            )
+        return 0
+    if args.playbook_command == "use":
+        plan = playbooks.use_custom(args.operation_id, args.name)
+        if args.json_output:
+            _print_json(plan.model_dump(mode="json"))
+        else:
+            print(f"created plan {plan.id} from custom playbook {args.name}")
+            for task in plan.tasks:
+                print(f"task\t{task.id}\t{task.risk_class.value}\t{task.title}")
+            for gate in plan.gates:
+                print(f"gate\t{gate.id}\t{gate.name}")
+        return 0
+    if args.playbook_command == "list-custom":
+        templates = playbooks.list_custom()
+        if args.json_output:
+            _print_json([template.model_dump(mode="json") for template in templates])
+        else:
+            for template in templates:
+                print(
+                    f"{template.name}\t{template.title}\t"
+                    f"tasks={len(template.tasks)}\tgates={len(template.gates)}"
+                )
         return 0
     if args.playbook_command == "show":
         rules = playbooks.get_rules(args.operation_id)

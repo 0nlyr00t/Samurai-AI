@@ -49,6 +49,20 @@ def register_swarm_commands(
         help="Member specialization (general|recon|testing|analysis); repeatable",
     )
     run.add_argument("--approval-id", dest="approval_id")
+    run.add_argument(
+        "--workspace",
+        dest="workspace",
+        default=None,
+        help="campaign memory workspace to inject into all members (read-only)",
+    )
+    run.add_argument(
+        "--skill",
+        action="append",
+        dest="skills",
+        default=[],
+        metavar="SKILL_NAME",
+        help="installed skill to inject into member prompts; repeatable",
+    )
 
     list_command = swarm_commands.add_parser("list", help="List swarms of an operation")
     list_command.add_argument("operation_id")
@@ -93,6 +107,8 @@ def handle_swarm_command(args: argparse.Namespace, swarms: SwarmService) -> int 
             workers=args.workers,
             specializations=specializations,
             approval_id=approval_id,
+            workspace=args.workspace,
+            skill_names=tuple(args.skills),
         )
         if args.json_output:
             _print_json(swarms.report(swarm.id))
