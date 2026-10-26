@@ -36,5 +36,8 @@ jobs:
         run: uv run pytest -q
         # opt-in suites stay local: SAMURAI_TEST_DOCKER / SAMURAI_TEST_OLLAMA unset
 
+      - name: Eval smoke suite
+        run: uv run samurai eval run evals/smoke.json --out eval-report.json
+
       - name: Package build
         run: uv build

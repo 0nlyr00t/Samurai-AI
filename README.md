@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks** и **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами**.
 
 Уже реализовано:
 
@@ -70,10 +70,15 @@ Samurai AI — local-first TUI harness для авторизованных Red T
   и VECTR export (`vectr-campaign@v1` JSON) с redaction и sha256 manifest;
 - HTML bug bounty report и self-contained read-only HTML dossier операции
   (`operation export --format html`) с escaping и redaction;
+- evaluation harness (Stage 6a): декларативные JSON-сьюты сценариев на
+  детерминированном scripted provider, метрики solve/validation rate, cost,
+  wall time, interventions, invalid actions и false positives из журнала
+  событий, сравнение с baseline для регрессий (`eval run`, `eval compare`),
+  smoke-сьют `evals/smoke.json` в CI;
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v14, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 514 unit/integration/CLI/TUI tests.
+- 535 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), расширенный набор security tools (после
