@@ -648,6 +648,17 @@ class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
+    def backup(self, destination: str | Path) -> Path:
+        target = Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as source:
+            target_connection = sqlite3.connect(target)
+            try:
+                source.backup(target_connection)
+            finally:
+                target_connection.close()
+        return target
+
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:

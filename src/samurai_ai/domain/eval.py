@@ -33,6 +33,21 @@ class EvalTask(BaseModel):
     risk_class: RiskClass = RiskClass.R1
 
 
+class EvalFaultMode(StrEnum):
+    HTTP_ERROR = "http_error"
+    MALFORMED_JSON = "malformed_json"
+    EMPTY_BODY = "empty_body"
+    CONNECTION_RESET = "connection_reset"
+
+
+class EvalProviderFault(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    mode: EvalFaultMode
+    status: int = Field(default=500, ge=400, le=599)
+    after_calls: int = Field(default=0, ge=0)
+
+
 class EvalProviderScript(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -40,6 +55,7 @@ class EvalProviderScript(BaseModel):
     latency_ms: int = Field(default=0, ge=0)
     prompt_tokens: int = Field(default=40, ge=0)
     completion_tokens: int = Field(default=8, ge=0)
+    fault: EvalProviderFault | None = None
 
 
 class EvalExpectations(BaseModel):
