@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates**, **Stage 6b — fault injection, prompt-injection containment, soak, and migration/backup/restore suites**, and **Stage 6c — the standalone binary, reproducible builds, signed releases, and the compatibility policy (`md/compatibility.md`)** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates**, **Stage 6b — fault injection, prompt-injection containment, soak, and migration/backup/restore suites**, and **Stage 6c — the standalone binary, reproducible builds, signed releases, and the compatibility policy (`md/compatibility.md`)**, and **Stage 7 (wave 1) — the governed `recon.httpx-probe` and `scan.nuclei` security tool adapters per the threat review** are complete.
 
 Implemented:
 
@@ -83,12 +83,12 @@ Implemented:
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v14, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 551 unit/integration/CLI/TUI tests.
+- 560 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
-integrations (export-only), the security tool adapters from
-`md/threat-review-security-tools.md` (review passed, implementation is the
-next stage), LLM streaming, full egress enforcement on Docker Desktop
+integrations (export-only), wave-2 security tools (subfinder/nmap/ffuf —
+technical blockers documented in `md/threat-review-security-tools.md`),
+LLM streaming, full egress enforcement on Docker Desktop
 for Mac, and OS package installers (a bare standalone binary is available).
 
 ## Development quick start

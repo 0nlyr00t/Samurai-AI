@@ -97,15 +97,15 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 
 | Инструмент | Решение | Risk | Сеть | Обязательные контроли |
 |---|---|---|---|---|
-| httpx (probe) | dedicated adapter | R2 | scoped egress | target через scope.check; флаги из enum; JSON output; rate cap |
+| httpx (probe) | **реализован** (`recon.httpx-probe`) | R2 | scoped egress | target через scope.evaluate; флаги из enum; JSON output; rate cap |
 | dnsx | dedicated adapter | R2 | scoped egress | как у httpx; resolver pinned через proxy |
-| subfinder | dedicated adapter | R2 | scoped egress | passive-only флаги зашиты; API keys из vault; JSON output |
+| subfinder | defer (волна 2) | — | — | DNS-over-UDP не проходит через CONNECT-proxy; passive API-источники работают, но нужен env-secret канал для API keys |
 | amass | defer | — | — | перекрывается subfinder; вернуться при необходимости |
-| nmap | dedicated adapter | R3 | scoped egress | profile enum (`fast`/`standard`, зашитые `-T`/rate cap); без `--script vuln/exploit` на первом этапе; XML output парсится |
+| nmap | defer (блокер) | — | — | raw TCP/SYN сканер архитектурно несовместим с HTTP CONNECT egress proxy; ждёт TCP-level enforcement (Linux internal network harness) |
 | naabu | defer | — | — | перекрывается nmap profile; SYN-scan требует raw sockets — отдельный разговор про capabilities контейнера |
-| ffuf | dedicated adapter | R3 | scoped egress | wordlist из bundled манифеста (id, не path); rate/threads зашиты; JSON output |
+| ffuf | defer | — | — | нет официального контейнерного образа (supply chain не проходит pinned-digest критерий) |
 | gobuster | defer | — | — | перекрывается ffuf |
-| nuclei | dedicated adapter | R3 | scoped egress | templates из образа с sha256-манифестом; `-disable-update-check` зашит; severity enum; без `-headless`/fuzzing-шаблонов на первом этапе |
+| nuclei | **реализован** (`scan.nuclei`) | R3 | scoped egress | templates из образа; `-disable-update-check` зашит; severity enum; без headless/fuzzing-шаблонов |
 | nikto | defer | — | — | перекрывается nuclei; высокий FP-rate |
 | sqlmap | **reject на текущем governance** | R4 | — | активная эксплуатация БД; требует ROE-binding (red-team операция с approved ROE) — вернуться после появления ROE-gated execution |
 | gowitness | sandbox adapter | R2 | scoped egress | скриншоты в sandbox.default-профиле (без сети наружу мимо proxy); output — файлы-артефакты |
@@ -117,9 +117,9 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 artifact; версия инструмента и digest образа в evidence; секреты только
 vault placeholders.
 
-## 4. Appendix — спецификации первых адаптеров (готово к реализации)
+## 4. Appendix — спецификации адаптеров
 
-### `recon.httpx_probe` v1 (R2, scoped egress)
+### `recon.httpx-probe` v1 (R2, scoped egress) — реализован
 
 - params: `targets: array<string>` (1..50, каждый — scope.check),
   `profile: enum [headers, tech, full]`, `timeout_seconds` (≤60).
@@ -128,7 +128,7 @@ vault placeholders.
 - output: NDJSON → структура (host, status, title, tech[]); raw в артефакт
   (≤256KB).
 
-### `recon.subfinder_passive` v1 (R2, scoped egress)
+### `recon.subfinder_passive` v1 (R2, scoped egress) — волна 2 (ждёт env-secret канал)
 
 - params: `domain: string` (scope.check), `sources: array<enum>`
   (бесплатные без ключей по умолчанию), опционально `key_ref: string` —
@@ -138,14 +138,14 @@ vault placeholders.
 - output: список доменов → candidates для asset ledger (через
   `asset add`, не прямая запись).
 
-### `scan.nmap` v1 (R3, scoped egress, approval обязателен)
+### `scan.nmap` v1 (R3) — deferred: raw TCP/SYN несовместим с CONNECT-proxy
 
 - params: `targets` (1..10, scope.check), `profile: enum [fast, standard]`
   → `-F -T3` / `-sV -T3 --max-rate 300`, `ports: string` (regex
   `^\d+(-\d+)?(,\d+(-\d+)?)*$`).
 - output: `-oX -` → парсинг портов; raw XML в артефакт.
 
-### `scan.nuclei` v1 (R3, scoped egress, approval обязателен)
+### `scan.nuclei` v1 (R3, scoped egress, approval обязателен) — реализован
 
 - params: `targets` (1..10, scope.check), `severity: array<enum
   [info,low,medium,high,critical]>`, `template_set: enum [cves, exposures,
@@ -155,7 +155,7 @@ vault placeholders.
 - output: JSONL → findings candidates (через `finding propose` с dedup),
   raw в артефакт.
 
-### `fuzz.ffuf` v1 (R3, scoped egress, approval обязателен)
+### `fuzz.ffuf` v1 (R3) — deferred: нет официального образа (supply chain)
 
 - params: `target` (scope.check, URL с плейсхолдером FUZZ), `wordlist:
   enum` (bundled: `common`, `raft-small`, `params`), `extensions`,
