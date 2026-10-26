@@ -162,6 +162,7 @@ class RedTeamService:
         detection_criteria: str = "",
         depends_on: tuple[str, ...] = (),
         notes: str = "",
+        tactic: str | None = None,
     ) -> AttackStep:
         self.operations.get(operation_id)
         existing = {step.id for step in self.redteam.list_steps(operation_id)}
@@ -174,6 +175,7 @@ class RedTeamService:
             operation_id=operation_id,
             name=name,
             technique_id=technique_id,
+            tactic=tactic,
             expected_telemetry=expected_telemetry,
             detection_criteria=detection_criteria,
             depends_on=depends_on,

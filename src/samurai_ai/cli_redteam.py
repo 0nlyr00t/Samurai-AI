@@ -4,8 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
+from samurai_ai.domain.attack import ATTACK_TACTICS
 from samurai_ai.domain.redteam import AttackStepStatus, DetectionStatus
 from samurai_ai.domain.reports import ReportFormat
+from samurai_ai.services.exports import IntegrationExportService
 from samurai_ai.services.redteam import RedTeamService
 
 
@@ -37,6 +39,15 @@ def register_redteam_commands(
     step_add.add_argument("--detection-criteria", default="")
     step_add.add_argument("--depends-on", default="", help="comma-separated step ids")
     step_add.add_argument("--notes", default="")
+    step_add.add_argument(
+        "--tactic", default=None, choices=list(ATTACK_TACTICS),
+        help="ATT&CK tactic for the step",
+    )
+    step_export = path_commands.add_parser(
+        "export-caldera", help="Export executed steps as a CALDERA adversary pack"
+    )
+    step_export.add_argument("operation_id")
+    step_export.add_argument("--dest", type=Path, required=True)
     step_list = path_commands.add_parser("list", help="List attack steps")
     step_list.add_argument("operation_id")
     step_list.add_argument(
@@ -116,11 +127,15 @@ def register_redteam_commands(
     debrief_export.add_argument("dest", type=Path)
 
 
-def handle_redteam_command(args: argparse.Namespace, redteam: RedTeamService) -> int | None:
+def handle_redteam_command(
+    args: argparse.Namespace,
+    redteam: RedTeamService,
+    exports: IntegrationExportService,
+) -> int | None:
     if args.command == "roe":
         return _handle_roe(args, redteam)
     if args.command == "attack-path":
-        return _handle_attack_path(args, redteam)
+        return _handle_attack_path(args, redteam, exports)
     if args.command == "checkpoint":
         return _handle_checkpoint(args, redteam)
     if args.command == "debrief":
@@ -154,7 +169,11 @@ def _handle_roe(args: argparse.Namespace, redteam: RedTeamService) -> int:
     return 0
 
 
-def _handle_attack_path(args: argparse.Namespace, redteam: RedTeamService) -> int:
+def _handle_attack_path(
+    args: argparse.Namespace,
+    redteam: RedTeamService,
+    exports: IntegrationExportService,
+) -> int:
     if args.attack_path_command == "add":
         step = redteam.add_step(
             args.operation_id,
@@ -166,8 +185,17 @@ def _handle_attack_path(args: argparse.Namespace, redteam: RedTeamService) -> in
                 item.strip() for item in args.depends_on.split(",") if item.strip()
             ),
             notes=args.notes,
+            tactic=args.tactic,
         )
         _emit(step, args.json_output)
+        return 0
+    if args.attack_path_command == "export-caldera":
+        result = exports.export_caldera(args.operation_id, args.dest)
+        if args.json_output:
+            _print_json(result)
+        else:
+            for file in result["files"]:
+                print(f"{file['path']}\tsha256={file['sha256'][:16]}…")
         return 0
     if args.attack_path_command == "list":
         status = AttackStepStatus(args.status) if args.status else None

@@ -26,6 +26,7 @@ class ReportNotFoundError(LookupError):
 class ReportFormat(StrEnum):
     MARKDOWN = "markdown"
     JSON = "json"
+    HTML = "html"
 
 
 class ManifestFile(BaseModel):

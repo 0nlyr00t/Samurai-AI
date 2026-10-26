@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import shutil
 from pathlib import Path
@@ -68,13 +69,18 @@ class ReportService:
         redactor = self._build_redactor(operation_id)
         if format is ReportFormat.JSON:
             content = self._render_json(operation, findings, assets)
+        elif format is ReportFormat.HTML:
+            content = self._render_html(operation, findings, assets)
         else:
             content = self._render_markdown(operation, findings, assets)
         redacted = redactor.redact(content).text
 
         data = redacted.encode("utf-8")
         report_id = f"rep_{uuid4().hex[:12]}"
-        suffix = "json" if format is ReportFormat.JSON else "md"
+        suffix = {
+            ReportFormat.JSON: "json",
+            ReportFormat.HTML: "html",
+        }.get(format, "md")
         report = BountyReport(
             id=report_id,
             operation_id=operation_id,
@@ -270,6 +276,78 @@ class ReportService:
                     f"  - {artifact.id} sha256={artifact.sha256} {artifact.summary}"
                 )
             lines.append("")
+        return "\n".join(lines)
+
+    def _render_html(
+        self,
+        operation: Operation,
+        findings: list[Finding],
+        assets: list[AssetLedgerEntry],
+    ) -> str:
+        def esc(value: object) -> str:
+            return html.escape(str(value))
+
+        lines = [
+            "<!DOCTYPE html>",
+            '<html lang="en"><head><meta charset="utf-8">',
+            f"<title>Bug Bounty Report: {esc(operation.name)}</title>",
+            "<style>body{font-family:system-ui,sans-serif;margin:2em;}"
+            "table{border-collapse:collapse;}td,th{border:1px solid #999;"
+            "padding:4px 8px;text-align:left;}h1,h2,h3{color:#8b0000;}"
+            ".severity-critical,.severity-high{color:#b00020;font-weight:bold;}</style>",
+            "</head><body>",
+            f"<h1>Bug Bounty Report: {esc(operation.name)}</h1>",
+            "<table>"
+            f"<tr><th>operation</th><td>{esc(operation.id)}</td></tr>"
+            f"<tr><th>mode</th><td>{esc(operation.mode.value)}</td></tr>"
+            f"<tr><th>scope includes</th><td>"
+            f"{esc(', '.join(operation.scope.includes))}</td></tr>"
+            f"<tr><th>scope excludes</th><td>"
+            f"{esc(', '.join(operation.scope.excludes) or '(none)')}</td></tr>"
+            "</table>",
+        ]
+        rules = self.playbooks.playbooks.get_rules(operation.id)
+        if rules is not None:
+            lines.extend(
+                ["<h2>Program Rules</h2>", f"<pre>{esc(rules.describe())}</pre>"]
+            )
+        lines.append("<h2>Assets</h2>")
+        if assets:
+            lines.append("<ul>")
+            for entry in assets:
+                lines.append(
+                    f"<li><code>{esc(entry.kind.value)}</code> {esc(entry.value)}</li>"
+                )
+            lines.append("</ul>")
+        else:
+            lines.append("<p>(no assets recorded)</p>")
+        lines.append("<h2>Validated Findings</h2>")
+        for finding in findings:
+            lines.append(
+                f"<h3 class=\"severity-{esc(finding.severity.value)}\">"
+                f"{esc(finding.title)}</h3>"
+            )
+            lines.append(
+                "<table>"
+                f"<tr><th>id</th><td>{esc(finding.id)}</td></tr>"
+                f"<tr><th>severity</th><td>{esc(finding.severity.value)}</td></tr>"
+                f"<tr><th>summary</th><td>{esc(finding.summary or '(none)')}</td></tr>"
+                f"<tr><th>remediation</th><td>"
+                f"{esc(finding.remediation or '(none)')}</td></tr>"
+                "</table>"
+            )
+            evidence_items = []
+            for evidence_id in finding.evidence_ids:
+                artifact = self.kernel.kernel.get_artifact(evidence_id)
+                if artifact is None:
+                    continue
+                evidence_items.append(
+                    f"<li>{esc(artifact.id)} sha256={esc(artifact.sha256)} "
+                    f"{esc(artifact.summary)}</li>"
+                )
+            if evidence_items:
+                lines.append("<ul>" + "".join(evidence_items) + "</ul>")
+        lines.append("</body></html>")
         return "\n".join(lines)
 
     def _render_json(
