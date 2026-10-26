@@ -61,6 +61,7 @@ FAIL_ANSWER = '{"commands": [{"type": "fail", "reason": "cannot proceed"}]}'
 
 class _SwarmHandler(BaseHTTPRequestHandler):
     queue: list[str] = []
+    executor_queue: list[str] = []
     lock = threading.Lock()
     calls = 0
     latency = 0.0
@@ -68,10 +69,17 @@ class _SwarmHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
-        json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
         with _SwarmHandler.lock:
             _SwarmHandler.calls += 1
-            text = _SwarmHandler.queue.pop(0) if _SwarmHandler.queue else PLANNER_ANSWER
+            # Executor prompts carry "Current step:" — route them to the
+            # executor queue so worker timing cannot mix the roles.
+            if b"Current step:" in raw and _SwarmHandler.executor_queue:
+                text = _SwarmHandler.executor_queue.pop(0)
+            elif _SwarmHandler.queue:
+                text = _SwarmHandler.queue.pop(0)
+            else:
+                text = PLANNER_ANSWER
         if _SwarmHandler.barrier is not None:
             try:
                 _SwarmHandler.barrier.wait(timeout=5)
@@ -98,6 +106,7 @@ class _SwarmHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def fake_server() -> Iterator[str]:
     _SwarmHandler.queue = []
+    _SwarmHandler.executor_queue = []
     _SwarmHandler.calls = 0
     _SwarmHandler.latency = 0.0
     _SwarmHandler.barrier = None
@@ -113,6 +122,10 @@ def fake_server() -> Iterator[str]:
 
 def queue_answers(*answers: str) -> None:
     _SwarmHandler.queue = list(answers)
+
+
+def queue_executor_answers(*answers: str) -> None:
+    _SwarmHandler.executor_queue = list(answers)
 
 
 def make_stack(
@@ -207,7 +220,8 @@ def test_swarm_auto_select_completes_members(
         tmp_path, monkeypatch, fake_server, two_tasks()
     )
     approval_id = approve_model_calls(kernel, operation_id)
-    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER, EXECUTOR_ANSWER, EXECUTOR_ANSWER)
+    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER)
+    queue_executor_answers(EXECUTOR_ANSWER, EXECUTOR_ANSWER)
 
     swarm = swarms.start(
         operation_id,
@@ -386,7 +400,8 @@ def test_swarm_partial_when_one_member_fails(
     )
     approval_id = approve_model_calls(kernel, operation_id)
     # second member's executor answer requests failure
-    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER, EXECUTOR_ANSWER, FAIL_ANSWER)
+    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER)
+    queue_executor_answers(EXECUTOR_ANSWER, FAIL_ANSWER)
 
     swarm = swarms.start(
         operation_id, None, ["fake/agent@v1"], workers=2, approval_id=approval_id
@@ -405,7 +420,8 @@ def test_swarm_report_quantifies_wall_time_and_usage(
     )
     approval_id = approve_model_calls(kernel, operation_id)
     _SwarmHandler.latency = 0.25
-    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER, EXECUTOR_ANSWER, EXECUTOR_ANSWER)
+    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER)
+    queue_executor_answers(EXECUTOR_ANSWER, EXECUTOR_ANSWER)
 
     started = time.monotonic()
     swarm = swarms.start(
@@ -435,7 +451,8 @@ def test_swarm_persists_across_reopen(
         tmp_path, monkeypatch, fake_server, two_tasks()
     )
     approval_id = approve_model_calls(kernel, operation_id)
-    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER, EXECUTOR_ANSWER, EXECUTOR_ANSWER)
+    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER)
+    queue_executor_answers(EXECUTOR_ANSWER, EXECUTOR_ANSWER)
     swarm = swarms.start(
         operation_id, None, ["fake/agent@v1"], workers=2, approval_id=approval_id
     )

@@ -11,6 +11,7 @@ from samurai_ai.cli import main
 TEST_KEY = "ab" * 32
 
 RESPONSES: list[str] = []
+EXECUTOR_RESPONSES: list[str] = []
 LOCK = threading.Lock()
 
 PLANNER_ANSWER = '{"steps": ["probe it"]}'
@@ -25,11 +26,14 @@ EXECUTOR_ANSWER = (
 class _HeadlessHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
-        json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
         with LOCK:
-            if not RESPONSES:
+            # Executor prompts carry "Current step:" — route them to the
+            # executor queue so worker timing cannot mix the roles.
+            queue = EXECUTOR_RESPONSES if b"Current step:" in raw else RESPONSES
+            if not queue:
                 return self._reply(500, {"error": {"message": "queue empty"}})
-            text = RESPONSES.pop(0)
+            text = queue.pop(0)
         self._reply(
             200,
             {
@@ -54,6 +58,7 @@ class _HeadlessHandler(BaseHTTPRequestHandler):
 def llm_server() -> Iterator[str]:
     with LOCK:
         RESPONSES.clear()
+        EXECUTOR_RESPONSES.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), _HeadlessHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -154,7 +159,8 @@ def test_headless_run_json_summary_and_exit_codes(
     capsys.readouterr()
 
     with LOCK:
-        RESPONSES.extend([PLANNER_ANSWER, PLANNER_ANSWER, EXECUTOR_ANSWER, EXECUTOR_ANSWER])
+        RESPONSES.extend([PLANNER_ANSWER, PLANNER_ANSWER])
+        EXECUTOR_RESPONSES.extend([EXECUTOR_ANSWER, EXECUTOR_ANSWER])
     assert (
         main(
             ["--db", database, "headless", "run", operation_id,

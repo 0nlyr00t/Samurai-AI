@@ -71,20 +71,27 @@ EXECUTOR_ANSWER = (
 
 class _CapturingHandler(BaseHTTPRequestHandler):
     queue: list[str] = []
+    executor_queue: list[str] = []
     prompts: list[str] = []
     lock = threading.Lock()
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
-        payload = json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
+        payload = json.loads(raw)
         with _CapturingHandler.lock:
             for message in payload.get("messages", []):
                 _CapturingHandler.prompts.append(str(message.get("content", "")))
-            text = (
-                _CapturingHandler.queue.pop(0)
-                if _CapturingHandler.queue
-                else PLANNER_ANSWER
-            )
+            # Executor prompts carry "Current step:" — route them to the
+            # executor queue so worker timing cannot mix the roles.
+            if b"Current step:" in raw and _CapturingHandler.executor_queue:
+                text = _CapturingHandler.executor_queue.pop(0)
+            else:
+                text = (
+                    _CapturingHandler.queue.pop(0)
+                    if _CapturingHandler.queue
+                    else PLANNER_ANSWER
+                )
         body = json.dumps(
             {
                 "choices": [{"message": {"role": "assistant", "content": text}}],
@@ -104,6 +111,7 @@ class _CapturingHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def fake_server() -> Iterator[str]:
     _CapturingHandler.queue = []
+    _CapturingHandler.executor_queue = []
     _CapturingHandler.prompts = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CapturingHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -301,10 +309,8 @@ def test_custom_playbook_and_trusted_skills_e2e(
     )
     stack.kernel.approve(approval.id, decided_by="operator")
 
-    _CapturingHandler.queue = [PLANNER_ANSWER, PLANNER_ANSWER] + [
-        EXECUTOR_ANSWER,
-        EXECUTOR_ANSWER,
-    ]
+    _CapturingHandler.queue = [PLANNER_ANSWER, PLANNER_ANSWER]
+    _CapturingHandler.executor_queue = [EXECUTOR_ANSWER, EXECUTOR_ANSWER]
     swarm = stack.swarms.start(
         operation.id,
         None,

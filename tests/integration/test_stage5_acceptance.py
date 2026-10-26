@@ -63,15 +63,23 @@ EXECUTOR_ANSWER = (
 
 class _LatencyHandler(BaseHTTPRequestHandler):
     queue: list[str] = []
+    executor_queue: list[str] = []
     lock = threading.Lock()
     calls = 0
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
-        json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
         with _LatencyHandler.lock:
             _LatencyHandler.calls += 1
-            text = _LatencyHandler.queue.pop(0) if _LatencyHandler.queue else PLANNER_ANSWER
+            # Executor prompts carry "Current step:" — route them to the
+            # executor queue so worker timing cannot mix the roles.
+            if b"Current step:" in raw and _LatencyHandler.executor_queue:
+                text = _LatencyHandler.executor_queue.pop(0)
+            elif _LatencyHandler.queue:
+                text = _LatencyHandler.queue.pop(0)
+            else:
+                text = PLANNER_ANSWER
         time.sleep(LATENCY_SECONDS)
         body = json.dumps(
             {
@@ -92,6 +100,7 @@ class _LatencyHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def fake_server() -> Iterator[str]:
     _LatencyHandler.queue = []
+    _LatencyHandler.executor_queue = []
     _LatencyHandler.calls = 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), _LatencyHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -197,11 +206,10 @@ def test_parallel_swarm_faster_with_identical_outcomes(
         EXECUTOR_ANSWER,
         PLANNER_ANSWER,
         EXECUTOR_ANSWER,
-        # swarm: both planners land first, then both executors
+        # swarm: both planners land on the planner queue; executors are routed
+        # to the executor queue by the "Current step:" marker
         PLANNER_ANSWER,
         PLANNER_ANSWER,
-        EXECUTOR_ANSWER,
-        EXECUTOR_ANSWER,
     ]
 
     sequential_started = time.monotonic()
@@ -214,6 +222,8 @@ def test_parallel_swarm_faster_with_identical_outcomes(
     sequential_wall = time.monotonic() - sequential_started
 
     swarm_started = time.monotonic()
+    with _LatencyHandler.lock:
+        _LatencyHandler.executor_queue = [EXECUTOR_ANSWER, EXECUTOR_ANSWER]
     swarm = stack.swarms.start(
         swarm_op,
         None,
