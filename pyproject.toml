@@ -22,6 +22,9 @@ dev = [
     "pytest>=8,<10",
     "ruff>=0.8,<1",
 ]
+release = [
+    "pyinstaller>=6.10,<7",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/samurai_ai"]

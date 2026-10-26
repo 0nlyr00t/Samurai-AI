@@ -60,7 +60,9 @@ _EVAL_VAULT_KEY = "cd" * 32
 
 class _ScriptedHandler(BaseHTTPRequestHandler):
     queue: list[str] = []
+    executor_queue: list[str] | None = None
     fallback: str = ""
+    executor_fallback: str = ""
     latency_ms: int = 0
     prompt_tokens: int = 40
     completion_tokens: int = 8
@@ -77,7 +79,16 @@ class _ScriptedHandler(BaseHTTPRequestHandler):
             _ScriptedHandler.calls += 1
             calls = _ScriptedHandler.calls
             fault = _ScriptedHandler.fault
-            if _ScriptedHandler.queue:
+            # Executor prompts carry "Current step:" — route them to the
+            # executor queue when one is configured, so swarm scenarios are
+            # deterministic regardless of worker timing.
+            is_executor = b"Current step:" in body_in
+            if is_executor and _ScriptedHandler.executor_queue is not None:
+                if _ScriptedHandler.executor_queue:
+                    text = _ScriptedHandler.executor_queue.pop(0)
+                else:
+                    text = _ScriptedHandler.executor_fallback
+            elif _ScriptedHandler.queue:
                 text = _ScriptedHandler.queue.pop(0)
             else:
                 text = _ScriptedHandler.fallback
@@ -134,6 +145,16 @@ class ScriptedProviderServer:
     def __init__(self, scenario: EvalScenario) -> None:
         _ScriptedHandler.queue = list(scenario.script.responses)
         _ScriptedHandler.fallback = scenario.script.responses[-1]
+        _ScriptedHandler.executor_queue = (
+            list(scenario.script.executor_responses)
+            if scenario.script.executor_responses is not None
+            else None
+        )
+        _ScriptedHandler.executor_fallback = (
+            scenario.script.executor_responses[-1]
+            if scenario.script.executor_responses
+            else ""
+        )
         _ScriptedHandler.latency_ms = scenario.script.latency_ms
         _ScriptedHandler.prompt_tokens = scenario.script.prompt_tokens
         _ScriptedHandler.completion_tokens = scenario.script.completion_tokens

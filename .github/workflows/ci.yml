@@ -41,3 +41,6 @@ jobs:
 
       - name: Package build
         run: uv build
+
+      - name: Reproducible build check
+        run: bash packaging/check_reproducible.sh

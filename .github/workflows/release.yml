@@ -1,0 +1,92 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  python-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Build sdist and wheel
+        run: uv build --out-dir dist/release
+      - name: Checksums
+        run: |
+          cd dist/release
+          sha256sum * > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/release/
+
+  binary:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: samurai-linux-x86_64
+            bin: samurai
+          - os: macos-latest
+            artifact: samurai-darwin-arm64
+            bin: samurai
+          - os: windows-latest
+            artifact: samurai-windows-x86_64.exe
+            bin: samurai.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Build standalone binary
+        run: uv run --group release pyinstaller packaging/samurai.spec --distpath dist/binary --workpath build/pyinstaller --noconfirm
+      - name: Smoke test binary
+        shell: bash
+        run: ./dist/binary/${{ matrix.bin }} --help
+      - name: Functional smoke (eval suite)
+        if: runner.os == 'Linux'
+        run: SAMURAI_HOME="$RUNNER_TEMP/samurai-home" ./dist/binary/${{ matrix.bin }} eval run evals/smoke.json --out "$RUNNER_TEMP/eval-report.json"
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          cp "dist/binary/${{ matrix.bin }}" "dist/release/${{ matrix.artifact }}"
+          cd dist/release
+          sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.artifact }}
+          path: dist/release/
+
+  sign-and-release:
+    needs: [python-dist, binary]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          path: artifacts
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign artifacts (keyless)
+        run: |
+          cd artifacts
+          for file in *; do
+            case "$file" in
+              *.bundle) continue ;;
+            esac
+            cosign sign-blob --yes --bundle "$file.bundle" "$file"
+          done
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" artifacts/* --title "Samurai AI ${{ github.ref_name }}" --generate-notes

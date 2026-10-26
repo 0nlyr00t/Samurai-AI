@@ -10,3 +10,4 @@ dist/
 *.egg-info/
 .samurai/
 .DS_Store
+build/
