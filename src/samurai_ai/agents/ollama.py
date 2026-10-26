@@ -83,6 +83,12 @@ def build_chat_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
         options["temperature"] = request.temperature
     if options:
         payload["options"] = options
+    if request.reasoning_effort is not None:
+        payload["think"] = (
+            False
+            if request.reasoning_effort == "off"
+            else request.reasoning_effort
+        )
     return payload
 
 

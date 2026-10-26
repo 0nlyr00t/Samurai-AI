@@ -50,6 +50,7 @@ class ChatRequest(BaseModel):
     response_format: dict[str, Any] | None = None
     max_tokens: int | None = None
     temperature: float | None = None
+    reasoning_effort: str | None = None
 
 
 class ChatResponse(BaseModel):

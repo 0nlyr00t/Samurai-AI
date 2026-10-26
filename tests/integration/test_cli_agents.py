@@ -210,3 +210,47 @@ def test_cli_agent_show_rejected_commands(
     assert report["status"] == "completed"
     assert report["rejected_commands"][0]["command"]["tool_id"] == "missing.tool"
     assert "tool not found" in report["rejected_commands"][0]["reason"]
+
+
+def test_cli_agent_run_uses_default_model_from_settings(
+    home: Path, capsys, llm_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = str(home / "default-model.db")
+    operation_id = setup_operation(database, llm_server, capsys, monkeypatch)
+
+    # без --model и без сохраненного дефолта — понятная ошибка
+    assert main(["--db", database, "agent", "run", operation_id, "probe"]) == 2
+    assert "no model selected" in capsys.readouterr().err
+
+    # дефолт, выставленный из TUI (/model), лежит в app_settings
+    from samurai_ai.storage.database import Database
+    from samurai_ai.storage.recovery import RecoveryRepository
+
+    RecoveryRepository(Database(database)).set_setting(
+        "model.default", "fake/agent@v1"
+    )
+    RESPONSES.extend(
+        [
+            '{"steps": ["s"]}',
+            '{"commands": [{"type": "complete_task"}]}',
+        ]
+    )
+    assert main(["--db", database, "agent", "run", operation_id, "probe"]) == 2
+    error = capsys.readouterr().err
+    assert "approval required" in error
+    approval_id = error.split("samurai approval approve ", 1)[1].split("'", 1)[0]
+    assert (
+        main(["--db", database, "approval", "approve", approval_id, "--actor", "operator"])
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "--db", database, "agent", "run", operation_id, "probe",
+                "--approval-id", approval_id,
+            ]
+        )
+        == 0
+    )
+    assert "fake/agent@v1" in capsys.readouterr().out

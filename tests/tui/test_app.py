@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from textual.widgets import Input, RichLog, Static
 
+from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
 from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
@@ -19,6 +20,7 @@ from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
+from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService
@@ -34,6 +36,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.memory import MemoryRepository
+from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.planning import PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
@@ -216,10 +219,18 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     )
 
     async def exercise() -> None:
+        models = ModelService(
+            ModelRegistry(ModelEndpointRepository(database)),
+            vault,
+            kernel,
+            service,
+            ModelEndpointRepository(database),
+            recovery_repository,
+        )
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
             playbooks, reports, ctf, redteam, planning, swarms, memory, skills,
-            operation.id,
+            models, operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -284,6 +295,89 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
             assert not journal.display
             await pilot.press("ctrl+o")
             assert journal.display
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def _minimal_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
+    database = Database(tmp_path / "tui2.db")
+    operation_repository = OperationRepository(database)
+    service = OperationService(operation_repository)
+    kernel = KernelService(service, KernelRepository(database))
+    recovery_repository = RecoveryRepository(database)
+    settings = SettingsService(recovery_repository)
+    recovery = RecoveryService(service, kernel, recovery_repository)
+    vault = VaultService(
+        VaultRepository(database), operation_repository, tmp_path / "vault.key"
+    )
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), vault=vault
+    )
+    endpoints = ModelEndpointRepository(database)
+    models = ModelService(
+        ModelRegistry(endpoints), vault, kernel, service, endpoints,
+        recovery_repository,
+    )
+    playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
+    return (
+        service, kernel, settings, recovery, execution, vault,
+        AgentRunRepository(database),
+        playbooks,
+        ReportService(service, kernel, playbooks, ReportRepository(database)),
+        CtfService(service, kernel, CtfRepository(database)),
+        RedTeamService(service, kernel, RedTeamRepository(database)),
+        PlanningService(service, kernel, PlanningRepository(database)),
+        SwarmRunRepository(database),
+        CampaignMemoryService(MemoryRepository(database)),
+        SkillService(SkillRepository(database)),
+        models,
+    )
+
+
+def test_language_prompt_arrow_keys(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            # first run: language prompt is up; arrows+enter choose Russian
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert stack[2].get_locale() == "ru"
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_model_picker_persists_default(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "/model"
+            await pilot.press("enter")
+            await pilot.pause()
+            from samurai_ai.tui.app import ModelPickerScreen
+            assert isinstance(app.screen, ModelPickerScreen)
+            # pick the second model and high reasoning, then apply
+            await pilot.press("down")
+            await pilot.press("tab")
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert stack[2].get_value("model.default") is not None
+            assert stack[2].get_value("model.reasoning_effort") == "high"
+            status_bar = app.query_one("#status-bar", Static)
+            assert "model=" in str(status_bar.render())
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())

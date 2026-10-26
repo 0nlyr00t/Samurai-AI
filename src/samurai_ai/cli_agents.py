@@ -21,7 +21,7 @@ def register_agent_commands(
     run = agent_commands.add_parser("run", help="Run the orchestrator on a plan task")
     run.add_argument("operation_id")
     run.add_argument("task_id")
-    run.add_argument("--model", dest="model_id", required=True)
+    run.add_argument("--model", dest="model_id", default=None)
     run.add_argument(
         "--fallback",
         action="append",
@@ -59,11 +59,19 @@ def handle_agent_command(
     if args.command != "agent":
         return None
     if args.agent_command == "run":
+        model_id = args.model_id or models.default_model()
+        if model_id is None:
+            print(
+                "error: no model selected; pass --model or pick a default "
+                "in the TUI via /model",
+                file=sys.stderr,
+            )
+            return 2
         try:
             run = orchestrator.run_task(
                 args.operation_id,
                 args.task_id,
-                [args.model_id, *args.fallbacks],
+                [model_id, *args.fallbacks],
                 max_steps=args.max_steps,
                 approval_id=args.approval_id,
                 workspace=args.workspace,

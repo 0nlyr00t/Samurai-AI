@@ -2,14 +2,16 @@ import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
-from textual.widgets import Button, Input, RichLog
+from textual.widgets import Input, OptionList, RichLog
 
+from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
+from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService
@@ -25,6 +27,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.memory import MemoryRepository
+from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.planning import PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookRepository
@@ -55,6 +58,7 @@ def make_stack(
     SwarmRunRepository,
     CampaignMemoryService,
     SkillService,
+    ModelService,
 ]:
     database = Database(tmp_path / name)
     operation_repository = OperationRepository(database)
@@ -78,6 +82,14 @@ def make_stack(
     swarms = SwarmRunRepository(database)
     memory = CampaignMemoryService(MemoryRepository(database))
     skills = SkillService(SkillRepository(database))
+    models = ModelService(
+        ModelRegistry(ModelEndpointRepository(database)),
+        vault,
+        kernel,
+        service,
+        ModelEndpointRepository(database),
+        recovery_repository,
+    )
     return (
         service,
         kernel,
@@ -94,6 +106,7 @@ def make_stack(
         swarms,
         memory,
         skills,
+        models,
     )
 
 
@@ -107,7 +120,9 @@ def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> N
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
 
-            await pilot.click("#lang-ru")
+            # arrows + enter: move to Русский and select it
+            await pilot.press("down")
+            await pilot.press("enter")
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)
             assert stack[2].get_locale() == "ru"
@@ -142,8 +157,8 @@ def test_first_run_language_choice_english_via_keyboard(tmp_path: Path, monkeypa
             await pilot.pause()
             assert isinstance(app.screen, LanguagePromptScreen)
             focused = app.screen.focused
-            assert isinstance(focused, Button)
-            assert focused.id == "lang-en"
+            assert isinstance(focused, OptionList)
+            assert focused.id == "language-options"
             await pilot.press("enter")
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)

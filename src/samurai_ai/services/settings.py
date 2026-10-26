@@ -35,3 +35,9 @@ class SettingsService:
             raise InvalidLocaleError(f"unsupported locale: {locale!r}")
         self.repository.set_setting(_LOCALE_SETTING_KEY, normalized)
         return normalized
+
+    def get_value(self, key: str) -> str | None:
+        return self.repository.get_setting(key)
+
+    def set_value(self, key: str, value: str) -> None:
+        self.repository.set_setting(key, value)
