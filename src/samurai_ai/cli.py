@@ -10,7 +10,9 @@ from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
 from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
+from samurai_ai.cli_events import handle_events_command, register_events_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
+from samurai_ai.cli_headless import handle_headless_command, register_headless_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
 from samurai_ai.cli_memory import handle_memory_command, register_memory_commands
@@ -66,6 +68,7 @@ from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
+from samurai_ai.services.exports import IntegrationExportService
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
 from samurai_ai.services.memory import CampaignMemoryService
@@ -137,6 +140,13 @@ def build_parser() -> argparse.ArgumentParser:
     fork.add_argument("operation_id")
     fork.add_argument("--name", default=None)
 
+    op_export = operation_commands.add_parser(
+        "export", help="Export a read-only HTML dossier of the operation"
+    )
+    op_export.add_argument("operation_id")
+    op_export.add_argument("--format", dest="format", choices=["html"], default="html")
+    op_export.add_argument("--out", type=Path, required=True)
+
     scope = subcommands.add_parser("scope", help="Evaluate operation scope")
     scope_commands = scope.add_subparsers(dest="scope_command", required=True)
     check = scope_commands.add_parser("check", help="Check a target against operation scope")
@@ -162,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_swarm_commands(subcommands)
     register_memory_commands(subcommands)
     register_skill_commands(subcommands)
+    register_events_commands(subcommands)
+    register_headless_commands(subcommands)
     return parser
 
 
@@ -185,6 +197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         swarm_service,
         memory_service,
         skill_service,
+        export_service,
     ) = _make_services(args.db)
 
     try:
@@ -228,10 +241,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         ctf_result = handle_ctf_command(args, ctf_service)
         if ctf_result is not None:
             return ctf_result
-        redteam_result = handle_redteam_command(args, redteam_service)
+        redteam_result = handle_redteam_command(args, redteam_service, export_service)
         if redteam_result is not None:
             return redteam_result
-        planning_result = handle_planning_command(args, planning_service)
+        planning_result = handle_planning_command(args, planning_service, export_service)
         if planning_result is not None:
             return planning_result
         swarm_result = handle_swarm_command(args, swarm_service)
@@ -243,8 +256,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         skill_result = handle_skill_command(args, skill_service)
         if skill_result is not None:
             return skill_result
+        events_result = handle_events_command(args, operation_service)
+        if events_result is not None:
+            return events_result
+        headless_result = handle_headless_command(args, swarm_service)
+        if headless_result is not None:
+            return headless_result
         if args.command == "operation":
-            return _handle_operation(args, operation_service, kernel_service)
+            return _handle_operation(args, operation_service, kernel_service, export_service)
         if args.command == "scope":
             decision = operation_service.check_scope(args.operation_id, args.target)
             if args.json_output:
@@ -337,6 +356,7 @@ def _handle_operation(
     args: argparse.Namespace,
     service: OperationService,
     kernel: KernelService,
+    exports: IntegrationExportService,
 ) -> int:
     if args.operation_command == "create":
         scope = ScopeContract(includes=tuple(args.includes), excludes=tuple(args.excludes))
@@ -375,6 +395,15 @@ def _handle_operation(
                     )
         return 0
 
+    if args.operation_command == "export":
+        result = exports.export_dossier(args.operation_id, args.out)
+        if args.json_output:
+            _print_json(result)
+        else:
+            for file in result["files"]:
+                print(f"{file['path']}\tsha256={file['sha256'][:16]}…")
+        return 0
+
     operation = kernel.transition_operation(
         args.operation_id,
         OperationStatus(args.status),
@@ -403,6 +432,7 @@ def _make_services(
     SwarmService,
     CampaignMemoryService,
     SkillService,
+    IntegrationExportService,
 ]:
     path = database_path or default_database_path()
     database = Database(path)
@@ -448,6 +478,7 @@ def _make_services(
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     planning = PlanningService(operations, kernel, PlanningRepository(database), vault)
     swarm = SwarmService(operations, kernel, agents, SwarmRunRepository(database))
+    exports = IntegrationExportService(operations, kernel, redteam, planning, vault)
     return (
         operations,
         kernel,
@@ -466,6 +497,7 @@ def _make_services(
         swarm,
         memory_service,
         skill_service,
+        exports,
     )
 
 

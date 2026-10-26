@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from samurai_ai.domain.attack import is_valid_tactic
 from samurai_ai.domain.kernel import PlanTask, RiskClass, StageGate
 from samurai_ai.domain.playbooks import PlaybookTemplate
 from samurai_ai.domain.reports import ReportFormat
@@ -113,6 +114,7 @@ class AttackStep(BaseModel):
     operation_id: str
     name: str = Field(min_length=1, max_length=200)
     technique_id: str
+    tactic: str | None = None
     expected_telemetry: str = ""
     detection_criteria: str = ""
     status: AttackStepStatus = AttackStepStatus.PLANNED
@@ -130,6 +132,15 @@ class AttackStep(BaseModel):
         if not _TECHNIQUE_ID.fullmatch(value):
             raise TechniqueIdError(
                 f"invalid ATT&CK technique id: {value!r} (expected T1234 or T1234.001)"
+            )
+        return value
+
+    @field_validator("tactic")
+    @classmethod
+    def validate_tactic(cls, value: str | None) -> str | None:
+        if value is not None and not is_valid_tactic(value):
+            raise TechniqueIdError(
+                f"invalid ATT&CK tactic: {value!r} (expected one of ATTACK_TACTICS)"
             )
         return value
 

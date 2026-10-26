@@ -4,8 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
+from samurai_ai.domain.attack import ATTACK_TACTICS
 from samurai_ai.domain.planning import KillChainPhase, PlannedTestStatus
 from samurai_ai.domain.reports import ReportFormat
+from samurai_ai.services.exports import IntegrationExportService
 from samurai_ai.services.planning import PlanningService
 
 
@@ -31,6 +33,11 @@ def register_planning_commands(
         "map", help="Show the ATT&CK/kill chain map"
     )
     scenario_map.add_argument("operation_id")
+    scenario_export = scenario_commands.add_parser(
+        "export-vectr", help="Export test cases as a VECTR campaign JSON"
+    )
+    scenario_export.add_argument("operation_id")
+    scenario_export.add_argument("--dest", type=Path, required=True)
 
     test_case = subcommands.add_parser("test-case", help="Manage planned test cases")
     case_commands = test_case.add_subparsers(dest="test_case_command", required=True)
@@ -48,6 +55,10 @@ def register_planning_commands(
     case_add.add_argument("--depends-on", default="", help="comma-separated ids")
     case_add.add_argument("--stop-before", action="store_true")
     case_add.add_argument("--notes", default="")
+    case_add.add_argument(
+        "--tactic", default=None, choices=list(ATTACK_TACTICS),
+        help="ATT&CK tactic for the test case",
+    )
     case_list = case_commands.add_parser("list", help="List test cases")
     case_list.add_argument("operation_id")
     case_list.add_argument(
@@ -85,10 +96,12 @@ def register_planning_commands(
 
 
 def handle_planning_command(
-    args: argparse.Namespace, planning: PlanningService
+    args: argparse.Namespace,
+    planning: PlanningService,
+    exports: IntegrationExportService,
 ) -> int | None:
     if args.command == "scenario":
-        return _handle_scenario(args, planning)
+        return _handle_scenario(args, planning, exports)
     if args.command == "test-case":
         return _handle_test_case(args, planning)
     if args.command == "runbook":
@@ -96,7 +109,11 @@ def handle_planning_command(
     return None
 
 
-def _handle_scenario(args: argparse.Namespace, planning: PlanningService) -> int:
+def _handle_scenario(
+    args: argparse.Namespace,
+    planning: PlanningService,
+    exports: IntegrationExportService,
+) -> int:
     if args.scenario_command == "init":
         plan = planning.init_planning(
             args.operation_id,
@@ -122,6 +139,14 @@ def _handle_scenario(args: argparse.Namespace, planning: PlanningService) -> int
         return 0
     if args.scenario_command == "map":
         print(planning.scenario_map(args.operation_id), end="")
+        return 0
+    if args.scenario_command == "export-vectr":
+        result = exports.export_vectr(args.operation_id, args.dest)
+        if args.json_output:
+            _print_json(result)
+        else:
+            for file in result["files"]:
+                print(f"{file['path']}\tsha256={file['sha256'][:16]}…")
         return 0
     summary = planning.summary(args.operation_id)
     if args.json_output:
@@ -150,6 +175,7 @@ def _handle_test_case(args: argparse.Namespace, planning: PlanningService) -> in
             ),
             stop_before=args.stop_before,
             notes=args.notes,
+            tactic=args.tactic,
         )
         _emit(case, args.json_output)
         return 0

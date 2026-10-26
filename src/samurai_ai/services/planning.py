@@ -142,6 +142,7 @@ class PlanningService:
         depends_on: tuple[str, ...] = (),
         stop_before: bool = False,
         notes: str = "",
+        tactic: str | None = None,
     ) -> PlannedTest:
         self.operations.get(operation_id)
         existing = {case.id for case in self.planning.list_test_cases(operation_id)}
@@ -155,6 +156,7 @@ class PlanningService:
             name=name,
             technique_id=technique_id,
             kill_chain_phase=kill_chain_phase,
+            tactic=tactic,
             expected_telemetry=expected_telemetry,
             detection_expectation=detection_expectation,
             depends_on=depends_on,

@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, and **Stage 5a/5b — parallel specialized agents, campaign memory, and custom playbooks/skills** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, and **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports** are complete.
 
 Implemented:
 
@@ -67,15 +67,23 @@ Implemented:
   storage, `playbook install/use/list-custom`) and trusted versioned skills
   (`--trusted` required, sha256 recorded, bounded injection into executor
   prompts), TUI `/playbooks` and `/skills`, SQLite v14;
+- a stable exit code contract (0/1/2, pinned by tests), NDJSON journal
+  export (`events export`), a headless mode for CI (`headless run` with a
+  JSON summary), and GitHub Actions CI (ruff, strict mypy, pytest, build);
+- CALDERA export (an adversary pack from executed attack steps with ATT&CK
+  tactics) and VECTR export (`vectr-campaign@v1` JSON) with redaction and
+  a sha256 manifest;
+- an HTML bug bounty report and a self-contained read-only HTML operation
+  dossier (`operation export --format html`) with escaping and redaction;
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v14, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 506 unit/integration/CLI/TUI tests.
+- 514 unit/integration/CLI/TUI tests.
 
-Not implemented yet: CALDERA/VECTR integrations, headless mode, JSON events,
-CI/CD, and HTML/PDF reports (Stage 5c+), the extended security tool set
-(pending a threat review), LLM streaming, full egress enforcement on
-Docker Desktop for Mac, and the standalone binary.
+Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
+integrations (export-only), the extended security tool set (pending a
+threat review), LLM streaming, full egress enforcement on Docker Desktop
+for Mac, and the standalone binary (Stage 6).
 
 ## Development quick start
 

@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks** и **Stage 5a/5b — параллельные специализированные агенты, campaign memory и custom playbooks/skills**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks** и **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports**.
 
 Уже реализовано:
 
@@ -63,15 +63,22 @@ Samurai AI — local-first TUI harness для авторизованных Red T
   хранилище, `playbook install/use/list-custom`) и trusted versioned skills
   (`--trusted` обязателен, sha256, инжекция в executor prompt), TUI
   `/playbooks` и `/skills`, SQLite v14;
+- стабильный контракт exit codes (0/1/2, зафиксирован тестами), экспорт
+  журнала в NDJSON (`events export`), headless mode для CI (`headless run`
+  с JSON summary), GitHub Actions CI (ruff, strict mypy, pytest, build);
+- CALDERA export (adversary pack из executed attack steps с ATT&CK tactics)
+  и VECTR export (`vectr-campaign@v1` JSON) с redaction и sha256 manifest;
+- HTML bug bounty report и self-contained read-only HTML dossier операции
+  (`operation export --format html`) с escaping и redaction;
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v14, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 506 unit/integration/CLI/TUI tests.
+- 514 unit/integration/CLI/TUI tests.
 
-Еще не реализовано: CALDERA/VECTR integrations, headless mode, JSON events,
-CI/CD и HTML/PDF reports (Stage 5c+), расширенный набор security tools
-(после threat review), LLM streaming, полный egress enforcement на
-Docker Desktop for Mac и standalone binary.
+Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
+CALDERA/VECTR (только export), расширенный набор security tools (после
+threat review), LLM streaming, полный egress enforcement на
+Docker Desktop for Mac и standalone binary (Stage 6).
 
 ## Быстрый старт для разработки
 
