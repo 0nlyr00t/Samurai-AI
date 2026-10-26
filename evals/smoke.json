@@ -1,0 +1,73 @@
+{
+  "name": "smoke",
+  "version": "1.0.0",
+  "scenarios": [
+    {
+      "id": "two-task-swarm",
+      "title": "Two recon-style tasks solved by a 2-worker swarm",
+      "mode": "bug-bounty",
+      "scope_includes": ["example.com"],
+      "tasks": [
+        {"id": "recon", "title": "Recon", "risk_class": "r1"},
+        {"id": "testing", "title": "Testing", "risk_class": "r1"}
+      ],
+      "workers": 2,
+      "script": {
+        "responses": [
+          "{\"steps\": [\"probe the endpoint\"]}",
+          "{\"steps\": [\"probe the endpoint\"]}",
+          "{\"commands\": [{\"type\": \"note\", \"key\": \"probe\", \"value\": \"done\"}, {\"type\": \"complete_task\"}]}",
+          "{\"commands\": [{\"type\": \"note\", \"key\": \"probe\", \"value\": \"done\"}, {\"type\": \"complete_task\"}]}"
+        ]
+      },
+      "expectations": {
+        "expect_solve": true,
+        "min_tasks_done": 2,
+        "max_invalid_actions": 0,
+        "max_interventions": 1
+      }
+    },
+    {
+      "id": "rejecting-executor",
+      "title": "Executor requests an unknown tool and recovers",
+      "mode": "bug-bounty",
+      "scope_includes": ["example.com"],
+      "tasks": [
+        {"id": "probe", "title": "Probe", "risk_class": "r1"}
+      ],
+      "workers": 1,
+      "script": {
+        "responses": [
+          "{\"steps\": [\"scan the target\"]}",
+          "{\"commands\": [{\"type\": \"request_tool_run\", \"tool_id\": \"nonexistent.tool\", \"params\": {}}, {\"type\": \"note\", \"key\": \"fallback\", \"value\": \"manual\"}, {\"type\": \"complete_task\"}]}"
+        ]
+      },
+      "expectations": {
+        "expect_solve": true,
+        "min_tasks_done": 1,
+        "max_invalid_actions": 1
+      }
+    },
+    {
+      "id": "finding-flow",
+      "title": "Executor proposes a finding and completes the task",
+      "mode": "bug-bounty",
+      "scope_includes": ["example.com"],
+      "tasks": [
+        {"id": "audit", "title": "Audit", "risk_class": "r1"}
+      ],
+      "workers": 1,
+      "script": {
+        "responses": [
+          "{\"steps\": [\"review the headers\"]}",
+          "{\"commands\": [{\"type\": \"propose_finding\", \"title\": \"Missing HSTS\", \"summary\": \"Strict-Transport-Security header absent\", \"severity\": \"low\", \"artifact_ids\": []}, {\"type\": \"complete_task\"}]}"
+        ]
+      },
+      "expectations": {
+        "expect_solve": true,
+        "min_tasks_done": 1,
+        "max_false_positives": 0
+      }
+    }
+  ]
+}

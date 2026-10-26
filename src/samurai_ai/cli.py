@@ -10,6 +10,7 @@ from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
 from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
+from samurai_ai.cli_eval import handle_eval_command, register_eval_commands
 from samurai_ai.cli_events import handle_events_command, register_events_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
 from samurai_ai.cli_headless import handle_headless_command, register_headless_commands
@@ -34,6 +35,7 @@ from samurai_ai.domain.ctf import (
     HypothesisNotFoundError,
     WriteupNotFoundError,
 )
+from samurai_ai.domain.eval import EvalError
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.mcp import McpServerNotFoundError
@@ -174,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_skill_commands(subcommands)
     register_events_commands(subcommands)
     register_headless_commands(subcommands)
+    register_eval_commands(subcommands)
     return parser
 
 
@@ -262,6 +265,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         headless_result = handle_headless_command(args, swarm_service)
         if headless_result is not None:
             return headless_result
+        eval_result = handle_eval_command(args)
+        if eval_result is not None:
+            return eval_result
         if args.command == "operation":
             return _handle_operation(args, operation_service, kernel_service, export_service)
         if args.command == "scope":
@@ -344,6 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         MemoryConflictError,
         SkillError,
         SkillNotFoundError,
+        EvalError,
         ValidationError,
         json.JSONDecodeError,
         OSError,

@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, and **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates** are complete.
 
 Implemented:
 
@@ -75,10 +75,15 @@ Implemented:
   a sha256 manifest;
 - an HTML bug bounty report and a self-contained read-only HTML operation
   dossier (`operation export --format html`) with escaping and redaction;
+- an evaluation harness (Stage 6a): declarative JSON scenario suites on a
+  deterministic scripted provider, solve/validation rate, cost, wall time,
+  interventions, invalid actions and false positive metrics computed from the
+  event journal, and baseline comparison for regression gating (`eval run`,
+  `eval compare`), with the `evals/smoke.json` smoke suite in CI;
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v14, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 514 unit/integration/CLI/TUI tests.
+- 535 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), the extended security tool set (pending a
