@@ -178,6 +178,34 @@ def test_cli_secret_add_without_value_on_tty_fails(
     assert "--value" in capsys.readouterr().err
 
 
+def test_cli_secret_add_stdin_on_tty_prompts(
+    vault_env: Path, capsys, monkeypatch
+) -> None:
+    database = str(vault_env / "tty-stdin.db")
+
+    class _Tty(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    prompts: list[str] = []
+
+    def _fake_getpass(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return SECRET_VALUE
+
+    monkeypatch.setattr("sys.stdin", _Tty())
+    monkeypatch.setattr("getpass.getpass", _fake_getpass)
+    assert main(["--db", database, "secret", "add", "tty-token", "--stdin"]) == 0
+    assert prompts == ["Secret value: "]
+    output = capsys.readouterr().out
+    assert "tty-token" in output
+    assert SECRET_VALUE not in output
+
+    assert main(["--db", database, "--json", "secret", "list"]) == 0
+    entries = json.loads(capsys.readouterr().out)
+    assert [entry["name"] for entry in entries] == ["tty-token"]
+
+
 def test_cli_tool_run_with_secret_placeholder(vault_env: Path, capsys, monkeypatch) -> None:
     database = str(vault_env / "run.db")
     operation_id = create_cli_operation(database, capsys)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import sys
 
@@ -67,6 +68,8 @@ def _read_value(args: argparse.Namespace) -> str:
     if args.value is not None:
         return str(args.value)
     if args.read_stdin or not sys.stdin.isatty():
+        if sys.stdin.isatty():
+            return getpass.getpass("Secret value: ")
         value: str = sys.stdin.read()
         return value.rstrip("\r\n")
     raise VaultError(
