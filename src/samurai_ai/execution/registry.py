@@ -176,6 +176,8 @@ def _validate_value(tool_id: str, name: str, value: Any, spec: Any) -> Any:
             raise ToolValidationError(f"{label} must be an array")
         if "minItems" in spec and len(value) < int(spec["minItems"]):
             raise ToolValidationError(f"{label} needs at least {spec['minItems']} items")
+        if "maxItems" in spec and len(value) > int(spec["maxItems"]):
+            raise ToolValidationError(f"{label} allows at most {spec['maxItems']} items")
         item_spec = spec.get("items")
         if isinstance(item_spec, dict):
             for index, item in enumerate(value):
@@ -398,8 +400,17 @@ class SandboxExecTool:
 
 
 def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
+    from samurai_ai.execution.security import HttpxProbeTool, NucleiScanTool
+
     return ToolRegistry(
-        adapters=(LocalEchoTool(), ProcessExecTool(), HttpFetchTool(), SandboxExecTool()),
+        adapters=(
+            LocalEchoTool(),
+            ProcessExecTool(),
+            HttpFetchTool(),
+            SandboxExecTool(),
+            HttpxProbeTool(),
+            NucleiScanTool(),
+        ),
         dynamic_resolver=dynamic_resolver,
     )
 

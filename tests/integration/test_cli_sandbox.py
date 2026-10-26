@@ -46,7 +46,7 @@ def test_cli_sandbox_sign_and_profiles(sandbox_home: Path, capsys) -> None:
 
     assert main(["--db", database, "sandbox", "sign"]) == 0
     output = capsys.readouterr().out
-    assert "signed 2 sandbox profile(s)" in output
+    assert "signed 4 sandbox profile(s)" in output
     assert signature_path.exists()
     assert signature_path.stat().st_mode & 0o777 == 0o600
 

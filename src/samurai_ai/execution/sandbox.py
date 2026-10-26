@@ -74,6 +74,38 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         max_output_bytes=65536,
         network_mode="scoped",
     ),
+    SandboxProfile(
+        id="sandbox.httpx@v1",
+        description="httpx prober (projectdiscovery/httpx) behind the scoped "
+        "egress proxy; image digest pinned at adoption time",
+        image=(
+            "projectdiscovery/httpx@sha256:"
+            "f8275a7c6aaec187249df9eaf4ad9196f4677adfc6a51a47b4aaa1d4db4f8ffc"
+        ),
+        allowed_executables=("httpx",),
+        cpu_limit="1.0",
+        memory_mb=512,
+        pids_limit=128,
+        timeout_seconds=300,
+        max_output_bytes=262144,
+        network_mode="scoped",
+    ),
+    SandboxProfile(
+        id="sandbox.nuclei@v1",
+        description="nuclei scanner (projectdiscovery/nuclei) behind the scoped "
+        "egress proxy; image digest pinned at adoption time",
+        image=(
+            "projectdiscovery/nuclei@sha256:"
+            "582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb"
+        ),
+        allowed_executables=("nuclei",),
+        cpu_limit="2.0",
+        memory_mb=1024,
+        pids_limit=256,
+        timeout_seconds=600,
+        max_output_bytes=524288,
+        network_mode="scoped",
+    ),
 )
 
 
