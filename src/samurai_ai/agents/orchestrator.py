@@ -47,7 +47,12 @@ from samurai_ai.domain.execution import (
     ToolExecutionError,
     ToolNotFoundError,
 )
-from samurai_ai.domain.kernel import ArtifactError, FindingSeverity, KernelError
+from samurai_ai.domain.kernel import (
+    ArtifactError,
+    FindingSeverity,
+    KernelError,
+    TaskStatus,
+)
 from samurai_ai.domain.models import CapabilityError, ModelCapability, ModelError
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.swarm import AgentSpecialization
@@ -148,6 +153,12 @@ class AgentOrchestrator:
                     f"subagent depth {depth} exceeds max_depth {max_depth} "
                     f"(parent run {parent_run_id})"
                 )
+        if task.status is TaskStatus.PENDING:
+            self.kernel.start_task(operation_id, task_id)
+        elif task.status is not TaskStatus.IN_PROGRESS:
+            raise AgentPlanError(
+                f"task {task_id} cannot run from status {task.status.value}"
+            )
 
         model, _ = self.models.resolve_model(candidates[0])
         if not (
@@ -321,6 +332,7 @@ class AgentOrchestrator:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         prompt = (
             f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
+            f"{self._tools_excerpt()}\n"
             f"Current step: {step}\n"
             f"Blackboard:\n{self._blackboard_excerpt(blackboard, run.id) or '(empty)'}"
         )
@@ -402,12 +414,25 @@ class AgentOrchestrator:
         self, operation_id: str, run: AgentRun, command: RequestToolRunCommand
     ) -> None:
         self.execution.registry.get(command.tool_id)
-        self.execution.run_tool(
+        result = self.execution.run_tool(
             operation_id,
             command.tool_id,
             command.params,
             task_id=run.task_id,
         )
+        # Feed a bounded, already-redacted excerpt back into the blackboard so
+        # the next executor step can actually see what the tool returned.
+        excerpt = result.stdout.strip()[:1500]
+        if excerpt:
+            self._append_note(
+                operation_id,
+                run,
+                NoteCommand(
+                    type="note",
+                    key=f"tool-result.{command.tool_id}",
+                    value=excerpt,
+                ),
+            )
 
     def _command_propose_finding(
         self, operation_id: str, run: AgentRun, command: ProposeFindingCommand
@@ -467,6 +492,17 @@ class AgentOrchestrator:
             "agent.run.finish",
             {"run_id": run.id, "status": status.value, "reason": reason},
         )
+
+    def _tools_excerpt(self) -> str:
+        lines = [
+            "Available tools (request_tool_run tool_id must be one of these):",
+        ]
+        for definition in self.execution.list_tools():
+            description = definition.description.split(".")[0][:80]
+            lines.append(
+                f"- {definition.id} (risk {definition.risk_class.value}): {description}"
+            )
+        return "\n".join(lines)
 
     def _blackboard_excerpt(self, blackboard: Blackboard, run_id: str) -> str:
         visible = blackboard.visible_for(run_id)

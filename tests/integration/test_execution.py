@@ -175,6 +175,27 @@ def test_r2_http_fetch_requires_approval_then_runs(
     assert result.run.approval_id == approval_id
 
 
+def test_approved_approval_is_reused_without_approval_id(tmp_path: Path, http_server) -> None:  # type: ignore[no-untyped-def]
+    service, kernel, _, execution = make_stack(tmp_path / "reuse.db")
+    operation = make_operation(service)
+
+    with pytest.raises(ApprovalRequiredError) as caught:
+        execution.run_tool(operation.id, "http.fetch", {"url": f"{http_server}/"})
+    kernel.approve(caught.value.approval_id, decided_by="operator")
+
+    # no approval_id passed: the existing approved record for this
+    # action+task satisfies the requirement instead of a fresh pending one
+    result = execution.run_tool(operation.id, "http.fetch", {"url": f"{http_server}/"})
+    assert result.run.status == ToolRunStatus.COMPLETED
+    assert result.run.approval_id == caught.value.approval_id
+    requested = [
+        event
+        for event in service.events(operation.id)
+        if event.event_type == "approval.requested"
+    ]
+    assert len(requested) == 1
+
+
 def test_run_with_mismatched_approval_is_rejected(tmp_path: Path) -> None:
     service, kernel, _, execution = make_stack(tmp_path / "mismatch.db")
     operation = make_operation(service)
