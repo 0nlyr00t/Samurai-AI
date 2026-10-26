@@ -118,6 +118,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.custom-manual": "or type a model name and press Enter",
         "model.custom-invalid": "endpoint id and base URL are required",
         "model.custom-failed": "failed: {error}",
+        "app.quit-hint": "press Ctrl+C again to exit",
         "reconcile.report": (
             "actions-marked-unknown={actions} | tool-runs-marked-failed={runs} | "
             "resumable-tasks={tasks} | pending-approvals={approvals}"
@@ -245,6 +246,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.custom-manual": "или введите имя модели и нажмите Enter",
         "model.custom-invalid": "нужны endpoint id и base URL",
         "model.custom-failed": "ошибка: {error}",
+        "app.quit-hint": "нажмите Ctrl+C ещё раз для выхода",
         "reconcile.report": (
             "отмечено-unknown={actions} | tool-runs-failed={runs} | "
             "возобновимые-задачи={tasks} | ожидающие-согласования={approvals}"

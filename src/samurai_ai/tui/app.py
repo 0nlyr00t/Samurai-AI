@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -490,9 +491,11 @@ class SamuraiApp(App[None]):
     }
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", show=False),
+        Binding("ctrl+c", "quit_requested", "Quit", show=False),
         Binding("ctrl+o", "toggle_journal", "Toggle journal", show=False),
     ]
+
+    _QUIT_CONFIRM_SECONDS = 2.0
 
     def __init__(
         self,
@@ -535,6 +538,7 @@ class SamuraiApp(App[None]):
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
         self._locale_known = settings.get_locale() is not None
+        self._last_quit_request = 0.0
 
     def _write_line(self, text: str) -> None:
         journal = self.query_one("#journal", RichLog)
@@ -594,6 +598,14 @@ class SamuraiApp(App[None]):
         event.input.value = ""
         if command:
             self._handle_command(command)
+
+    def action_quit_requested(self) -> None:
+        now = time.monotonic()
+        if now - self._last_quit_request <= self._QUIT_CONFIRM_SECONDS:
+            self.exit()
+            return
+        self._last_quit_request = now
+        self._write_line("[info] " + self.translator.t("app.quit-hint"))
 
     def action_toggle_journal(self) -> None:
         journal = self.query_one("#journal", RichLog)
