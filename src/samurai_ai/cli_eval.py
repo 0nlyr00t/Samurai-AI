@@ -54,6 +54,12 @@ def register_eval_commands(
     compare.add_argument("current", type=Path)
     compare.add_argument("--cost-tolerance", type=float, default=0.2)
     compare.add_argument("--wall-tolerance", type=float, default=0.3)
+    compare.add_argument(
+        "--min-wall-seconds",
+        type=float,
+        default=1.0,
+        help="wall-time regression floor: baselines faster than this are never flagged",
+    )
 
 
 def handle_eval_command(args: argparse.Namespace) -> int | None:
@@ -88,6 +94,7 @@ def handle_eval_command(args: argparse.Namespace) -> int | None:
         current,
         cost_tolerance=args.cost_tolerance,
         wall_tolerance=args.wall_tolerance,
+        min_wall_seconds=args.min_wall_seconds,
     )
     print(report_to_json(comparison), end="")
     for regression in comparison.regressions:

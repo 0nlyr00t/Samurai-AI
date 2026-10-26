@@ -201,6 +201,14 @@ def test_compare_reports_passes_within_tolerance() -> None:
     assert compare_reports(baseline, current).passed
 
 
+def test_compare_reports_wall_floor_ignores_subsecond_noise() -> None:
+    baseline = _report("s", [_result("a", _metrics(wall_seconds=0.03))])
+    current = _report("s", [_result("a", _metrics(wall_seconds=0.05))])
+    assert compare_reports(baseline, current).passed
+    noisy = compare_reports(baseline, current, min_wall_seconds=0.0)
+    assert not noisy.passed
+
+
 def test_compare_reports_flags_missing_scenario_and_error_run() -> None:
     baseline = _report("s", [_result("a", _metrics()), _result("b", _metrics())])
     current = _report(
