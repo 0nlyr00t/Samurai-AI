@@ -313,6 +313,7 @@ def compare_reports(
     *,
     cost_tolerance: float = 0.2,
     wall_tolerance: float = 0.3,
+    min_wall_seconds: float = 1.0,
 ) -> ComparisonResult:
     baseline_by_id = {result.scenario_id: result for result in baseline.results}
     current_by_id = {result.scenario_id: result for result in current.results}
@@ -343,8 +344,9 @@ def compare_reports(
                     f"cost_usd increased beyond {cost_tolerance:.0%}: "
                     f"{bm.cost_usd} -> {cm.cost_usd}"
                 )
-            if bm.wall_seconds > 0 and cm.wall_seconds > bm.wall_seconds * (
-                1 + wall_tolerance
+            if (
+                bm.wall_seconds >= min_wall_seconds
+                and cm.wall_seconds > bm.wall_seconds * (1 + wall_tolerance)
             ):
                 scenario_regressions.append(
                     f"wall_seconds increased beyond {wall_tolerance:.0%}: "
