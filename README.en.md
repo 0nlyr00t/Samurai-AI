@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates**, and **Stage 6b — fault injection, prompt-injection containment, soak, and migration/backup/restore suites** are complete.
 
 Implemented:
 
@@ -83,7 +83,7 @@ Implemented:
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v14, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 535 unit/integration/CLI/TUI tests.
+- 551 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), the extended security tool set (pending a

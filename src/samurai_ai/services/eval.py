@@ -15,6 +15,8 @@ from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.eval import (
     EvalError,
+    EvalFaultMode,
+    EvalProviderFault,
     EvalScenario,
     EvalScenarioStatus,
     EvalSuite,
@@ -62,12 +64,19 @@ class _ScriptedHandler(BaseHTTPRequestHandler):
     latency_ms: int = 0
     prompt_tokens: int = 40
     completion_tokens: int = 8
+    fault: EvalProviderFault | None = None
+    calls: int = 0
+    requests: list[bytes] = []
     lock = threading.Lock()
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(length)
+        body_in = self.rfile.read(length)
         with _ScriptedHandler.lock:
+            _ScriptedHandler.requests.append(body_in)
+            _ScriptedHandler.calls += 1
+            calls = _ScriptedHandler.calls
+            fault = _ScriptedHandler.fault
             if _ScriptedHandler.queue:
                 text = _ScriptedHandler.queue.pop(0)
             else:
@@ -75,6 +84,9 @@ class _ScriptedHandler(BaseHTTPRequestHandler):
             latency_ms = _ScriptedHandler.latency_ms
             prompt_tokens = _ScriptedHandler.prompt_tokens
             completion_tokens = _ScriptedHandler.completion_tokens
+        if fault is not None and calls > fault.after_calls:
+            self._reply_fault(fault)
+            return
         if latency_ms:
             time.sleep(latency_ms / 1000)
         body = json.dumps(
@@ -92,6 +104,26 @@ class _ScriptedHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _reply_fault(self, fault: EvalProviderFault) -> None:
+        if fault.mode is EvalFaultMode.CONNECTION_RESET:
+            self.connection.shutdown(2)
+            self.connection.close()
+            return
+        if fault.mode is EvalFaultMode.HTTP_ERROR:
+            body = json.dumps({"error": {"message": "injected fault"}}).encode()
+            self.send_response(fault.status)
+        elif fault.mode is EvalFaultMode.MALFORMED_JSON:
+            body = b'{"choices": [{"message":'
+            self.send_response(200)
+        else:
+            body = b""
+            self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
     def log_message(self, format: str, *args: object) -> None:
         pass
 
@@ -105,12 +137,19 @@ class ScriptedProviderServer:
         _ScriptedHandler.latency_ms = scenario.script.latency_ms
         _ScriptedHandler.prompt_tokens = scenario.script.prompt_tokens
         _ScriptedHandler.completion_tokens = scenario.script.completion_tokens
+        _ScriptedHandler.fault = scenario.script.fault
+        _ScriptedHandler.calls = 0
+        _ScriptedHandler.requests = []
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _ScriptedHandler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     @property
     def base_url(self) -> str:
         return f"http://127.0.0.1:{self._server.server_port}"
+
+    @property
+    def requests(self) -> list[bytes]:
+        return list(_ScriptedHandler.requests)
 
     def __enter__(self) -> ScriptedProviderServer:
         self._thread.start()

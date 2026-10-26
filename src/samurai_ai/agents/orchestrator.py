@@ -48,7 +48,7 @@ from samurai_ai.domain.execution import (
     ToolNotFoundError,
 )
 from samurai_ai.domain.kernel import ArtifactError, FindingSeverity, KernelError
-from samurai_ai.domain.models import CapabilityError, ModelCapability
+from samurai_ai.domain.models import CapabilityError, ModelCapability, ModelError
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.services.execution import ToolExecutionService
@@ -209,6 +209,11 @@ class AgentOrchestrator:
             raise
         except (AgentOutputError, AgentError) as exc:
             self._finish_failed(run, AgentRunStatus.FAILED, str(exc))
+            return self.get_run(run.id)
+        except ModelError as exc:
+            self._finish_failed(
+                run, AgentRunStatus.FAILED, f"provider-error:{exc}"
+            )
             return self.get_run(run.id)
 
         self.runs.finish(run)
