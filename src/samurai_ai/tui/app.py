@@ -8,11 +8,13 @@ from pathlib import Path
 
 from rich.markdown import Markdown
 from rich.padding import Padding
+from rich.segment import Segment
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.widgets import (
@@ -49,6 +51,23 @@ from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.models import CustomModelConflictError
 from samurai_ai.storage.swarm import SwarmRunRepository
+
+
+class SamuraiScreen(Screen[None]):
+    """Default screen: a finished mouse selection goes straight to the clipboard.
+
+    Some terminals / multiplexers swallow the follow-up Ctrl+C, so the copy
+    happens on mouse-up; Ctrl+C still works as a manual re-copy.
+    """
+
+    def on_text_selected(self, event: events.TextSelected) -> None:
+        text = self.get_selected_text()
+        if not text:
+            return
+        self.app.copy_to_clipboard(text)
+        translator = getattr(self.app, "translator", None)
+        if translator is not None:
+            self.app.notify(translator.t("copy.selection", chars=len(text)))
 
 
 class LanguagePromptScreen(ModalScreen[str]):
@@ -133,13 +152,20 @@ class SelectableRichLog(RichLog, can_focus=False):
             span = selection.get_span(row)
             if span is not None and span[0] < span[1]:
                 style = self.screen.get_component_rich_style("screen--selection")
-                parts = list(strip.divide([span[0], span[1]]))
-                if len(parts) == 3:
-                    strip = Strip.join(
-                        [parts[0], parts[1].apply_style(style), parts[2]]
-                    )
-                elif len(parts) == 2:
-                    strip = Strip.join([parts[0], parts[1].apply_style(style)])
+                start, end = span
+                # post_style paints the selection *on top* of existing colors
+                # (Strip.apply_style would put the segment's own background last).
+                highlighted = Strip(
+                    Segment.apply_style(list(strip[start:end]), post_style=style),
+                    end - start,
+                )
+                strip = Strip.join(
+                    [
+                        strip[0:start],
+                        highlighted,
+                        strip[end : strip.cell_length],
+                    ]
+                )
         return strip
 
 
@@ -820,6 +846,9 @@ class SamuraiApp(App[None]):
         self._last_ai_text: str | None = None
         self._last_ai_code: str | None = None
 
+    def get_default_screen(self) -> Screen[None]:
+        return SamuraiScreen()
+
     _DIM_STYLE = "dim #8b949e"
 
     def _styled(self, text: str) -> Text:
@@ -839,8 +868,8 @@ class SamuraiApp(App[None]):
     def _brand_text(self) -> Text:
         return Text.assemble(
             ("Samurai AI", "bold #4fa8ff"),
-            (" v", "dim #565f89"),
-            (__version__, "#ff6b6b"),
+            ("  v", "dim #565f89"),
+            (__version__, "dim #ff6b6b"),
         )
 
     def _write_user_message(self, text: str) -> None:
@@ -1342,11 +1371,13 @@ class SamuraiApp(App[None]):
     ) -> None:
         approval = self.kernel.kernel.get_approval(exc.approval_id)
         action = approval.action if approval is not None else exc.approval_id
-        if self._yolo:
-            self.kernel.approve(exc.approval_id, decided_by="yolo")
-            self._write_line(
-                "[allow] " + self.translator.t("access.auto", action=action)
-            )
+        if self._yolo or action.startswith("model.call"):
+            # Model calls are covered by the directory trust granted at
+            # startup; only OS-level command execution still prompts.
+            decided_by = "yolo" if self._yolo else "auto"
+            self.kernel.approve(exc.approval_id, decided_by=decided_by)
+            key = "access.auto" if self._yolo else "access.auto-model"
+            self._write_dim(self.translator.t(key, action=action))
             self.run_worker(
                 self._chat(text, model_id, exc.approval_id), exclusive=False
             )
@@ -1862,16 +1893,17 @@ class SamuraiApp(App[None]):
             )
         else:
             status_text = self.translator.t("statusbar.idle")
-        access = self.translator.t("access.yolo" if self._yolo else "access.ask")
         directory = self._short_cwd()
         if not self._directory_trusted():
             directory += self.translator.t("trust.untrusted-marker")
-        status_text = f"{directory} | {status_text} | {access}"
+        bar = Text(f"{directory} | {status_text} | ")
+        # Green dot: ask before running OS commands; red dot: yolo (no prompts).
+        bar.append("●", style="#ff6b6b" if self._yolo else "#51cf66")
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
-            status_text = f"{status_text} | model={model} reasoning={reasoning}"
-        status_text = f"{status_text} | /help"
-        status_bar.update(status_text)
+            bar.append(f" | model={model} reasoning={reasoning}")
+        bar.append(" | /help")
+        status_bar.update(bar)
         switcher = self.query_one("#views", ContentSwitcher)
         current = str(switcher.current or "journal")
         if current != "journal":

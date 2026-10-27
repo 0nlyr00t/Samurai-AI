@@ -44,7 +44,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.trust": "/trust           Manage directory access trust",
         "help.exit": "/exit             Close Samurai AI",
         "help.ctrl-o": "Ctrl-O            Toggle the event journal",
-        "help.ctrl-c": "Ctrl-C            Copy the selection; double-press to quit",
+        "help.ctrl-c": (
+            "Ctrl-C            Copy the selection (auto on mouse-up); double-press to quit"
+        ),
         "error.unknown-command": "Unknown command: {name}. Use /help.",
         "chat.no-model": "No default model configured — pick one with /model.",
         "chat.thinking": "{model} is thinking…",
@@ -57,6 +59,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "access.granted": "allowed: {action}",
         "access.denied": "denied: {action}",
         "access.auto": "auto-allowed (yolo): {action}",
+        "access.auto-model": "auto-allowed: {action} (directory trust covers model calls)",
+        "copy.selection": "selection copied ({chars} chars)",
         "status.no-operation": "No operation loaded",
         "scope.includes": "includes: {rules}",
         "scope.excludes": "excludes: {rules}",
@@ -193,7 +197,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.trust": "/trust           Управление доверием к директории",
         "help.exit": "/exit             Закрыть Samurai AI",
         "help.ctrl-o": "Ctrl-O            Переключить журнал событий",
-        "help.ctrl-c": "Ctrl-C            Копировать выделение; дважды — выход",
+        "help.ctrl-c": (
+            "Ctrl-C            Копировать выделение (само при отпускании мыши); дважды — выход"
+        ),
         "error.unknown-command": "Неизвестная команда: {name}. Используйте /help.",
         "chat.no-model": "Модель по умолчанию не настроена — выберите её через /model.",
         "chat.thinking": "{model} думает…",
@@ -206,6 +212,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "access.granted": "разрешено: {action}",
         "access.denied": "запрещено: {action}",
         "access.auto": "авто-разрешено (yolo): {action}",
+        "access.auto-model": (
+            "авто-разрешено: {action} (вызовы модели покрыты доверием к директории)"
+        ),
+        "copy.selection": "выделение скопировано ({chars} симв.)",
         "status.no-operation": "Операция не загружена",
         "scope.includes": "включения: {rules}",
         "scope.excludes": "исключения: {rules}",
