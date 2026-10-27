@@ -38,7 +38,9 @@
 
 **Этап 8 завершен:** TUI UX в духе kimi-code/opencode. First-run выбор языка — OptionList со стрелками + Enter вместо Tab/кнопок; чёрная тема по умолчанию (#000000, акценты teal/blue); цветной журнал — tag→style mapping через Rich Text (error/deny красные, allow зелёный, status/scope синие, finding magenta и т.д., markup остаётся выключенным — инъекции разметки невозможны); `/model` — модальный ModelPickerScreen: OptionList моделей (static реестр + discovery через API local/configured провайдеров, offline fallback) и OptionList reasoning effort (off/low/medium/high), стрелки/Tab/Enter/Esc, выбор персистится в settings (`model.default`, `model.reasoning_effort`) и показывается в status bar; reasoning effort проброшен в ChatRequest → openai-compatible `reasoning_effort` и ollama `think`; CLI `agent run`/`swarm run` без `--model` берут дефолт из settings (иначе exit 2 с инструкцией). Проверки: 566 tests (включая TUI pilot-тесты на стрелочный выбор языка и персист модели), ruff, strict mypy, package build — успешно.
 
-Следующий рабочий этап — **Этап 7, волна 2 security tools** (subfinder после env-secret канала, nmap после TCP-level egress enforcement) либо **свежий private holdout и soak на живых моделях** (внешние ресурсы), затем P2 (RBAC/SSO, distributed runners, air-gapped models).
+**Этап 9a завершен:** чат-агент с реальным shell и tool-loop. Реализованы governed инструмент `shell.exec` (R3, `bash -lc`, bounded/redacted output-артефакты), chat tool-loop в TUI (модель вызывает `shell_exec` → per-command access prompt или yolo → выполнение через ToolExecutionService → вывод возвращается модели, до 8 раундов + принудительный финальный ответ без инструментов — цикл больше не завершается молчанием), анимация «Думает…» (braille-спиннер без имени модели), сворачивание вывода команд под стрелку `▸` с раскрытием через `/expand`, история диалога (bounded, per-tab), system prompt «у тебя есть shell», автосоздание операции из первого сообщения (гейт «операция не загружена» удалён), `ModelService.chat()` (messages+tools рядом с complete), tools-маппинг и парсинг tool_calls в Ollama, curl-установщик `install.sh` и self-update `samurai update [--check]` + `--version`. Проверки: 609 tests (включая TUI-тесты tool-loop/отказа/лимита раундов/авто-операции), ruff, strict mypy, package build — успешно.
+
+Следующий рабочий этап — **Этап 9b–9d** (сабагенты из чата, самообучение, OCR/vision — см. раздел 9) либо **Этап 7, волна 2 security tools** (subfinder после env-secret канала, nmap после TCP-level egress enforcement) либо **свежий private holdout и soak на живых моделях** (внешние ресурсы), затем P2 (RBAC/SSO, distributed runners, air-gapped models).
 
 **Этап 7 (волна 1) завершен:** governed security tools adapters по threat review. Реализованы `recon.httpx-probe` (R2) и `scan.nuclei` (R3) — dedicated адаптеры с фиксированными шаблонами argv (модель выбирает только значения из fail-closed params schema: targets/profile/severity), scope.evaluate каждого target до spawn контейнера, запуск в новых signed sandbox profiles `sandbox.httpx@v1`/`sandbox.nuclei@v1` (образы projectdiscovery/httpx и projectdiscovery/nuclei pinned by digest, scoped egress через proxy, resource limits), structured summary (≤100 записей из JSONL) поверх raw-артефакта, egress events в stderr. Registry validator научился `maxItems`. При планировании вскрыты и задокументированы технические блокеры: nmap (raw TCP несовместим с CONNECT-proxy — ждёт TCP-level egress), subfinder (DNS-over-UDP + env-secret канал), ffuf (нет официального образа) — перенесены в deferred в `md/threat-review-security-tools.md`. ВНИМАНИЕ: набор sandbox profiles изменился — существующие установки должны переподписать allowlist (`samurai sandbox sign`). Проверки: 560 tests, ruff, strict mypy, CLI smoke, package build — успешно.
 
@@ -194,7 +196,23 @@
 - Подписанные релизы, воспроизводимые сборки и политика совместимости.
 - P2 отдельно: RBAC/SSO, distributed runners, air-gapped models и командная работа.
 
-## 9. Постоянные release gates
+## 9. Этап 9 — Автономность агента: сабагенты из чата, самообучение, vision
+
+Этап 9a (chat tool-loop, shell.exec, auto-operation, install/update) завершен — см. «Текущий статус».
+
+### Объем
+
+- **9b. Сабагенты из чата (chat delegation).** Чат-агент активно порождает governed subagent runs под подзадачи: chat tool `spawn_agent(task, specialization)` → AgentRun через AgentOrchestrator (depth limit и изоляция контекстов уже в ядре, параллелизм — через swarm-механику Этапа 5a), живой статус в ops-strip, bounded redacted digest результата возвращается в чат. Approvals/budget/scope наследуются от операции; сабагент не может порождать сабагентов из чат-контекста.
+- **9c. Самообучение (self-learning).** Write-путь в campaign memory: по завершении chat/agent run агент формулирует «урок» (methodology/decision/failure) — sanitized, bounded, redacted, с audit-событием `memory.learned` и operator review через `/memory` (сейчас память read-only для агентов — barrier от prompt injection сохраняется: whitelist ключей, bounded size, флаг авто-записи в settings). Recall: существующий digest памяти добавляется в system prompt чата.
+- **9d. OCR и анализ изображений.** Chat tool `read_image(path)`: локальный OCR (tesseract, если установлен на хосте) и/или vision-capable модель (image input для openai-compatible/anthropic/gemini/ollama-vision) с описанием содержимого изображения; результат — bounded text + governed artifact; чтение ограничено trusted directory, путь вне workspace отклоняется.
+
+### Acceptance (все пункты покрыты тестами)
+
+- Чат порождает сабагента на подзадачу: governed run виден в `/agents`, digest возвращается в чат, depth/budget соблюдены (scripted provider).
+- Уроки пишутся в память только через sanitized write-path; injection-текст из tool output не создает записей; recall реально попадает в system prompt (canary-тест).
+- `read_image` извлекает текст с эталонного изображения и возвращает описание от vision-модели; путь вне trusted directory отклонен без чтения файла.
+
+## 10. Постоянные release gates
 
 - Нет out-of-scope выполнения и обхода approvals в тестах.
 - Нет непроверенных находок в финальных отчетах.
@@ -204,7 +222,7 @@
 - Новые зависимости проходят security/maintenance review; архивный CAI не используется.
 - Документация соответствует фактическому поведению продукта.
 
-## 10. Стратегия качества
+## 11. Стратегия качества
 
 - **Unit:** чистое доменное ядро, policy, scope, transitions, parsers и reports.
 - **Integration:** SQLite, process execution, MCP, sandbox, recovery и migrations.
