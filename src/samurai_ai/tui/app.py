@@ -33,7 +33,8 @@ from samurai_ai import __version__
 from samurai_ai.domain.agents import AgentRunStatus
 from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
-from samurai_ai.domain.operations import Operation
+from samurai_ai.domain.operations import Operation, OperationMode
+from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.i18n import Translator
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
@@ -630,6 +631,92 @@ class CustomEndpointScreen(ModalScreen[str | None]):
         self.dismiss(model.id)
 
 
+class NewOperationScreen(ModalScreen[tuple[str, str, str] | None]):
+    """Dialog for the '+' button: name + mode, creates a fresh operation tab."""
+
+    CSS = """
+    NewOperationScreen {
+        align: center middle;
+    }
+    #newop-dialog {
+        width: 56;
+        height: auto;
+        padding: 1 2;
+        border: solid #5bc0be;
+        background: #0a0a0a;
+    }
+    #newop-title {
+        text-style: bold;
+        color: #4fa8ff;
+        padding-bottom: 1;
+    }
+    #newop-modes {
+        height: auto;
+        background: #0a0a0a;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, translator: Translator) -> None:
+        super().__init__()
+        self.translator = translator
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="newop-dialog"):
+            yield Static(self.translator.t("newop.title"), id="newop-title")
+            yield Input(
+                placeholder=self.translator.t("newop.name"), id="newop-name"
+            )
+            yield Input(
+                placeholder=self.translator.t("newop.scope"), id="newop-scope"
+            )
+            yield OptionList(
+                Option("bug-bounty", id="bug-bounty"),
+                Option("red-team", id="red-team"),
+                Option("ctf-htb", id="ctf-htb"),
+                Option("operation-plan", id="operation-plan"),
+                id="newop-modes",
+            )
+
+    def on_mount(self) -> None:
+        modes = self.query_one("#newop-modes", OptionList)
+        modes.highlighted = 0
+        self.query_one("#newop-name", Input).focus()
+
+    def _submit(self, mode: str) -> None:
+        name = self.query_one("#newop-name", Input).value.strip()
+        if not name:
+            self.query_one("#newop-name", Input).focus()
+            return
+        scope = self.query_one("#newop-scope", Input).value.strip()
+        self.dismiss((name, mode, scope))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "newop-name":
+            self.query_one("#newop-scope", Input).focus()
+        elif event.input.id == "newop-scope":
+            self.query_one("#newop-modes", OptionList).focus()
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        if event.option_list.id == "newop-modes" and event.option is not None:
+            self._submit(str(event.option.id or "bug-bounty"))
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key == "escape":
+            self.dismiss(None)
+
+
+class PlusButton(Static):
+    """Clickable '+' in the topbar — opens the new-operation dialog."""
+
+    def on_click(self) -> None:
+        handler = getattr(self.app, "_show_new_operation", None)
+        if handler is not None:
+            handler()
+
+
 class ViewTabs(Tabs):
     """Tabs that stay inactive until the operator picks one.
 
@@ -703,6 +790,17 @@ class SamuraiApp(App[None]):
         height: 2;
         background: #0a0a0a;
     }
+    #new-tab {
+        width: 5;
+        height: 2;
+        content-align: center middle;
+        background: #101018;
+        color: #51cf66;
+        text-style: bold;
+    }
+    #new-tab:hover {
+        background: #16213e;
+    }
     #opname {
         width: 1fr;
         height: 2;
@@ -714,10 +812,7 @@ class SamuraiApp(App[None]):
         width: auto;
         height: 2;
         padding: 0 1;
-        color: #4fa8ff;
-        text-style: bold;
         text-align: right;
-        content-align: right middle;
     }
     #body {
         height: 1fr;
@@ -732,11 +827,29 @@ class SamuraiApp(App[None]):
         border: solid #3a3a3a;
         background: #000000;
     }
-    #side-tabs {
+    #side {
         width: 18;
         height: 100%;
         border: solid #3a3a3a;
         background: #0a0a0a;
+    }
+    #side-title {
+        height: 1;
+        padding: 0 1;
+        background: #101018;
+        color: #4fa8ff;
+        text-style: bold;
+    }
+    #side-tabs {
+        height: 1fr;
+        background: #0a0a0a;
+        border: none;
+    }
+    #side-workspace {
+        height: 2;
+        padding: 0 1;
+        background: #16213e;
+        color: #74c0fc;
     }
     #ops-strip {
         height: 1;
@@ -894,10 +1007,11 @@ class SamuraiApp(App[None]):
         journal.write(Text(text, style=self._DIM_STYLE))
 
     def _brand_text(self) -> Text:
+        # The version dangles from the "I" of "AI" on a little thread.
         return Text.assemble(
             ("Samurai AI", "bold #4fa8ff"),
-            ("  v", "dim #565f89"),
-            (__version__, "dim #ff6b6b"),
+            ("\n         ╰╴", "dim #565f89"),
+            (f"v{__version__}", "dim #ff6b6b"),
         )
 
     def _write_user_message(self, text: str) -> None:
@@ -927,6 +1041,7 @@ class SamuraiApp(App[None]):
                 id="view-tabs",
                 active="",
             )
+            yield PlusButton("+", id="new-tab")
             yield Static(id="opname")
             yield Static(id="brand")
         with Horizontal(id="body"):
@@ -938,12 +1053,15 @@ class SamuraiApp(App[None]):
                 yield SelectableRichLog(id="view-bounty", markup=False, wrap=True)
                 yield SelectableRichLog(id="view-findings", markup=False, wrap=True)
                 yield SelectableRichLog(id="view-access", markup=False, wrap=True)
-            yield OptionList(
-                Option(self.translator.t("tabs.journal"), id="side-journal"),
-                Option(self.translator.t("tabs.findings"), id="side-findings"),
-                Option(self.translator.t("tabs.access"), id="side-access"),
-                id="side-tabs",
-            )
+            with Vertical(id="side"):
+                yield Static(id="side-title")
+                yield OptionList(
+                    Option(self.translator.t("tabs.journal"), id="side-journal"),
+                    Option(self.translator.t("tabs.findings"), id="side-findings"),
+                    Option(self.translator.t("tabs.access"), id="side-access"),
+                    id="side-tabs",
+                )
+                yield Static(id="side-workspace")
         with Horizontal(id="ops-strip"):
             yield Static(id="strip-agents", classes="strip-item")
             yield Static(id="strip-todo", classes="strip-item")
@@ -1013,16 +1131,17 @@ class SamuraiApp(App[None]):
         self._write_dim(self.translator.t("welcome.help-hint"))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "command-input":
-            popup = self._suggestions_popup()
-            if popup.display and popup.highlighted is not None:
-                highlighted = str(
-                    popup.get_option_at_index(popup.highlighted).id or ""
-                )
-                if highlighted and highlighted != event.value.strip():
-                    self.accept_suggestion()
-                    return
-            popup.display = False
+        if event.input.id != "command-input":
+            return
+        popup = self._suggestions_popup()
+        if popup.display and popup.highlighted is not None:
+            highlighted = str(
+                popup.get_option_at_index(popup.highlighted).id or ""
+            )
+            if highlighted and highlighted != event.value.strip():
+                self.accept_suggestion()
+                return
+        popup.display = False
         command = event.value.strip()
         event.input.value = ""
         if command:
@@ -1107,11 +1226,46 @@ class SamuraiApp(App[None]):
         side.highlighted = None
         self._switch_view(pane)
 
+    _TITLE_KEY_BY_VIEW = {
+        "journal": "tabs.journal",
+        "view-ops": "tabs.ops",
+        "view-bounty": "tabs.bounty",
+        "view-findings": "tabs.findings",
+        "view-access": "tabs.access",
+    }
+
     def _switch_view(self, pane: str) -> None:
         self.query_one("#views", ContentSwitcher).current = pane
+        key = self._TITLE_KEY_BY_VIEW.get(pane)
+        if key is not None:
+            self.query_one("#side-title", Static).update(self.translator.t(key))
         if pane != "journal":
             self._render_view(pane)
         self.query_one("#command-input", Input).focus()
+
+    def _show_new_operation(self) -> None:
+        self.push_screen(
+            NewOperationScreen(self.translator), self._on_new_operation
+        )
+
+    def _on_new_operation(self, choice: tuple[str, str, str] | None) -> None:
+        if choice is None:
+            self.query_one("#command-input", Input).focus()
+            return
+        name, mode, scope = choice
+        includes = tuple(
+            rule.strip() for rule in scope.split(",") if rule.strip()
+        ) or ("127.0.0.1/32",)
+        operation = self.service.create(
+            name, OperationMode(mode), ScopeContract(includes=includes)
+        )
+        self.operation = operation
+        self._auto_title = None
+        self._write_dim(
+            self.translator.t("newop.created", name=name, mode=mode)
+        )
+        self._switch_view("journal")
+        self._refresh_chrome()
 
     def _render_view(self, pane: str) -> None:
         log = self.query_one(f"#{pane}", RichLog)
@@ -2061,6 +2215,17 @@ class SamuraiApp(App[None]):
         self.query_one("#brand", Static).update(self._brand_text())
         title = self._auto_title or (self.operation.name if self.operation else "")
         self.query_one("#opname", Static).update(title)
+        side_title = self.query_one("#side-title", Static)
+        if not str(side_title.render()):
+            switcher_now = self.query_one("#views", ContentSwitcher)
+            key = self._TITLE_KEY_BY_VIEW.get(str(switcher_now.current or "journal"))
+            if key is not None:
+                side_title.update(self.translator.t(key))
+        workspace = Text.assemble(
+            (self.translator.t("side.workspace"), "dim #565f89"),
+            ("\n" + self._short_cwd(), "#74c0fc"),
+        )
+        self.query_one("#side-workspace", Static).update(workspace)
         model = self.models.default_model()
         directory = self._short_cwd()
         if not self._directory_trusted():
