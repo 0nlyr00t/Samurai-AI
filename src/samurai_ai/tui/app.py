@@ -31,7 +31,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from samurai_ai import __version__
-from samurai_ai.agents.provider import Message, ToolCall, ToolSpec
+from samurai_ai.agents.provider import ChatResponse, Message, ToolCall, ToolSpec
 from samurai_ai.domain.agents import AgentRunStatus
 from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
@@ -980,6 +980,7 @@ class SamuraiApp(App[None]):
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
         self._chat_history: list[Message] = []
+        self._expandable: list[tuple[str, int | None, str, str]] = []
         self._thinking_timer: Timer | None = None
         self._thinking_depth: int = 0
         self._thinking_frame: int = 0
@@ -1596,6 +1597,9 @@ class SamuraiApp(App[None]):
         if name == "/copy":
             self._copy_last(argument.strip())
             return
+        if name == "/expand":
+            self._expand_outputs()
+            return
 
         if name.startswith("/"):
             self._write_line(
@@ -1702,6 +1706,7 @@ class SamuraiApp(App[None]):
         if self._auto_title is None:
             # The tab names itself from the task at hand
             self._auto_title = title
+        self._expandable.clear()
         self._write_user_message(text)
         self._thinking_start()
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
@@ -1716,27 +1721,23 @@ class SamuraiApp(App[None]):
             self._refresh_chrome()
             self.query_one("#command-input", Input).focus()
 
-    async def _chat_loop(
-        self, text: str, model_id: str, approval_id: str | None
-    ) -> None:
-        reasoning = (
-            self.settings.get_value(f"model.reasoning_effort.{model_id}")
-            or self.models.default_reasoning_effort()
-        )
-        operation_id = self.operation.id if self.operation else ""
-        if not self._chat_history:
-            self._chat_history.append(
-                Message(role="system", content=self._chat_system_prompt())
-            )
-        self._chat_history.append(Message(role="user", content=text))
-        for _round in range(self._CHAT_MAX_TOOL_ROUNDS):
+    async def _request_chat_completion(
+        self,
+        operation_id: str,
+        model_id: str,
+        reasoning: str | None,
+        tools: tuple[ToolSpec, ...],
+    ) -> ChatResponse | None:
+        """One model call with inline approval handling; None = denied/failed."""
+        approval_id: str | None = None
+        while True:
             try:
-                response = await asyncio.to_thread(
+                return await asyncio.to_thread(
                     self.models.chat,
                     operation_id,
                     model_id,
                     tuple(self._chat_history),
-                    tools=self._CHAT_TOOL_SPECS,
+                    tools=tools,
                     reasoning_effort=reasoning,
                     approval_id=approval_id,
                 )
@@ -1767,11 +1768,32 @@ class SamuraiApp(App[None]):
                 self._write_line(
                     "[deny] " + self.translator.t("access.denied", action=action)
                 )
-                return
+                return None
+
+    async def _chat_loop(
+        self, text: str, model_id: str, approval_id: str | None
+    ) -> None:
+        del approval_id  # approvals are handled per call inside the loop
+        reasoning = (
+            self.settings.get_value(f"model.reasoning_effort.{model_id}")
+            or self.models.default_reasoning_effort()
+        )
+        operation_id = self.operation.id if self.operation else ""
+        if not self._chat_history:
+            self._chat_history.append(
+                Message(role="system", content=self._chat_system_prompt())
+            )
+        self._chat_history.append(Message(role="user", content=text))
+        for _round in range(self._CHAT_MAX_TOOL_ROUNDS):
+            try:
+                response = await self._request_chat_completion(
+                    operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
+                )
             except Exception as exc:  # noqa: BLE001 - surfaced to the operator
                 self._write_line(f"[error] {exc}")
                 return
-            approval_id = None
+            if response is None:
+                return
             self._ctx_tokens += (
                 response.usage.prompt_tokens + response.usage.completion_tokens
             )
@@ -1780,7 +1802,10 @@ class SamuraiApp(App[None]):
                     Message(role="assistant", content=response.text)
                 )
                 self._trim_chat_history()
-                self._write_ai_message(response)
+                if response.text.strip():
+                    self._write_ai_message(response)
+                else:
+                    self._write_dim(self.translator.t("chat.empty-reply"))
                 return
             if response.text.strip():
                 self._chat_history.append(
@@ -1789,7 +1814,24 @@ class SamuraiApp(App[None]):
             for call in response.tool_calls:
                 self._chat_history.append(await self._run_chat_tool(call))
             self._trim_chat_history()
+        # The tool rounds are exhausted: force a final summary call without
+        # tools so the operator always gets a closing answer instead of
+        # silence after the loop.
         self._write_dim(self.translator.t("chat.tool-limit"))
+        try:
+            final = await self._request_chat_completion(
+                operation_id, model_id, reasoning, ()
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            self._write_line(f"[error] {exc}")
+            return
+        if final is None:
+            return
+        self._ctx_tokens += final.usage.prompt_tokens + final.usage.completion_tokens
+        self._chat_history.append(Message(role="assistant", content=final.text))
+        self._trim_chat_history()
+        if final.text.strip():
+            self._write_ai_message(final)
 
     async def _run_chat_tool(self, call: ToolCall) -> Message:
         tool_id = self._CHAT_TOOL_IDS.get(call.name)
@@ -1848,11 +1890,16 @@ class SamuraiApp(App[None]):
             self._write_line(f"[error] {exc}")
             return Message(role="user", content=f"[tool {call.name}] error: {exc}")
         exit_code = result.run.exit_code
+        # Long tool output collapses under an arrow; /expand reveals it.
+        self._expandable.append((command, exit_code, result.stdout, result.stderr))
         self._write_dim(
-            "  └ " + self.translator.t("chat.tool-exit", code=exit_code)
+            self.translator.t(
+                "chat.tool-collapsed",
+                command=command,
+                code=exit_code,
+                lines=len(result.stdout.strip().splitlines()),
+            )
         )
-        for line in (result.stdout.strip().splitlines() or [])[:10]:
-            self._write_dim(f"  {line}")
         stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
         stderr = result.stderr[:1000]
         return Message(
@@ -1862,6 +1909,20 @@ class SamuraiApp(App[None]):
                 f"stdout:\n{stdout}\nstderr:\n{stderr}"
             ),
         )
+
+    def _expand_outputs(self) -> None:
+        """Reveal the collapsed tool output of the current reply in full."""
+        if not self._expandable:
+            self._write_dim(self.translator.t("chat.expand-empty"))
+            return
+        for command, exit_code, stdout, stderr in self._expandable:
+            self._write_dim(
+                f"▾ ⚙ {command} — "
+                + self.translator.t("chat.tool-exit", code=exit_code)
+            )
+            text = stdout if stdout.strip() else stderr
+            for line in text.rstrip().splitlines():
+                self._write_dim(f"  {line}")
 
     def _copy_last(self, what: str) -> None:
         text = self._last_ai_code if what == "code" else self._last_ai_text

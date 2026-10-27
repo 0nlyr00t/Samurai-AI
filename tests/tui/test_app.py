@@ -1189,8 +1189,16 @@ def test_chat_tool_loop_executes_shell_command(tmp_path: Path) -> None:
                 assert provider.calls == 2
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "echo hello-from-tool" in text
-                assert "hello-from-tool" in text
+                # output is collapsed under an arrow, not spilled as a wall
+                assert "▸ ⚙ echo hello-from-tool" in text
                 assert "ran it" in text
+                # /expand reveals the full collapsed output
+                command_input.value = "/expand"
+                await pilot.press("enter")
+                await pilot.pause()
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "▾ ⚙ echo hello-from-tool" in text
+                assert "  hello-from-tool" in text
                 # the tool result was fed back to the model
                 second = provider.requests[1]
                 history = [
@@ -1302,6 +1310,89 @@ def test_chat_without_operation_autocreates_one(tmp_path: Path) -> None:
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "echo: map the target" in text
                 assert "operation" not in text.lower() or "not loaded" not in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+class _EndlessToolProvider:
+    """Always requests a tool until the tools are taken away."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+        self.calls += 1
+        if request.tools:
+            return ChatResponse(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id=f"call-{self.calls}",
+                        name="shell_exec",
+                        arguments={"command": "true"},
+                    ),
+                ),
+                usage=Usage(prompt_tokens=1, completion_tokens=1),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=1,
+            )
+        return ChatResponse(
+            text="final summary after the loop",
+            usage=Usage(prompt_tokens=1, completion_tokens=1),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=1,
+        )
+
+
+def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
+    provider = _EndlessToolProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("tui.yolo", "1")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Loop lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "keep running true"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # 8 tool rounds + 1 closing call without tools: the operator
+                # always gets a final answer instead of silence
+                assert provider.calls == 9
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "final summary after the loop" in text
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 

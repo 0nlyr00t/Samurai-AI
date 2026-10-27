@@ -35,6 +35,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.lang": "/lang [ru|en]     Show or change the interface language",
         "help.model": "/model           Pick the default model and reasoning effort",
         "help.copy": "/copy [code]      Copy the last reply (or its code block)",
+        "help.expand": "/expand           Reveal the collapsed tool output in full",
         "help.yolo": "/yolo             Toggle YOLO mode (no permission prompts)",
         "help.mouse": "/mouse            Toggle mouse capture (off = native selection)",
         "help.trust": "/trust           Manage directory access trust",
@@ -58,8 +59,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "language, keep replies concise, format code as Markdown."
         ),
         "chat.tool-denied": "denied by operator: {command}",
-        "chat.tool-limit": "tool round limit reached — stopping the command loop",
+        "chat.tool-limit": "tool round limit reached — summarizing without tools",
         "chat.tool-exit": "exit {code}",
+        "chat.tool-collapsed": (
+            "▸ ⚙ {command} — exit {code} · {lines} lines · /expand to show"
+        ),
+        "chat.expand-empty": "nothing to expand yet — no tool output in this reply",
+        "chat.empty-reply": "(empty model reply)",
         "copy.done": "copied {chars} chars to the clipboard",
         "copy.empty": "nothing to copy yet — send a message first",
         "copy.code-empty": "the last reply has no code block",
@@ -204,6 +210,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.lang": "/lang [ru|en]     Показать или сменить язык интерфейса",
         "help.model": "/model           Выбрать модель по умолчанию и уровень рассуждений",
         "help.copy": "/copy [code]      Скопировать последний ответ (или блок кода)",
+        "help.expand": "/expand           Раскрыть свёрнутый вывод команд полностью",
         "help.yolo": "/yolo             Режим YOLO (без запросов разрешений)",
         "help.mouse": "/mouse            Захват мыши (выкл = обычное выделение терминала)",
         "help.trust": "/trust           Управление доверием к директории",
@@ -228,8 +235,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "оформляй в Markdown."
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
-        "chat.tool-limit": "достигнут лимит раундов команд — цикл остановлен",
+        "chat.tool-limit": "лимит раундов команд — подвожу итог без инструментов",
         "chat.tool-exit": "код выхода {code}",
+        "chat.tool-collapsed": (
+            "▸ ⚙ {command} — exit {code} · строк: {lines} · /expand покажет вывод"
+        ),
+        "chat.expand-empty": "пока нечего раскрывать — в этом ответе нет вывода команд",
+        "chat.empty-reply": "(пустой ответ модели)",
         "copy.done": "скопировано символов: {chars}",
         "copy.empty": "пока нечего копировать — отправьте сообщение",
         "copy.code-empty": "в последнем ответе нет блока кода",
@@ -379,6 +391,7 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.lang",
     "help.model",
     "help.copy",
+    "help.expand",
     "help.yolo",
     "help.mouse",
     "help.trust",
