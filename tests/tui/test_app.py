@@ -1125,6 +1125,44 @@ def test_ops_strip_shows_agents_todo_and_ctx_tokens(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_plus_button_creates_operation_tab(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import NewOperationScreen
+
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.click("#new-tab")
+            await pilot.pause()
+            assert isinstance(app.screen, NewOperationScreen)
+            name_input = app.screen.query_one("#newop-name", Input)
+            name_input.value = "Fresh recon op"
+            modes = app.screen.query_one("#newop-modes", OptionList)
+            modes.highlighted = 1  # red-team
+            await pilot.press("enter")  # name -> scope field
+            await pilot.pause()
+            await pilot.press("enter")  # scope -> mode list
+            await pilot.pause()
+            await pilot.press("enter")  # select red-team
+            await pilot.pause()
+            assert not isinstance(app.screen, NewOperationScreen)
+            assert app.operation is not None
+            assert app.operation.name == "Fresh recon op"
+            assert app.operation.mode.value == "red-team"
+            assert "Fresh recon op" in str(app.query_one("#opname", Static).render())
+            from textual.widgets import ContentSwitcher
+
+            switcher = app.query_one("#views", ContentSwitcher)
+            assert switcher.current == "journal"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_mouse_toggle_switches_capture_setting(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     settings = stack[2]
