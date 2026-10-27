@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -66,6 +67,7 @@ def make_stack(
     kernel = KernelService(service, KernelRepository(database))
     recovery_repository = RecoveryRepository(database)
     settings = SettingsService(recovery_repository)
+    settings.set_value("tui.trusted_dirs", json.dumps([str(Path.cwd().resolve())]))
     recovery = RecoveryService(service, kernel, recovery_repository)
     vault = VaultService(
         VaultRepository(database), operation_repository, tmp_path / "vault.key"

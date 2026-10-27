@@ -2,13 +2,24 @@ import asyncio
 import json
 import re
 import time
+from pathlib import Path
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, OptionList, RichLog, Static
+from textual.selection import Selection
+from textual.widgets import (
+    Button,
+    ContentSwitcher,
+    Input,
+    OptionList,
+    RichLog,
+    Static,
+    Tab,
+    Tabs,
+)
 from textual.widgets.option_list import Option
 
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
@@ -81,6 +92,80 @@ class LanguagePromptScreen(ModalScreen[str]):
 REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 
 ADD_CUSTOM_ID = "__add_custom__"
+
+
+class SelectableRichLog(RichLog):
+    """RichLog that participates in mouse text selection (copy with Ctrl+C)."""
+
+    @property
+    def allow_select(self) -> bool:
+        return True
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        text = "\n".join(strip.text for strip in self.lines)
+        if not text:
+            return None
+        return selection.extract(text), "\n"
+
+
+class TrustDirectoryScreen(ModalScreen[str | None]):
+    """First-run consent dialog for working in the current directory."""
+
+    CSS = """
+    TrustDirectoryScreen {
+        align: center middle;
+    }
+    #trust-dialog {
+        width: 72;
+        height: auto;
+        padding: 1 2;
+        border: solid #5bc0be;
+        background: #0a0a0a;
+    }
+    #trust-title {
+        text-style: bold;
+        color: #4fa8ff;
+        padding-bottom: 1;
+    }
+    #trust-path {
+        color: #ffd43b;
+        padding-bottom: 1;
+    }
+    #trust-options {
+        height: auto;
+        background: #0a0a0a;
+    }
+    """
+
+    def __init__(self, translator: Translator, path: str) -> None:
+        super().__init__()
+        self.translator = translator
+        self.path = path
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="trust-dialog"):
+            yield Static(self.translator.t("trust.title"), id="trust-title")
+            yield Static(self.path, id="trust-path")
+            yield OptionList(
+                Option(self.translator.t("trust.always"), id="t-always"),
+                Option(self.translator.t("trust.session"), id="t-session"),
+                Option(self.translator.t("trust.deny"), id="t-deny"),
+                id="trust-options",
+            )
+
+    def on_mount(self) -> None:
+        options = self.query_one("#trust-options", OptionList)
+        options.highlighted = 0
+        options.focus()
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        self.dismiss(str(event.option.id or "t-deny")[2:])
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key == "escape":
+            self.dismiss(None)
 
 
 class ModelPickerScreen(ModalScreen[tuple[str, str]]):
@@ -441,22 +526,44 @@ class CustomEndpointScreen(ModalScreen[str | None]):
 
 
 class HistoryInput(Input):
-    """Command input with shell-like history on the Up/Down arrows."""
+    """Command input with shell-like history and slash-command suggestions."""
 
     BINDINGS = [
         Binding("up", "history_previous", show=False),
         Binding("down", "history_next", show=False),
+        Binding("tab", "accept_suggestion", show=False),
+        Binding("escape", "close_suggestions", show=False),
     ]
 
     def action_history_previous(self) -> None:
+        if self._suggestions_step(-1):
+            return
         step = getattr(self.app, "history_step", None)
         if step is not None:
             step(-1)
 
     def action_history_next(self) -> None:
+        if self._suggestions_step(1):
+            return
         step = getattr(self.app, "history_step", None)
         if step is not None:
             step(1)
+
+    def action_accept_suggestion(self) -> None:
+        accept = getattr(self.app, "accept_suggestion", None)
+        if accept is not None:
+            accept()
+
+    def action_close_suggestions(self) -> None:
+        close = getattr(self.app, "close_suggestions", None)
+        if close is not None:
+            close()
+
+    def _suggestions_step(self, direction: int) -> bool:
+        step = getattr(self.app, "suggestions_step", None)
+        if step is None:
+            return False
+        return bool(step(direction))
 
 
 class SamuraiApp(App[None]):
@@ -466,18 +573,38 @@ class SamuraiApp(App[None]):
         background: #000000;
         color: #e0e0e0;
     }
-    #operation-header {
-        height: 1;
-        padding: 0 1;
+    #topbar {
+        height: 2;
         background: #0a0a0a;
+    }
+    #view-tabs {
+        width: 1fr;
+        height: 2;
+        background: #0a0a0a;
+    }
+    #brand {
+        width: auto;
+        height: 2;
+        padding: 0 1;
         color: #4fa8ff;
         text-style: bold;
+        text-align: right;
     }
-    #journal {
+    #views {
+        height: 1fr;
+    }
+    #journal, #view-plan, #view-findings, #view-access {
         height: 1fr;
         padding: 0 1;
         border: solid #3a3a3a;
         background: #000000;
+    }
+    #command-suggestions {
+        height: auto;
+        max-height: 9;
+        border: solid #3a3a3a;
+        background: #0a0a0a;
+        display: none;
     }
     #command-input {
         height: 3;
@@ -491,6 +618,13 @@ class SamuraiApp(App[None]):
         color: #888888;
     }
     """
+
+    _VIEW_BY_TAB = {
+        "tab-journal": "journal",
+        "tab-plan": "view-plan",
+        "tab-findings": "view-findings",
+        "tab-access": "view-access",
+    }
 
     _TAG_STYLES = {
         "error": "bold #ff6b6b",
@@ -525,6 +659,7 @@ class SamuraiApp(App[None]):
         "assets": "#a9e34b",
         "report": "#ffa94d",
         "model": "#4fa8ff",
+        "access": "#ffd43b",
         "info": "#888888",
     }
 
@@ -580,16 +715,37 @@ class SamuraiApp(App[None]):
         self._history: list[str] = json.loads(settings.get_value("tui.history") or "[]")
         self._history_index: int | None = None
         self._history_draft = ""
+        self._cwd = Path.cwd().resolve()
+        self._session_trusted: set[str] = set()
+        self._dir_trusted: bool | None = None
+
+    def _styled(self, text: str) -> Text:
+        match = re.match(r"^\[([a-z-]+)\]", text)
+        style = self._TAG_STYLES.get(match.group(1), "") if match else ""
+        return Text(text, style=style)
 
     def _write_line(self, text: str) -> None:
         journal = self.query_one("#journal", RichLog)
-        match = re.match(r"^\[([a-z-]+)\]", text)
-        style = self._TAG_STYLES.get(match.group(1), "") if match else ""
-        journal.write(Text(text, style=style))
+        journal.write(self._styled(text))
 
     def compose(self) -> ComposeResult:
-        yield Static(id="operation-header")
-        yield RichLog(id="journal", markup=False, wrap=True, auto_scroll=True)
+        with Horizontal(id="topbar"):
+            yield Tabs(
+                Tab(self.translator.t("tabs.journal"), id="tab-journal"),
+                Tab(self.translator.t("tabs.plan"), id="tab-plan"),
+                Tab(self.translator.t("tabs.findings"), id="tab-findings"),
+                Tab(self.translator.t("tabs.access"), id="tab-access"),
+                id="view-tabs",
+            )
+            yield Static(id="brand")
+        with ContentSwitcher(initial="journal", id="views"):
+            yield SelectableRichLog(
+                id="journal", markup=False, wrap=True, auto_scroll=True
+            )
+            yield SelectableRichLog(id="view-plan", markup=False, wrap=True)
+            yield SelectableRichLog(id="view-findings", markup=False, wrap=True)
+            yield SelectableRichLog(id="view-access", markup=False, wrap=True)
+        yield OptionList(id="command-suggestions")
         yield HistoryInput(
             placeholder=self.translator.t("input.placeholder"), id="command-input"
         )
@@ -606,8 +762,7 @@ class SamuraiApp(App[None]):
 
         self._refresh_chrome()
         if self._locale_known:
-            self._write_welcome()
-            self.query_one("#command-input", Input).focus()
+            self._after_locale()
         else:
             self.push_screen(LanguagePromptScreen(self.translator), self._on_locale_chosen)
 
@@ -616,12 +771,28 @@ class SamuraiApp(App[None]):
             self.settings.set_locale(locale)
             self.translator.set_locale(locale)
             self._locale_known = True
+            self._retitle_tabs()
         self.query_one("#command-input", Input).placeholder = self.translator.t(
             "input.placeholder"
         )
+        self._after_locale()
+
+    def _after_locale(self) -> None:
         self._write_welcome()
         self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
+        self._maybe_prompt_trust()
+
+    def _retitle_tabs(self) -> None:
+        tabs = self.query_one("#view-tabs", Tabs)
+        for tab_id, key in (
+            ("tab-journal", "tabs.journal"),
+            ("tab-plan", "tabs.plan"),
+            ("tab-findings", "tabs.findings"),
+            ("tab-access", "tabs.access"),
+        ):
+            tab = tabs.query_one(f"#{tab_id}", Tab)
+            tab.label = self.translator.t(key)
 
     def _write_welcome(self) -> None:
         self._write_line(self.translator.t("welcome.title"))
@@ -637,6 +808,16 @@ class SamuraiApp(App[None]):
         self._write_line(self.translator.t("welcome.help-hint"))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "command-input":
+            popup = self._suggestions_popup()
+            if popup.display and popup.highlighted is not None:
+                highlighted = str(
+                    popup.get_option_at_index(popup.highlighted).id or ""
+                )
+                if highlighted and highlighted != event.value.strip():
+                    self.accept_suggestion()
+                    return
+            popup.display = False
         command = event.value.strip()
         event.input.value = ""
         if command:
@@ -680,9 +861,166 @@ class SamuraiApp(App[None]):
         self._write_line("[info] " + self.translator.t("app.quit-hint"))
 
     def action_toggle_journal(self) -> None:
-        journal = self.query_one("#journal", RichLog)
-        journal.display = not journal.display
+        views = self.query_one("#views", ContentSwitcher)
+        views.display = not views.display
         self.query_one("#command-input", Input).focus()
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        pane = self._VIEW_BY_TAB.get(str(event.tab.id))
+        if pane is None:
+            return
+        self.query_one("#views", ContentSwitcher).current = pane
+        if pane != "journal":
+            self._render_view(pane)
+        self.query_one("#command-input", Input).focus()
+
+    def _render_view(self, pane: str) -> None:
+        log = self.query_one(f"#{pane}", RichLog)
+        log.clear()
+        for line in self._view_lines(pane):
+            log.write(self._styled(line))
+
+    def _view_lines(self, pane: str) -> list[str]:
+        if pane == "view-plan":
+            return self._plan_lines() + self._task_lines() + self._gate_lines()
+        if pane == "view-findings":
+            return self._finding_lines() + self._evidence_lines()
+        if pane == "view-access":
+            return self._access_lines()
+        return []
+
+    # --- slash-command suggestions -------------------------------------
+
+    def _command_specs(self) -> list[tuple[str, str]]:
+        specs: list[tuple[str, str]] = []
+        for line in self.translator.help_lines():
+            if not line.startswith("/"):
+                continue
+            name, _, description = line.partition(" ")
+            specs.append((name, description.strip()))
+        return specs
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "command-input":
+            self._update_suggestions()
+
+    def _update_suggestions(self) -> None:
+        value = self.query_one("#command-input", Input).value
+        popup = self.query_one("#command-suggestions", OptionList)
+        matches: list[tuple[str, str]] = []
+        if value.startswith("/") and " " not in value:
+            matches = [
+                (name, description)
+                for name, description in self._command_specs()
+                if name.startswith(value) and name != value
+            ]
+        if not matches:
+            popup.display = False
+            return
+        popup.clear_options()
+        popup.add_options(
+            Option(f"{name}  {description}", id=name) for name, description in matches
+        )
+        popup.highlighted = 0
+        popup.display = True
+
+    def _suggestions_popup(self) -> OptionList:
+        return self.query_one("#command-suggestions", OptionList)
+
+    def suggestions_step(self, direction: int) -> bool:
+        popup = self._suggestions_popup()
+        if not popup.display or popup.option_count == 0:
+            return False
+        current = popup.highlighted or 0
+        popup.highlighted = (current + direction) % popup.option_count
+        return True
+
+    def accept_suggestion(self) -> None:
+        popup = self._suggestions_popup()
+        if not popup.display or popup.highlighted is None:
+            return
+        option = popup.get_option_at_index(popup.highlighted)
+        command_input = self.query_one("#command-input", Input)
+        command_input.value = str(option.id or "")
+        command_input.cursor_position = len(command_input.value)
+        popup.display = False
+        command_input.focus()
+
+    def close_suggestions(self) -> None:
+        popup = self._suggestions_popup()
+        if popup.display:
+            popup.display = False
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        if event.option_list.id != "command-suggestions" or event.option is None:
+            return
+        command_input = self.query_one("#command-input", Input)
+        command_input.value = str(event.option.id or "")
+        command_input.cursor_position = len(command_input.value)
+        self._suggestions_popup().display = False
+        command_input.focus()
+
+    # --- directory trust & yolo -----------------------------------------
+
+    def _stored_trusted_dirs(self) -> list[str]:
+        raw = self.settings.get_value("tui.trusted_dirs") or "[]"
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            return []
+        return [str(item) for item in value] if isinstance(value, list) else []
+
+    @property
+    def _yolo(self) -> bool:
+        return self.settings.get_value("tui.yolo") == "1"
+
+    def _directory_trusted(self) -> bool:
+        if self._yolo:
+            return True
+        if self._dir_trusted is False:
+            return False
+        cwd = str(self._cwd)
+        return cwd in self._session_trusted or cwd in self._stored_trusted_dirs()
+
+    def _maybe_prompt_trust(self, force: bool = False) -> None:
+        if not force and self._directory_trusted():
+            self._dir_trusted = True
+            return
+        self.push_screen(
+            TrustDirectoryScreen(self.translator, str(self._cwd)),
+            self._on_trust_chosen,
+        )
+
+    def _on_trust_chosen(self, choice: str | None) -> None:
+        cwd = str(self._cwd)
+        if choice == "always":
+            trusted = self._stored_trusted_dirs()
+            if cwd not in trusted:
+                trusted.append(cwd)
+                self.settings.set_value("tui.trusted_dirs", json.dumps(trusted))
+            self._session_trusted.add(cwd)
+            self._dir_trusted = True
+            self._write_line("[allow] " + self.translator.t("trust.granted", path=cwd))
+        elif choice == "session":
+            self._session_trusted.add(cwd)
+            self._dir_trusted = True
+            self._write_line("[allow] " + self.translator.t("trust.granted", path=cwd))
+        else:
+            self._dir_trusted = False
+            self._write_line("[deny] " + self.translator.t("trust.denied", path=cwd))
+        self._refresh_chrome()
+        self.query_one("#command-input", Input).focus()
+
+    def _toggle_yolo(self) -> None:
+        enabled = not self._yolo
+        self.settings.set_value("tui.yolo", "1" if enabled else "0")
+        self._write_line(
+            "[status] "
+            + self.translator.t("yolo.enabled" if enabled else "yolo.disabled")
+        )
+        self._refresh_chrome()
 
     def _handle_command(self, command: str) -> None:
         name, _, argument = command.partition(" ")
@@ -778,6 +1116,12 @@ class SamuraiApp(App[None]):
         if name == "/model":
             self._show_model_picker()
             return
+        if name == "/yolo":
+            self._toggle_yolo()
+            return
+        if name == "/trust":
+            self._maybe_prompt_trust(force=True)
+            return
 
         if name.startswith("/"):
             self._write_line(
@@ -826,22 +1170,21 @@ class SamuraiApp(App[None]):
             f"[{level}] {decision.target}: {decision.reason.value} — {decision.detail}"
         )
 
-    def _show_plan(self) -> None:
+    def _plan_lines(self) -> list[str]:
         if not self.operation:
-            self._write_line("[plan] " + self.translator.t("status.no-operation"))
-            return
+            return ["[plan] " + self.translator.t("status.no-operation")]
         operation = self.operation
         objective = operation.objective or self.translator.t("plan.objective-unset")
         plan = self.kernel.get_current_plan(operation.id)
-        self._write_line(
+        lines = [
             "[plan] "
             + self.translator.t(
                 "plan.stage", stage=operation.status.value, objective=objective
             )
-        )
+        ]
         if plan is None:
-            self._write_line("[plan] " + self.translator.t("plan.no-plan"))
-            return
+            lines.append("[plan] " + self.translator.t("plan.no-plan"))
+            return lines
         approved = self.translator.t(
             "plan.approved" if plan.approved else "plan.not-approved"
         )
@@ -849,87 +1192,121 @@ class SamuraiApp(App[None]):
             1 for task in plan.tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED)
         )
         gates_passed = sum(1 for gate in plan.gates if gate.status == GateStatus.PASSED)
-        self._write_line(
+        lines.append(
             f"[plan] {plan.id} | {plan.title} | {approved} | version={plan.version} | "
             f"tasks={tasks_done}/{len(plan.tasks)} | gates={gates_passed}/{len(plan.gates)}"
         )
+        return lines
 
-    def _show_tasks(self) -> None:
+    def _show_plan(self) -> None:
+        for line in self._plan_lines():
+            self._write_line(line)
+
+    def _task_lines(self) -> list[str]:
         if not self.operation:
-            self._write_line("[tasks] " + self.translator.t("status.no-operation"))
-            return
+            return ["[tasks] " + self.translator.t("status.no-operation")]
         plan = self.kernel.get_current_plan(self.operation.id)
         if plan is None or not plan.tasks:
-            self._write_line("[tasks] " + self.translator.t("tasks.empty"))
-            return
+            return ["[tasks] " + self.translator.t("tasks.empty")]
+        lines: list[str] = []
         for task in plan.tasks:
             dependencies = ",".join(task.depends_on) or "-"
             requirements = ",".join(task.required_artifacts) or "-"
-            self._write_line(
+            lines.append(
                 f"[task] {task.id} | {task.status.value} | risk={task.risk_class.value} | "
                 f"deps={dependencies} | artifacts={requirements} | {task.title}"
             )
+        return lines
 
-    def _show_gates(self) -> None:
+    def _show_tasks(self) -> None:
+        for line in self._task_lines():
+            self._write_line(line)
+
+    def _gate_lines(self) -> list[str]:
         if not self.operation:
-            self._write_line("[gates] " + self.translator.t("status.no-operation"))
-            return
+            return ["[gates] " + self.translator.t("status.no-operation")]
         plan = self.kernel.get_current_plan(self.operation.id)
         if plan is None or not plan.gates:
-            self._write_line("[gates] " + self.translator.t("gates.empty"))
-            return
+            return ["[gates] " + self.translator.t("gates.empty")]
+        lines: list[str] = []
         for gate in plan.gates:
             requirements = ",".join(gate.required_artifacts) or "-"
-            self._write_line(
+            lines.append(
                 f"[gate] {gate.id} | {gate.status.value} | artifacts={requirements} | {gate.name}"
             )
+        return lines
 
-    def _show_findings(self) -> None:
+    def _show_gates(self) -> None:
+        for line in self._gate_lines():
+            self._write_line(line)
+
+    def _finding_lines(self) -> list[str]:
         if not self.operation:
-            self._write_line("[findings] " + self.translator.t("status.no-operation"))
-            return
+            return ["[findings] " + self.translator.t("status.no-operation")]
         findings = self.kernel.kernel.list_findings(self.operation.id)
         if not findings:
-            self._write_line("[findings] " + self.translator.t("findings.empty"))
-            return
+            return ["[findings] " + self.translator.t("findings.empty")]
+        lines: list[str] = []
         for finding in findings:
             duplicate = f" | duplicate-of={finding.duplicate_of}" if finding.duplicate_of else ""
-            self._write_line(
+            lines.append(
                 f"[finding] {finding.id} | {finding.severity.value} | {finding.status.value} | "
                 f"evidence={len(finding.evidence_ids)}{duplicate} | {finding.title}"
             )
+        return lines
 
-    def _show_evidence(self) -> None:
+    def _show_findings(self) -> None:
+        for line in self._finding_lines():
+            self._write_line(line)
+
+    def _evidence_lines(self) -> list[str]:
         if not self.operation:
-            self._write_line("[evidence] " + self.translator.t("status.no-operation"))
-            return
+            return ["[evidence] " + self.translator.t("status.no-operation")]
         artifacts = self.kernel.kernel.list_artifacts(self.operation.id)
         if not artifacts:
-            self._write_line("[evidence] " + self.translator.t("evidence.empty"))
-            return
+            return ["[evidence] " + self.translator.t("evidence.empty")]
+        lines: list[str] = []
         for artifact in artifacts:
-            self._write_line(
+            lines.append(
                 f"[artifact] {artifact.id} | {artifact.kind.value} | "
                 f"requirement={artifact.requirement or '-'} | "
                 f"links={_artifact_links(artifact)} | sha256={artifact.sha256[:12]} | "
                 f"{artifact.summary or artifact.path}"
             )
+        return lines
 
-    def _show_approvals(self) -> None:
+    def _show_evidence(self) -> None:
+        for line in self._evidence_lines():
+            self._write_line(line)
+
+    def _approval_lines(self) -> list[str]:
         if not self.operation:
-            self._write_line("[approvals] " + self.translator.t("status.no-operation"))
-            return
+            return ["[approvals] " + self.translator.t("status.no-operation")]
         approvals = self.kernel.kernel.list_approvals(self.operation.id)
         if not approvals:
-            self._write_line("[approvals] " + self.translator.t("approvals.empty"))
-            return
+            return ["[approvals] " + self.translator.t("approvals.empty")]
+        lines: list[str] = []
         for approval in approvals:
             actor = approval.decided_by or "-"
-            self._write_line(
+            lines.append(
                 f"[approval] {approval.id} | {approval.risk_class.value} | "
                 f"{approval.status.value} | auto={str(approval.auto).lower()} | "
                 f"actor={actor} | {approval.action}"
             )
+        return lines
+
+    def _show_approvals(self) -> None:
+        for line in self._approval_lines():
+            self._write_line(line)
+
+    def _access_lines(self) -> list[str]:
+        mode = self.translator.t("access.yolo" if self._yolo else "access.ask")
+        cwd = str(self._cwd)
+        if self._yolo or self._directory_trusted():
+            trust = self.translator.t("trust.state-trusted", path=cwd)
+        else:
+            trust = self.translator.t("trust.state-denied", path=cwd)
+        return [f"[access] {mode}", f"[access] {trust}", *self._approval_lines()]
 
     def _show_snapshots(self) -> None:
         if not self.operation:
@@ -1204,20 +1581,31 @@ class SamuraiApp(App[None]):
         self.query_one("#command-input", Input).placeholder = self.translator.t(
             "input.placeholder"
         )
+        self._retitle_tabs()
         self._write_line("[lang] " + self.translator.t("lang.changed", locale=locale))
         self._refresh_chrome()
 
+    def _short_cwd(self) -> str:
+        text = str(self._cwd)
+        home = str(Path.home())
+        if text.startswith(home):
+            text = "~" + text[len(home):]
+        return text
+
     def _refresh_chrome(self) -> None:
-        header = self.query_one("#operation-header", Static)
+        brand = self.query_one("#brand", Static)
         status_bar = self.query_one("#status-bar", Static)
+        model = self.models.default_model()
+        model_label = model or self.translator.t("brand.no-model")
         if self.operation:
             operation = self.operation
             summary = self.kernel.summary(operation.id)
-            header.update(
+            brand.update(
                 self.translator.t(
-                    "header.with-operation",
+                    "brand.with-operation",
                     operation_id=operation.id,
                     mode=operation.mode.value.upper(),
+                    model=model_label,
                 )
             )
             status_text = self.translator.t(
@@ -1230,13 +1618,22 @@ class SamuraiApp(App[None]):
                 pending=summary.pending_approvals,
             )
         else:
-            header.update(self.translator.t("header.no-operation"))
+            brand.update(self.translator.t("brand.no-operation", model=model_label))
             status_text = self.translator.t("statusbar.idle")
-        model = self.models.default_model()
+        access = self.translator.t("access.yolo" if self._yolo else "access.ask")
+        directory = self._short_cwd()
+        if not self._directory_trusted():
+            directory += self.translator.t("trust.untrusted-marker")
+        status_text = f"{directory} | {status_text} | {access}"
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
             status_text = f"{status_text} | model={model} reasoning={reasoning}"
+        status_text = f"{status_text} | /help"
         status_bar.update(status_text)
+        switcher = self.query_one("#views", ContentSwitcher)
+        current = str(switcher.current or "journal")
+        if current != "journal":
+            self._render_view(current)
 
     def _show_model_picker(self) -> None:
         self.run_worker(self._open_model_picker(), exclusive=True)
