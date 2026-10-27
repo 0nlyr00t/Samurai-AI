@@ -357,7 +357,13 @@ def test_language_prompt_arrow_keys(tmp_path: Path) -> None:
 
 def test_model_picker_persists_default(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
-    stack[2].set_locale("en")
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("fake-key", "x")
+    models.register_endpoint("fake", "http://127.0.0.1:9/v1", "fake-key")
+    models.add_model("fake/fake-model")
 
     async def exercise() -> None:
         app = SamuraiApp(*stack)
@@ -370,7 +376,7 @@ def test_model_picker_persists_default(tmp_path: Path) -> None:
             await pilot.pause()
             from samurai_ai.tui.app import ModelPickerScreen
             assert isinstance(app.screen, ModelPickerScreen)
-            # pick the second model and high reasoning, then apply
+            # first entry is the sentinel; down lands on the configured model
             await pilot.press("down")
             await pilot.press("tab")
             await pilot.press("down")
@@ -378,10 +384,112 @@ def test_model_picker_persists_default(tmp_path: Path) -> None:
             await pilot.press("down")
             await pilot.press("enter")
             await pilot.pause()
-            assert stack[2].get_value("model.default") is not None
-            assert stack[2].get_value("model.reasoning_effort") == "high"
+            assert settings.get_value("model.default") == "fake/fake-model@v1"
+            assert settings.get_value("model.reasoning_effort") == "high"
+            assert (
+                settings.get_value("model.reasoning_effort.fake/fake-model@v1")
+                == "high"
+            )
             status_bar = app.query_one("#status-bar", Static)
             assert "model=" in str(status_bar.render())
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_model_picker_configured_only_and_current(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("giga-api-key", "x")
+    models.register_endpoint("giga", "http://127.0.0.1:9/osav1", "giga-api-key")
+    models.add_model("giga/giga-osa/deepseek-v4.1-flash-uncensored")
+    current = "giga/giga-osa/deepseek-v4.1-flash-uncensored@v1"
+    settings.set_value("model.default", current)
+    settings.set_value(f"model.reasoning_effort.{current}", "high")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "/model"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            from samurai_ai.tui.app import REASONING_LEVELS, ModelPickerScreen
+
+            assert isinstance(app.screen, ModelPickerScreen)
+            options = app.screen.query_one("#model-options", OptionList)
+            prompts = [
+                str(options.get_option_at_index(i).prompt)
+                for i in range(options.option_count)
+            ]
+            # only configured providers are listed, no unconfigured static ones
+            assert not any("openai/gpt-4o@v1" in prompt for prompt in prompts)
+            assert not any("moonshot/kimi-k2@v1" in prompt for prompt in prompts)
+            assert any(current in prompt for prompt in prompts)
+            # the configured model is highlighted and marked as current
+            assert options.highlighted == 1  # sentinel at 0, current at 1
+            assert "current" in str(options.get_option_at_index(1).prompt)
+            # reasoning follows the per-model stored level
+            reasoning = app.screen.query_one("#reasoning-options", OptionList)
+            assert reasoning.highlighted == REASONING_LEVELS.index("high")
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("model.default") == current
+            assert settings.get_value("model.reasoning_effort") == "high"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_command_history_up_down(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    settings = stack[2]
+    settings.set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            for command in ("/status", "/plan"):
+                command_input.value = command
+                await pilot.press("enter")
+                await pilot.pause()
+            assert command_input.value == ""
+            await pilot.press("up")
+            assert command_input.value == "/plan"
+            await pilot.press("up")
+            assert command_input.value == "/status"
+            await pilot.press("down")
+            assert command_input.value == "/plan"
+            await pilot.press("down")
+            assert command_input.value == ""
+            import json as json_module
+
+            assert json_module.loads(settings.get_value("tui.history")) == [
+                "/status",
+                "/plan",
+            ]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+        # history persists across sessions
+        reopened = SamuraiApp(*stack)
+        async with reopened.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            command_input = reopened.query_one("#command-input", Input)
+            await pilot.press("up")
+            assert command_input.value == "/plan"
+            await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
