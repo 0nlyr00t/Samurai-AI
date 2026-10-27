@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import time
 
@@ -125,11 +126,15 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         current_model: str | None,
         current_reasoning: str,
         add_custom_label: str | None = None,
+        current_marker: str = "",
+        reasoning_by_model: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.translator = translator
         self.model_ids = model_ids
         self.add_custom_label = add_custom_label
+        self.current_marker = current_marker
+        self.reasoning_by_model = reasoning_by_model or {}
         self.current_model = current_model
         self.current_reasoning = current_reasoning
         self.selected_model = current_model or (
@@ -141,10 +146,11 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         model_options: list[Option] = []
         if self.add_custom_label is not None:
             model_options.append(Option(self.add_custom_label, id="m-add"))
-        model_options.extend(
-            Option(model_id, id=f"m{index}")
-            for index, model_id in enumerate(self.model_ids)
-        )
+        for index, model_id in enumerate(self.model_ids):
+            label = model_id
+            if self.current_marker and model_id == self.current_model:
+                label = f"{model_id}{self.current_marker}"
+            model_options.append(Option(label, id=f"m{index}"))
         with Vertical(id="model-dialog"):
             yield Static(self.translator.t("model.picker-title"), id="model-title")
             with Horizontal(id="model-columns"):
@@ -189,7 +195,20 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
                     return
                 index -= 1
             if 0 <= index < len(self.model_ids):
-                self.selected_model = self.model_ids[index]
+                model_id = self.model_ids[index]
+                changed = model_id != self.selected_model
+                self.selected_model = model_id
+                # Follow the model's own stored reasoning level unless the
+                # operator is actively choosing reasoning right now.
+                reasoning_list = self.query_one("#reasoning-options", OptionList)
+                stored = self.reasoning_by_model.get(model_id)
+                if (
+                    changed
+                    and stored in REASONING_LEVELS
+                    and not reasoning_list.has_focus
+                ):
+                    self.selected_reasoning = stored
+                    reasoning_list.highlighted = REASONING_LEVELS.index(stored)
         elif event.option_list.id == "reasoning-options" and event.option is not None:
             index = event.option_list.highlighted
             if index is not None:
@@ -421,6 +440,25 @@ class CustomEndpointScreen(ModalScreen[str | None]):
         self.dismiss(model.id)
 
 
+class HistoryInput(Input):
+    """Command input with shell-like history on the Up/Down arrows."""
+
+    BINDINGS = [
+        Binding("up", "history_previous", show=False),
+        Binding("down", "history_next", show=False),
+    ]
+
+    def action_history_previous(self) -> None:
+        step = getattr(self.app, "history_step", None)
+        if step is not None:
+            step(-1)
+
+    def action_history_next(self) -> None:
+        step = getattr(self.app, "history_step", None)
+        if step is not None:
+            step(1)
+
+
 class SamuraiApp(App[None]):
     CSS = """
     Screen {
@@ -539,6 +577,9 @@ class SamuraiApp(App[None]):
         self.translator = Translator(settings.get_locale() or "en")
         self._locale_known = settings.get_locale() is not None
         self._last_quit_request = 0.0
+        self._history: list[str] = json.loads(settings.get_value("tui.history") or "[]")
+        self._history_index: int | None = None
+        self._history_draft = ""
 
     def _write_line(self, text: str) -> None:
         journal = self.query_one("#journal", RichLog)
@@ -549,7 +590,9 @@ class SamuraiApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Static(id="operation-header")
         yield RichLog(id="journal", markup=False, wrap=True, auto_scroll=True)
-        yield Input(placeholder=self.translator.t("input.placeholder"), id="command-input")
+        yield HistoryInput(
+            placeholder=self.translator.t("input.placeholder"), id="command-input"
+        )
         yield Static(id="status-bar")
 
     def on_mount(self) -> None:
@@ -597,7 +640,36 @@ class SamuraiApp(App[None]):
         command = event.value.strip()
         event.input.value = ""
         if command:
+            if not self._history or self._history[-1] != command:
+                self._history.append(command)
+                self._history = self._history[-200:]
+                self.settings.set_value("tui.history", json.dumps(self._history))
+            self._history_index = None
+            self._history_draft = ""
             self._handle_command(command)
+
+    def history_step(self, direction: int) -> None:
+        if not self._history:
+            return
+        command_input = self.query_one("#command-input", Input)
+        if direction < 0:
+            if self._history_index is None:
+                self._history_draft = command_input.value
+                self._history_index = len(self._history) - 1
+            elif self._history_index > 0:
+                self._history_index -= 1
+            value = self._history[self._history_index]
+        else:
+            if self._history_index is None:
+                return
+            if self._history_index < len(self._history) - 1:
+                self._history_index += 1
+                value = self._history[self._history_index]
+            else:
+                self._history_index = None
+                value = self._history_draft
+        command_input.value = value
+        command_input.cursor_position = len(value)
 
     def action_quit_requested(self) -> None:
         now = time.monotonic()
@@ -1170,18 +1242,43 @@ class SamuraiApp(App[None]):
         self.run_worker(self._open_model_picker(), exclusive=True)
 
     async def _open_model_picker(self) -> None:
-        model_ids = [model.id for model in self.models.list_models()]
-        for provider in self.models.list_providers():
-            if provider["local"] or provider["auth"] == "configured":
-                try:
-                    discovered = await asyncio.to_thread(
-                        self.models.discover_models, provider["id"]
-                    )
-                    model_ids.extend(model.id for model in discovered)
-                except Exception:  # noqa: BLE001 - discovery is best-effort
-                    continue
+        providers = self.models.list_providers()
+        configured = {
+            provider["id"]
+            for provider in providers
+            if provider["local"] or provider["auth"] in ("configured", "none")
+        }
+        model_ids: list[str] = [
+            model.id
+            for model in self.models.list_models()
+            if model.provider_id in configured
+        ]
+        for provider in providers:
+            if provider["id"] not in configured:
+                continue
+            try:
+                discovered = await asyncio.to_thread(
+                    self.models.discover_models, provider["id"]
+                )
+                for model in discovered:
+                    if model.id not in model_ids:
+                        model_ids.append(model.id)
+            except Exception:  # noqa: BLE001 - discovery is best-effort
+                continue
         current = self.models.default_model()
-        reasoning = self.models.default_reasoning_effort() or "off"
+        if current and current not in model_ids:
+            model_ids.append(current)
+        reasoning_by_model = {
+            model_id: stored
+            for model_id in model_ids
+            if (stored := self.settings.get_value(f"model.reasoning_effort.{model_id}"))
+            in REASONING_LEVELS
+        }
+        reasoning = (
+            reasoning_by_model.get(current or "")
+            or self.models.default_reasoning_effort()
+            or "off"
+        )
         self.push_screen(
             ModelPickerScreen(
                 self.translator,
@@ -1189,6 +1286,8 @@ class SamuraiApp(App[None]):
                 current,
                 reasoning,
                 add_custom_label=self.translator.t("model.picker-add-custom"),
+                current_marker=self.translator.t("model.current-marker"),
+                reasoning_by_model=reasoning_by_model,
             ),
             self._on_model_chosen,
         )
@@ -1207,6 +1306,7 @@ class SamuraiApp(App[None]):
             return
         self.settings.set_value("model.default", model_id)
         self.settings.set_value("model.reasoning_effort", reasoning)
+        self.settings.set_value(f"model.reasoning_effort.{model_id}", reasoning)
         self._write_line(
             "[model] "
             + self.translator.t("model.selected", model=model_id, reasoning=reasoning)
