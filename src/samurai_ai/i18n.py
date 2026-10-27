@@ -44,7 +44,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.exit": "/exit             Close Samurai AI",
         "help.ctrl-o": "Ctrl-O            Toggle the event journal",
         "help.ctrl-c": (
-            "Ctrl-C            Copy the selection (auto on mouse-up); double-press to quit"
+            "Ctrl-C            Copy the in-app selection (with /mouse on); double-press to quit"
         ),
         "error.unknown-command": "Unknown command: {name}. Use /help.",
         "chat.no-model": "No default model configured — pick one with /model.",
@@ -57,8 +57,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "access.deny": "Deny",
         "access.granted": "allowed: {action}",
         "access.denied": "denied: {action}",
-        "access.auto": "auto-allowed (yolo): {action}",
-        "access.auto-model": "auto-allowed: {action} (directory trust covers model calls)",
         "copy.selection": "selection copied ({chars} chars)",
         "status.no-operation": "No operation loaded",
         "scope.includes": "includes: {rules}",
@@ -94,11 +92,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "runbook.empty": "No runbooks generated",
         "secrets.empty": "No secrets in this scope",
         "secrets.global": "global",
-        "tabs.journal": "Journal",
         "tabs.ops": "Red Team OPS",
         "tabs.bounty": "Bug Bounty",
-        "tabs.findings": "Findings",
-        "tabs.access": "Access",
         "ops.todo": "TODO — operation tasks",
         "ops.no-tasks": "No tasks yet — the agent will form them as it works",
         "ops.gates": "Stage gates",
@@ -116,8 +111,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "newop.name": "operation name",
         "newop.scope": "scope includes, comma-separated (empty = 127.0.0.1/32)",
         "newop.created": "new operation tab: {name} ({mode})",
-        "access.ask": "ACCESS: ASK",
-        "access.yolo": "ACCESS: YOLO",
         "trust.title": "Allow Samurai AI to work in this directory?",
         "trust.always": "Trust always",
         "trust.session": "Trust this session only",
@@ -209,7 +202,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.exit": "/exit             Закрыть Samurai AI",
         "help.ctrl-o": "Ctrl-O            Переключить журнал событий",
         "help.ctrl-c": (
-            "Ctrl-C            Копировать выделение (само при отпускании мыши); дважды — выход"
+            "Ctrl-C            Копировать выделение в приложении (при /mouse); дважды — выход"
         ),
         "error.unknown-command": "Неизвестная команда: {name}. Используйте /help.",
         "chat.no-model": "Модель по умолчанию не настроена — выберите её через /model.",
@@ -222,10 +215,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "access.deny": "Запретить",
         "access.granted": "разрешено: {action}",
         "access.denied": "запрещено: {action}",
-        "access.auto": "авто-разрешено (yolo): {action}",
-        "access.auto-model": (
-            "авто-разрешено: {action} (вызовы модели покрыты доверием к директории)"
-        ),
         "copy.selection": "выделение скопировано ({chars} симв.)",
         "status.no-operation": "Операция не загружена",
         "scope.includes": "включения: {rules}",
@@ -261,11 +250,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "runbook.empty": "Нет сгенерированных runbook",
         "secrets.empty": "Нет секретов в этой области",
         "secrets.global": "глобальный",
-        "tabs.journal": "Журнал",
         "tabs.ops": "Red Team OPS",
         "tabs.bounty": "Bug Bounty",
-        "tabs.findings": "Находки",
-        "tabs.access": "Доступ",
         "ops.todo": "TODO — задачи операции",
         "ops.no-tasks": "Задач пока нет — агент сформирует их по ходу работы",
         "ops.gates": "Контрольные гейты",
@@ -283,8 +269,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "newop.name": "название операции",
         "newop.scope": "скоуп через запятую (пусто = только 127.0.0.1/32)",
         "newop.created": "новая вкладка операции: {name} ({mode})",
-        "access.ask": "ДОСТУП: СПРОСИТЬ",
-        "access.yolo": "ДОСТУП: YOLO",
         "trust.title": "Разрешить Samurai AI работать в этой директории?",
         "trust.always": "Доверять всегда",
         "trust.session": "Доверять только этому сеансу",

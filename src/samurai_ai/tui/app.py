@@ -821,7 +821,7 @@ class SamuraiApp(App[None]):
         width: 1fr;
         height: 100%;
     }
-    #journal, #view-ops, #view-bounty, #view-findings, #view-access {
+    #journal, #view-ops, #view-bounty {
         height: 1fr;
         padding: 0 1;
         border: solid #3a3a3a;
@@ -832,18 +832,6 @@ class SamuraiApp(App[None]):
         height: 100%;
         border: solid #3a3a3a;
         background: #0a0a0a;
-    }
-    #side-title {
-        height: 1;
-        padding: 0 1;
-        background: #101018;
-        color: #4fa8ff;
-        text-style: bold;
-    }
-    #side-tabs {
-        height: 1fr;
-        background: #0a0a0a;
-        border: none;
     }
     #side-workspace {
         height: 2;
@@ -884,12 +872,6 @@ class SamuraiApp(App[None]):
     _VIEW_BY_TAB = {
         "tab-ops": "view-ops",
         "tab-bounty": "view-bounty",
-    }
-
-    _VIEW_BY_SIDE = {
-        "side-journal": "journal",
-        "side-findings": "view-findings",
-        "side-access": "view-access",
     }
 
     _TAG_STYLES = {
@@ -1051,16 +1033,7 @@ class SamuraiApp(App[None]):
                 )
                 yield SelectableRichLog(id="view-ops", markup=False, wrap=True)
                 yield SelectableRichLog(id="view-bounty", markup=False, wrap=True)
-                yield SelectableRichLog(id="view-findings", markup=False, wrap=True)
-                yield SelectableRichLog(id="view-access", markup=False, wrap=True)
             with Vertical(id="side"):
-                yield Static(id="side-title")
-                yield OptionList(
-                    Option(self.translator.t("tabs.journal"), id="side-journal"),
-                    Option(self.translator.t("tabs.findings"), id="side-findings"),
-                    Option(self.translator.t("tabs.access"), id="side-access"),
-                    id="side-tabs",
-                )
                 yield Static(id="side-workspace")
         with Horizontal(id="ops-strip"):
             yield Static(id="strip-agents", classes="strip-item")
@@ -1113,15 +1086,6 @@ class SamuraiApp(App[None]):
         ):
             tab = tabs.query_one(f"#{tab_id}", Tab)
             tab.label = self.translator.t(key)
-        side = self.query_one("#side-tabs", OptionList)
-        for option_id, key in (
-            ("side-journal", "tabs.journal"),
-            ("side-findings", "tabs.findings"),
-            ("side-access", "tabs.access"),
-        ):
-            index = side.get_option_index(option_id)
-            if index is not None:
-                side.replace_option_prompt_at_index(index, self.translator.t(key))
 
     def _write_welcome(self) -> None:
         journal = self.query_one("#journal", RichLog)
@@ -1222,23 +1186,10 @@ class SamuraiApp(App[None]):
         pane = self._VIEW_BY_TAB.get(str(event.tab.id))
         if pane is None:
             return
-        side = self.query_one("#side-tabs", OptionList)
-        side.highlighted = None
         self._switch_view(pane)
-
-    _TITLE_KEY_BY_VIEW = {
-        "journal": "tabs.journal",
-        "view-ops": "tabs.ops",
-        "view-bounty": "tabs.bounty",
-        "view-findings": "tabs.findings",
-        "view-access": "tabs.access",
-    }
 
     def _switch_view(self, pane: str) -> None:
         self.query_one("#views", ContentSwitcher).current = pane
-        key = self._TITLE_KEY_BY_VIEW.get(pane)
-        if key is not None:
-            self.query_one("#side-title", Static).update(self.translator.t(key))
         if pane != "journal":
             self._render_view(pane)
         self.query_one("#command-input", Input).focus()
@@ -1278,10 +1229,6 @@ class SamuraiApp(App[None]):
             return self._ops_lines()
         if pane == "view-bounty":
             return self._bounty_lines()
-        if pane == "view-findings":
-            return [*self._finding_lines(), *self._evidence_lines()]
-        if pane == "view-access":
-            return [*self._access_lines()]
         return []
 
     _TASK_COLORS = {
@@ -1440,11 +1387,6 @@ class SamuraiApp(App[None]):
     ) -> None:
         if event.option is None:
             return
-        if event.option_list.id == "side-tabs":
-            pane = self._VIEW_BY_SIDE.get(str(event.option.id))
-            if pane is not None:
-                self._switch_view(pane)
-            return
         if event.option_list.id != "command-suggestions":
             return
         command_input = self.query_one("#command-input", Input)
@@ -1521,13 +1463,13 @@ class SamuraiApp(App[None]):
         disable = getattr(driver, "_disable_mouse_support", None)
         if enable is None or disable is None:
             return
-        if self.settings.get_value("tui.mouse") != "0":
+        if self.settings.get_value("tui.mouse") == "1":
             enable()
         else:
             disable()
 
     def _toggle_mouse(self) -> None:
-        enabled = self.settings.get_value("tui.mouse") == "0"
+        enabled = self.settings.get_value("tui.mouse") != "1"
         self.settings.set_value("tui.mouse", "1" if enabled else "0")
         self._apply_mouse()
         self._write_dim(
@@ -1713,8 +1655,6 @@ class SamuraiApp(App[None]):
             # startup; only OS-level command execution still prompts.
             decided_by = "yolo" if self._yolo else "auto"
             self.kernel.approve(exc.approval_id, decided_by=decided_by)
-            key = "access.auto" if self._yolo else "access.auto-model"
-            self._write_dim(self.translator.t(key, action=action))
             self.run_worker(
                 self._chat(text, model_id, exc.approval_id), exclusive=False
             )
@@ -1917,15 +1857,6 @@ class SamuraiApp(App[None]):
     def _show_approvals(self) -> None:
         for line in self._approval_lines():
             self._write_line(line)
-
-    def _access_lines(self) -> list[str]:
-        mode = self.translator.t("access.yolo" if self._yolo else "access.ask")
-        cwd = str(self._cwd)
-        if self._yolo or self._directory_trusted():
-            trust = self.translator.t("trust.state-trusted", path=cwd)
-        else:
-            trust = self.translator.t("trust.state-denied", path=cwd)
-        return [f"[access] {mode}", f"[access] {trust}", *self._approval_lines()]
 
     def _show_snapshots(self) -> None:
         if not self.operation:
@@ -2215,12 +2146,6 @@ class SamuraiApp(App[None]):
         self.query_one("#brand", Static).update(self._brand_text())
         title = self._auto_title or (self.operation.name if self.operation else "")
         self.query_one("#opname", Static).update(title)
-        side_title = self.query_one("#side-title", Static)
-        if not str(side_title.render()):
-            switcher_now = self.query_one("#views", ContentSwitcher)
-            key = self._TITLE_KEY_BY_VIEW.get(str(switcher_now.current or "journal"))
-            if key is not None:
-                side_title.update(self.translator.t(key))
         workspace = Text.assemble(
             (self.translator.t("side.workspace"), "dim #565f89"),
             ("\n" + self._short_cwd(), "#74c0fc"),

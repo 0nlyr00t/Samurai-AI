@@ -706,33 +706,21 @@ def test_tabs_switch_views(tmp_path: Path) -> None:
 
             await pilot.pause()
             tabs = app.query_one("#view-tabs", Tabs)
+            switcher = app.query_one("#views", ContentSwitcher)
+            assert switcher.current == "journal"
             tabs.active = "tab-ops"
             await pilot.pause()
-            switcher = app.query_one("#views", ContentSwitcher)
             assert switcher.current == "view-ops"
             ops_log = app.query_one("#view-ops", RichLog)
             text = "\n".join(strip.text for strip in ops_log.lines)
             assert "Map the service" in text
             assert "recon-complete" in text
-            side = app.query_one("#side-tabs", OptionList)
-            side.highlighted = 1  # side-findings
+            tabs.active = "tab-bounty"
             await pilot.pause()
-            side.action_select()
-            await pilot.pause()
-            assert switcher.current == "view-findings"
-            side.highlighted = 2  # side-access
-            await pilot.pause()
-            side.action_select()
-            await pilot.pause()
-            assert switcher.current == "view-access"
-            access_log = app.query_one("#view-access", RichLog)
-            access_text = "\n".join(strip.text for strip in access_log.lines)
-            assert "ACCESS: ASK" in access_text
-            side.highlighted = 0  # side-journal
-            await pilot.pause()
-            side.action_select()
-            await pilot.pause()
-            assert switcher.current == "journal"
+            assert switcher.current == "view-bounty"
+            bounty_log = app.query_one("#view-bounty", RichLog)
+            bounty_text = "\n".join(strip.text for strip in bounty_log.lines)
+            assert "*.example.com" in bounty_text
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -943,7 +931,6 @@ def test_chat_model_call_is_auto_allowed(tmp_path: Path) -> None:
                 assert not isinstance(app.screen, AccessPromptScreen)
                 assert provider.calls == 1
                 assert any("echo: hello world" in _message_text(m) for m in messages)
-                assert any("auto-allowed: model.call" in str(m) for m in messages)
                 approval = stack[1].kernel.list_approvals(operation.id)[-1]
                 assert approval.decided_by == "auto"
             await pilot.press("ctrl+c")
@@ -975,7 +962,6 @@ def test_chat_yolo_auto_allows(tmp_path: Path) -> None:
                 assert not isinstance(app.screen, AccessPromptScreen)
                 assert provider.calls == 1
                 assert any("echo: ping" in _message_text(m) for m in messages)
-                assert any("auto-allowed (yolo)" in str(m) for m in messages)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -1173,14 +1159,15 @@ def test_mouse_toggle_switches_capture_setting(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             command_input = app.query_one("#command-input", Input)
-            command_input.value = "/mouse"
-            await pilot.press("enter")
-            await pilot.pause()
-            assert settings.get_value("tui.mouse") == "0"
+            # mouse capture is off by default: native terminal selection
             command_input.value = "/mouse"
             await pilot.press("enter")
             await pilot.pause()
             assert settings.get_value("tui.mouse") == "1"
+            command_input.value = "/mouse"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.mouse") == "0"
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
