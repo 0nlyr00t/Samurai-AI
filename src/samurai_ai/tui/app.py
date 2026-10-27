@@ -1,6 +1,8 @@
 import asyncio
 import json
 import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.selection import Selection
+from textual.strip import Strip
 from textual.widgets import (
     Button,
     ContentSwitcher,
@@ -22,6 +25,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
+from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
 from samurai_ai.domain.operations import Operation
 from samurai_ai.i18n import Translator
@@ -94,8 +98,15 @@ REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 ADD_CUSTOM_ID = "__add_custom__"
 
 
-class SelectableRichLog(RichLog):
-    """RichLog that participates in mouse text selection (copy with Ctrl+C)."""
+class SelectableRichLog(RichLog, can_focus=False):
+    """RichLog that participates in mouse text selection (copy with Ctrl+C).
+
+    RichLog strips carry no text-offset metadata, so the compositor cannot
+    map mouse coordinates back to text. render_line retags every strip with
+    `apply_offsets` (the same mechanism Content widgets use) and paints the
+    active selection span. Not focusable, so clicking the journal to select
+    text never steals focus from the command input.
+    """
 
     @property
     def allow_select(self) -> bool:
@@ -106,6 +117,27 @@ class SelectableRichLog(RichLog):
         if not text:
             return None
         return selection.extract(text), "\n"
+
+    def render_line(self, y: int) -> Strip:
+        strip = super().render_line(y)
+        scroll_x, scroll_y = self.scroll_offset
+        row = scroll_y + y
+        if row >= len(self.lines):
+            return strip
+        strip = strip.apply_offsets(scroll_x, row)
+        selection = self.text_selection
+        if selection is not None:
+            span = selection.get_span(row)
+            if span is not None and span[0] < span[1]:
+                style = self.screen.get_component_rich_style("screen--selection")
+                parts = list(strip.divide([span[0], span[1]]))
+                if len(parts) == 3:
+                    strip = Strip.join(
+                        [parts[0], parts[1].apply_style(style), parts[2]]
+                    )
+                elif len(parts) == 2:
+                    strip = Strip.join([parts[0], parts[1].apply_style(style)])
+        return strip
 
 
 class TrustDirectoryScreen(ModalScreen[str | None]):
@@ -166,6 +198,66 @@ class TrustDirectoryScreen(ModalScreen[str | None]):
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key == "escape":
             self.dismiss(None)
+
+
+class AccessPromptScreen(ModalScreen[bool]):
+    """Allow/deny prompt for a governed action (e.g. a remote model call)."""
+
+    CSS = """
+    AccessPromptScreen {
+        align: center middle;
+    }
+    #access-dialog {
+        width: 72;
+        height: auto;
+        padding: 1 2;
+        border: solid #ffd43b;
+        background: #0a0a0a;
+    }
+    #access-title {
+        text-style: bold;
+        color: #ffd43b;
+        padding-bottom: 1;
+    }
+    #access-action {
+        color: #e0e0e0;
+        padding-bottom: 1;
+    }
+    #access-options {
+        height: auto;
+        background: #0a0a0a;
+    }
+    """
+
+    def __init__(self, translator: Translator, action: str, risk: str) -> None:
+        super().__init__()
+        self.translator = translator
+        self.action = action
+        self.risk = risk
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="access-dialog"):
+            yield Static(self.translator.t("access.prompt-title"), id="access-title")
+            yield Static(f"{self.action}  |  risk={self.risk}", id="access-action")
+            yield OptionList(
+                Option(self.translator.t("access.allow"), id="a-allow"),
+                Option(self.translator.t("access.deny"), id="a-deny"),
+                id="access-options",
+            )
+
+    def on_mount(self) -> None:
+        options = self.query_one("#access-options", OptionList)
+        options.highlighted = 0
+        options.focus()
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        self.dismiss(event.option is not None and event.option.id == "a-allow")
+
+    def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key == "escape":
+            self.dismiss(False)
 
 
 class ModelPickerScreen(ModalScreen[tuple[str, str]]):
@@ -660,6 +752,8 @@ class SamuraiApp(App[None]):
         "report": "#ffa94d",
         "model": "#4fa8ff",
         "access": "#ffd43b",
+        "you": "#da77f2",
+        "ai": "#51cf66",
         "info": "#888888",
     }
 
@@ -864,6 +958,26 @@ class SamuraiApp(App[None]):
         views = self.query_one("#views", ContentSwitcher)
         views.display = not views.display
         self.query_one("#command-input", Input).focus()
+
+    def copy_to_clipboard(self, text: str) -> None:
+        super().copy_to_clipboard(text)
+        # OSC52 does not reach the clipboard on every terminal (e.g. macOS
+        # Terminal.app), so also go through the native clipboard tool.
+        for command in (
+            ("pbcopy",),
+            ("wl-copy",),
+            ("xclip", "-selection", "clipboard"),
+            ("xsel", "--clipboard", "--input"),
+            ("clip",),
+        ):
+            if shutil.which(command[0]):
+                try:
+                    subprocess.run(
+                        command, input=text.encode("utf-8"), check=False, timeout=2
+                    )
+                except OSError:
+                    pass
+                break
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         pane = self._VIEW_BY_TAB.get(str(event.tab.id))
@@ -1128,7 +1242,98 @@ class SamuraiApp(App[None]):
                 "[error] " + self.translator.t("error.unknown-command", name=name)
             )
         else:
-            self._write_line("[info] " + self.translator.t("info.ai-disabled"))
+            self._start_chat(command)
+
+    # --- AI chat ---------------------------------------------------------
+
+    def _start_chat(self, text: str) -> None:
+        model_id = self.models.default_model()
+        if model_id is None:
+            self._write_line("[error] " + self.translator.t("chat.no-model"))
+            return
+        if not self.operation:
+            self._write_line("[error] " + self.translator.t("welcome.no-operation"))
+            return
+        self._write_line(f"[you] {text}")
+        self._write_line(
+            "[status] " + self.translator.t("chat.thinking", model=model_id)
+        )
+        self.run_worker(self._chat(text, model_id, None), exclusive=False)
+
+    async def _chat(
+        self, text: str, model_id: str, approval_id: str | None
+    ) -> None:
+        reasoning = (
+            self.settings.get_value(f"model.reasoning_effort.{model_id}")
+            or self.models.default_reasoning_effort()
+        )
+        try:
+            response = await asyncio.to_thread(
+                self.models.complete,
+                self.operation.id if self.operation else "",
+                model_id,
+                text,
+                reasoning_effort=reasoning,
+                approval_id=approval_id,
+            )
+        except ApprovalRequiredError as exc:
+            self._request_chat_approval(exc, text, model_id)
+            return
+        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            self._write_line(f"[error] {exc}")
+            return
+        self._write_line(
+            f"[ai] {response.model_id} | {response.latency_ms}ms | "
+            f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}"
+        )
+        for line in response.text.splitlines() or (response.text,):
+            self._write_line(f"[ai] {line}")
+        self._refresh_chrome()
+        self.query_one("#command-input", Input).focus()
+
+    def _request_chat_approval(
+        self, exc: ApprovalRequiredError, text: str, model_id: str
+    ) -> None:
+        approval = self.kernel.kernel.get_approval(exc.approval_id)
+        action = approval.action if approval is not None else exc.approval_id
+        if self._yolo:
+            self.kernel.approve(exc.approval_id, decided_by="yolo")
+            self._write_line(
+                "[allow] " + self.translator.t("access.auto", action=action)
+            )
+            self.run_worker(
+                self._chat(text, model_id, exc.approval_id), exclusive=False
+            )
+            return
+        risk = approval.risk_class.value if approval is not None else "?"
+        self.push_screen(
+            AccessPromptScreen(self.translator, action, risk),
+            lambda ok: self._on_chat_access_decided(
+                ok, exc.approval_id, text, model_id, action
+            ),
+        )
+
+    def _on_chat_access_decided(
+        self,
+        ok: bool,
+        approval_id: str,
+        text: str,
+        model_id: str,
+        action: str,
+    ) -> None:
+        if ok:
+            self.kernel.approve(approval_id, decided_by="operator")
+            self._write_line(
+                "[allow] " + self.translator.t("access.granted", action=action)
+            )
+            self.run_worker(self._chat(text, model_id, approval_id), exclusive=False)
+        else:
+            self.kernel.reject(approval_id, decided_by="operator")
+            self._write_line(
+                "[deny] " + self.translator.t("access.denied", action=action)
+            )
+        self._refresh_chrome()
+        self.query_one("#command-input", Input).focus()
 
     def _show_status(self) -> None:
         if not self.operation:
