@@ -17,6 +17,7 @@ from textual.events import Mount
 from textual.screen import ModalScreen
 from textual.selection import Selection
 from textual.strip import Strip
+from textual.timer import Timer
 from textual.widgets import (
     Button,
     ContentSwitcher,
@@ -30,6 +31,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from samurai_ai import __version__
+from samurai_ai.agents.provider import Message, ToolCall, ToolSpec
 from samurai_ai.domain.agents import AgentRunStatus
 from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
@@ -849,6 +851,12 @@ class SamuraiApp(App[None]):
         padding: 0 1;
         display: none;
     }
+    #thinking {
+        height: 1;
+        padding: 0 1;
+        background: #000000;
+        display: none;
+    }
     #command-suggestions {
         height: auto;
         max-height: 9;
@@ -971,6 +979,10 @@ class SamuraiApp(App[None]):
         self._ctx_tokens: int = 0
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
+        self._chat_history: list[Message] = []
+        self._thinking_timer: Timer | None = None
+        self._thinking_depth: int = 0
+        self._thinking_frame: int = 0
 
     _DIM_STYLE = "dim #8b949e"
 
@@ -1039,6 +1051,7 @@ class SamuraiApp(App[None]):
             yield Static(id="strip-agents", classes="strip-item")
             yield Static(id="strip-todo", classes="strip-item")
             yield Static(id="strip-task", classes="strip-item")
+        yield Static(id="thinking")
         yield OptionList(id="command-suggestions")
         yield HistoryInput(
             placeholder=self.translator.t("input.placeholder"), id="command-input"
@@ -1212,6 +1225,7 @@ class SamuraiApp(App[None]):
         )
         self.operation = operation
         self._auto_title = None
+        self._chat_history.clear()
         self._write_dim(
             self.translator.t("newop.created", name=name, mode=mode)
         )
@@ -1592,6 +1606,86 @@ class SamuraiApp(App[None]):
 
     # --- AI chat ---------------------------------------------------------
 
+    _CHAT_MAX_TOOL_ROUNDS = 8
+    _CHAT_HISTORY_LIMIT = 40
+    _TOOL_OUTPUT_FEEDBACK_LIMIT = 4000
+
+    _CHAT_TOOL_SPECS: tuple[ToolSpec, ...] = (
+        ToolSpec(
+            name="shell_exec",
+            description=(
+                "Run a shell command on the operator's host via bash -lc. "
+                "Returns the exit code plus bounded stdout and stderr. Use it "
+                "to inspect the system, run security tooling and verify facts "
+                "instead of guessing."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192,
+                    },
+                },
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+        ),
+    )
+    _CHAT_TOOL_IDS = {"shell_exec": "shell.exec"}
+
+    _THINKING_FRAMES = "⠋⠙⠹⠸⠼⴦⦧⡇⠏"
+    _THINKING_COLORS = ("#5bc0be", "#4fa8ff", "#b197fc", "#74c0fc")
+
+    def _chat_system_prompt(self) -> str:
+        return self.translator.t(
+            "chat.system",
+            cwd=str(self._cwd),
+            version=__version__,
+        )
+
+    def _trim_chat_history(self) -> None:
+        if len(self._chat_history) > self._CHAT_HISTORY_LIMIT + 1:
+            self._chat_history = (
+                self._chat_history[:1] + self._chat_history[-self._CHAT_HISTORY_LIMIT:]
+            )
+
+    def _thinking_start(self) -> None:
+        self._thinking_depth += 1
+        widget = self.query_one("#thinking", Static)
+        widget.display = True
+        if self._thinking_timer is None:
+            self._thinking_frame = 0
+            self._thinking_tick()
+            self._thinking_timer = self.set_interval(0.12, self._thinking_tick)
+
+    def _thinking_tick(self) -> None:
+        widget = self.query_one("#thinking", Static)
+        frame = self._THINKING_FRAMES[
+            self._thinking_frame % len(self._THINKING_FRAMES)
+        ]
+        dots = "·" * (1 + (self._thinking_frame // 4) % 3)
+        color = self._THINKING_COLORS[
+            (self._thinking_frame // 8) % len(self._THINKING_COLORS)
+        ]
+        widget.update(
+            Text(
+                f"{frame} {self.translator.t('chat.thinking')}{dots}",
+                style=f"bold {color}",
+            )
+        )
+        self._thinking_frame += 1
+
+    def _thinking_stop(self) -> None:
+        self._thinking_depth = max(0, self._thinking_depth - 1)
+        if self._thinking_depth:
+            return
+        if self._thinking_timer is not None:
+            self._thinking_timer.stop()
+            self._thinking_timer = None
+        self.query_one("#thinking", Static).display = False
+
     def _start_chat(self, text: str) -> None:
         model_id = self.models.default_model()
         if model_id is None:
@@ -1604,37 +1698,165 @@ class SamuraiApp(App[None]):
             # The tab names itself from the task at hand
             self._auto_title = " ".join(text.split()[:6])
         self._write_user_message(text)
-        self._write_dim(self.translator.t("chat.thinking", model=model_id))
+        self._thinking_start()
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
 
     async def _chat(
+        self, text: str, model_id: str, approval_id: str | None
+    ) -> None:
+        try:
+            await self._chat_loop(text, model_id, approval_id)
+        finally:
+            self._thinking_stop()
+            self._refresh_chrome()
+            self.query_one("#command-input", Input).focus()
+
+    async def _chat_loop(
         self, text: str, model_id: str, approval_id: str | None
     ) -> None:
         reasoning = (
             self.settings.get_value(f"model.reasoning_effort.{model_id}")
             or self.models.default_reasoning_effort()
         )
+        operation_id = self.operation.id if self.operation else ""
+        if not self._chat_history:
+            self._chat_history.append(
+                Message(role="system", content=self._chat_system_prompt())
+            )
+        self._chat_history.append(Message(role="user", content=text))
+        for _round in range(self._CHAT_MAX_TOOL_ROUNDS):
+            try:
+                response = await asyncio.to_thread(
+                    self.models.chat,
+                    operation_id,
+                    model_id,
+                    tuple(self._chat_history),
+                    tools=self._CHAT_TOOL_SPECS,
+                    reasoning_effort=reasoning,
+                    approval_id=approval_id,
+                )
+            except ApprovalRequiredError as exc:
+                approval = self.kernel.kernel.get_approval(exc.approval_id)
+                action = approval.action if approval is not None else ""
+                risk = approval.risk_class.value if approval is not None else "?"
+                if self._yolo or action.startswith("model.call"):
+                    # Model calls are covered by the directory trust granted at
+                    # startup; only OS-level command execution still prompts.
+                    self.kernel.approve(
+                        exc.approval_id,
+                        decided_by="yolo" if self._yolo else "auto",
+                    )
+                    approval_id = exc.approval_id
+                    continue
+                allowed = await self.push_screen_wait(
+                    AccessPromptScreen(self.translator, action, risk)
+                )
+                if allowed:
+                    self.kernel.approve(exc.approval_id, decided_by="operator")
+                    self._write_line(
+                        "[allow] " + self.translator.t("access.granted", action=action)
+                    )
+                    approval_id = exc.approval_id
+                    continue
+                self.kernel.reject(exc.approval_id, decided_by="operator")
+                self._write_line(
+                    "[deny] " + self.translator.t("access.denied", action=action)
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+                self._write_line(f"[error] {exc}")
+                return
+            approval_id = None
+            self._ctx_tokens += (
+                response.usage.prompt_tokens + response.usage.completion_tokens
+            )
+            if not response.tool_calls:
+                self._chat_history.append(
+                    Message(role="assistant", content=response.text)
+                )
+                self._trim_chat_history()
+                self._write_ai_message(response)
+                return
+            if response.text.strip():
+                self._chat_history.append(
+                    Message(role="assistant", content=response.text)
+                )
+            for call in response.tool_calls:
+                self._chat_history.append(await self._run_chat_tool(call))
+            self._trim_chat_history()
+        self._write_dim(self.translator.t("chat.tool-limit"))
+
+    async def _run_chat_tool(self, call: ToolCall) -> Message:
+        tool_id = self._CHAT_TOOL_IDS.get(call.name)
+        command = str(call.arguments.get("command", "")).strip()
+        if tool_id is None or not command:
+            return Message(
+                role="user",
+                content=f"[tool error] unknown tool or empty command: {call.name!r}",
+            )
+        if not self._directory_trusted():
+            self._write_dim(self.translator.t("chat.tool-denied", command=command))
+            return Message(
+                role="user",
+                content=f"[tool {call.name}] the operator has not trusted this directory",
+            )
+        self._write_dim(f"⚙ {command}")
+        if not self._yolo:
+            allowed = await self.push_screen_wait(
+                AccessPromptScreen(self.translator, f"{tool_id}: {command}", "r3")
+            )
+            if not allowed:
+                self._write_dim(
+                    self.translator.t("chat.tool-denied", command=command)
+                )
+                return Message(
+                    role="user",
+                    content=f"[tool {call.name}] denied by the operator",
+                )
+        approval_id: str | None = None
         try:
-            response = await asyncio.to_thread(
-                self.models.complete,
+            result = await asyncio.to_thread(
+                self.execution.run_tool,
                 self.operation.id if self.operation else "",
-                model_id,
-                text,
-                reasoning_effort=reasoning,
-                approval_id=approval_id,
+                tool_id,
+                {"command": command},
             )
         except ApprovalRequiredError as exc:
-            self._request_chat_approval(exc, text, model_id)
-            return
-        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            self.kernel.approve(
+                exc.approval_id, decided_by="yolo" if self._yolo else "operator"
+            )
+            approval_id = exc.approval_id
+            try:
+                result = await asyncio.to_thread(
+                    self.execution.run_tool,
+                    self.operation.id if self.operation else "",
+                    tool_id,
+                    {"command": command},
+                    approval_id=approval_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - fed back to the model
+                self._write_line(f"[error] {exc}")
+                return Message(
+                    role="user", content=f"[tool {call.name}] error: {exc}"
+                )
+        except Exception as exc:  # noqa: BLE001 - fed back to the model
             self._write_line(f"[error] {exc}")
-            return
-        self._ctx_tokens += (
-            response.usage.prompt_tokens + response.usage.completion_tokens
+            return Message(role="user", content=f"[tool {call.name}] error: {exc}")
+        exit_code = result.run.exit_code
+        self._write_dim(
+            "  └ " + self.translator.t("chat.tool-exit", code=exit_code)
         )
-        self._write_ai_message(response)
-        self._refresh_chrome()
-        self.query_one("#command-input", Input).focus()
+        for line in (result.stdout.strip().splitlines() or [])[:10]:
+            self._write_dim(f"  {line}")
+        stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
+        stderr = result.stderr[:1000]
+        return Message(
+            role="user",
+            content=(
+                f"[tool result {call.name} exit={exit_code}]\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            ),
+        )
 
     def _copy_last(self, what: str) -> None:
         text = self._last_ai_code if what == "code" else self._last_ai_text
@@ -1644,50 +1866,6 @@ class SamuraiApp(App[None]):
             return
         self.copy_to_clipboard(text)
         self._write_dim(self.translator.t("copy.done", chars=len(text)))
-
-    def _request_chat_approval(
-        self, exc: ApprovalRequiredError, text: str, model_id: str
-    ) -> None:
-        approval = self.kernel.kernel.get_approval(exc.approval_id)
-        action = approval.action if approval is not None else exc.approval_id
-        if self._yolo or action.startswith("model.call"):
-            # Model calls are covered by the directory trust granted at
-            # startup; only OS-level command execution still prompts.
-            decided_by = "yolo" if self._yolo else "auto"
-            self.kernel.approve(exc.approval_id, decided_by=decided_by)
-            self.run_worker(
-                self._chat(text, model_id, exc.approval_id), exclusive=False
-            )
-            return
-        risk = approval.risk_class.value if approval is not None else "?"
-        self.push_screen(
-            AccessPromptScreen(self.translator, action, risk),
-            lambda ok: self._on_chat_access_decided(
-                ok, exc.approval_id, text, model_id, action
-            ),
-        )
-
-    def _on_chat_access_decided(
-        self,
-        ok: bool,
-        approval_id: str,
-        text: str,
-        model_id: str,
-        action: str,
-    ) -> None:
-        if ok:
-            self.kernel.approve(approval_id, decided_by="operator")
-            self._write_line(
-                "[allow] " + self.translator.t("access.granted", action=action)
-            )
-            self.run_worker(self._chat(text, model_id, approval_id), exclusive=False)
-        else:
-            self.kernel.reject(approval_id, decided_by="operator")
-            self._write_line(
-                "[deny] " + self.translator.t("access.denied", action=action)
-            )
-        self._refresh_chrome()
-        self.query_one("#command-input", Input).focus()
 
     def _show_status(self) -> None:
         if not self.operation:

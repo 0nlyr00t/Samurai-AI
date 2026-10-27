@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
@@ -68,6 +69,7 @@ from samurai_ai.domain.skills import SkillError, SkillNotFoundError
 from samurai_ai.domain.swarm import SwarmError, SwarmNotFoundError
 from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
+from samurai_ai.self_update import run_update
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.exports import IntegrationExportService
@@ -117,9 +119,21 @@ from samurai_ai.tui.app import SamuraiApp
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="samurai")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     parser.add_argument("--db", type=Path, help="Path to the Samurai SQLite database")
     parser.add_argument("--json", action="store_true", dest="json_output")
     subcommands = parser.add_subparsers(dest="command")
+
+    update = subcommands.add_parser(
+        "update", help="Update Samurai AI to the latest release"
+    )
+    update.add_argument(
+        "--check",
+        action="store_true",
+        help="Only check whether a newer release exists",
+    )
 
     operation = subcommands.add_parser("operation", help="Manage operations")
     operation_commands = operation.add_subparsers(dest="operation_command", required=True)
@@ -187,6 +201,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "update":
+        # Self-update needs no database or services.
+        return run_update(check=args.check)
     (
         operation_service,
         kernel_service,

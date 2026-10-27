@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
-from samurai_ai.agents.provider import ChatRequest, ChatResponse, Usage
+from samurai_ai.agents.provider import ChatRequest, ChatResponse, ToolCall, Usage
 from samurai_ai.domain.execution import ToolExecutionError
 from samurai_ai.domain.models import (
     ApiFamily,
@@ -76,6 +76,18 @@ def build_chat_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
             for message in request.messages
         ],
     }
+    if request.tools:
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
+            }
+            for tool in request.tools
+        ]
     options: dict[str, Any] = {}
     if request.max_tokens is not None:
         options["num_predict"] = request.max_tokens
@@ -96,9 +108,22 @@ def parse_chat_response(
     model_id: str, payload: dict[str, Any], latency_ms: int
 ) -> ChatResponse:
     message = payload.get("message") or {}
+    tool_calls: list[ToolCall] = []
+    for index, entry in enumerate(message.get("tool_calls") or []):
+        if not isinstance(entry, dict):
+            continue
+        function = entry.get("function") or {}
+        arguments = function.get("arguments")
+        tool_calls.append(
+            ToolCall(
+                id=str(entry.get("id") or f"ollama-{index}"),
+                name=str(function.get("name") or ""),
+                arguments=arguments if isinstance(arguments, dict) else {},
+            )
+        )
     return ChatResponse(
         text=str(message.get("content") or ""),
-        tool_calls=(),
+        tool_calls=tuple(tool_calls),
         usage=Usage(
             prompt_tokens=int(payload.get("prompt_eval_count") or 0),
             completion_tokens=int(payload.get("eval_count") or 0),

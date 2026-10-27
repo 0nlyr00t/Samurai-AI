@@ -1111,6 +1111,161 @@ def test_ops_strip_shows_agents_todo_and_ctx_tokens(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+class _ToolCallingProvider:
+    """First reply requests a shell command; the second answers in text."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.requests: list[object] = []
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+        self.calls += 1
+        self.requests.append(request)
+        if self.calls == 1:
+            return ChatResponse(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="call-1",
+                        name="shell_exec",
+                        arguments={"command": "echo hello-from-tool"},
+                    ),
+                ),
+                usage=Usage(prompt_tokens=3, completion_tokens=2),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=5,
+            )
+        return ChatResponse(
+            text="ran it",
+            usage=Usage(prompt_tokens=4, completion_tokens=2),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def test_chat_tool_loop_executes_shell_command(tmp_path: Path) -> None:
+    provider = _ToolCallingProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("tui.yolo", "1")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Tool lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "run echo for me"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # round 1: tool call, round 2: final text answer
+                assert provider.calls == 2
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "echo hello-from-tool" in text
+                assert "hello-from-tool" in text
+                assert "ran it" in text
+                # the tool result was fed back to the model
+                second = provider.requests[1]
+                history = [
+                    getattr(m, "content", "")
+                    for m in getattr(second, "messages", [])
+                ]
+                assert any("hello-from-tool" in entry for entry in history)
+                # the run went through the governed execution service
+                runs = stack[4].list_runs(operation.id)
+                assert [run.tool_id for run in runs] == ["shell.exec"]
+                assert runs[0].status.value == "completed"
+                # thinking indicator is hidden once the reply is in
+                assert not app.query_one("#thinking", Static).display
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_chat_tool_call_denied_by_operator(tmp_path: Path) -> None:
+    provider = _ToolCallingProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Deny lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "run echo for me"
+                await pilot.press("enter")
+                for _ in range(100):
+                    await pilot.pause()
+                    if isinstance(app.screen, AccessPromptScreen):
+                        break
+                assert isinstance(app.screen, AccessPromptScreen)
+                assert "echo hello-from-tool" in str(
+                    app.screen.query_one("#access-action", Static).render()
+                )
+                # deny: pick the second option
+                options = app.screen.query_one("#access-options", OptionList)
+                options.highlighted = 1
+                app.screen.dismiss(False)
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # no governed run happened, the denial went back to the model
+                assert stack[4].list_runs(operation.id) == []
+                assert provider.calls == 2
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "denied by operator" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_plus_button_creates_operation_tab(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")

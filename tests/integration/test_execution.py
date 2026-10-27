@@ -144,6 +144,26 @@ def test_r1_process_exec_auto_approved(tmp_path: Path) -> None:
     assert result.stdout == "from-process\n"
 
 
+def test_r3_shell_exec_requires_approval_then_runs(tmp_path: Path) -> None:
+    service, kernel, _, execution = make_stack(tmp_path / "shell.db")
+    operation = make_operation(service)
+    with pytest.raises(ApprovalRequiredError) as exc_info:
+        execution.run_tool(operation.id, "shell.exec", {"command": "echo from-shell"})
+    approval_id = exc_info.value.approval_id
+    kernel.approve(approval_id, decided_by="operator")
+    result = execution.run_tool(
+        operation.id,
+        "shell.exec",
+        {"command": "echo from-shell"},
+        approval_id=approval_id,
+    )
+    assert result.run.status == ToolRunStatus.COMPLETED
+    assert result.stdout == "from-shell\n"
+    approval = kernel.kernel.get_approval(approval_id)
+    assert approval is not None
+    assert approval.risk_class is RiskClass.R3
+
+
 def test_r2_http_fetch_requires_approval_then_runs(
     tmp_path: Path, http_server: str
 ) -> None:

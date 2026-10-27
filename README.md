@@ -78,13 +78,30 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v14, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 598 unit/integration/CLI/TUI tests.
+- 607 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), security tools волны 2 (subfinder/nmap/ffuf —
 технические блокеры в `md/threat-review-security-tools.md`), LLM streaming,
 полный egress enforcement на
 Docker Desktop for Mac и OS-пакеты installers (есть bare standalone binary).
+
+## Установка
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh | bash
+```
+
+Скрипт ставит uv (если его нет) и устанавливает `samurai` через
+`uv tool install` из этого репозитория — Python 3.12+ подтянется
+автоматически. Конкретный релиз: `... | bash -s -- --ref v0.2.0`.
+
+Обновление до свежего релиза:
+
+```bash
+samurai update          # проверить и обновить
+samurai update --check  # только проверить наличие новой версии
+```
 
 ## Быстрый старт для разработки
 
