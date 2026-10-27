@@ -4,8 +4,6 @@ DEFAULT_LOCALE = "en"
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
         "input.placeholder": "Enter a command; /help lists Operation Kernel capabilities",
-        "welcome.stage": "Stage 1: plans, tasks, gates, approvals, evidence and findings",
-        "welcome.loaded": "Loaded {operation_id}: {name}",
         "welcome.no-operation": (
             "No operation loaded. Create one with: samurai operation create --help"
         ),
@@ -41,6 +39,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.model": "/model           Pick the default model and reasoning effort",
         "help.copy": "/copy [code]      Copy the last reply (or its code block)",
         "help.yolo": "/yolo             Toggle YOLO mode (no permission prompts)",
+        "help.mouse": "/mouse            Toggle mouse capture (off = native selection)",
         "help.trust": "/trust           Manage directory access trust",
         "help.exit": "/exit             Close Samurai AI",
         "help.ctrl-o": "Ctrl-O            Toggle the event journal",
@@ -96,9 +95,22 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "secrets.empty": "No secrets in this scope",
         "secrets.global": "global",
         "tabs.journal": "Journal",
-        "tabs.plan": "Plan",
+        "tabs.ops": "Red Team OPS",
+        "tabs.bounty": "Bug Bounty",
         "tabs.findings": "Findings",
         "tabs.access": "Access",
+        "ops.todo": "TODO — operation tasks",
+        "ops.no-tasks": "No tasks yet — the agent will form them as it works",
+        "ops.gates": "Stage gates",
+        "ops.heatmap": "MITRE ATT&CK technique heatmap",
+        "ops.no-steps": "No techniques mapped yet",
+        "bounty.scope": "Scope",
+        "bounty.assets": "Assets: {count}",
+        "bounty.findings": "Current findings",
+        "strip.agents": "agents {running}/{total}",
+        "strip.todo": "todo {done}/{total}",
+        "mouse.enabled": "mouse capture on (hover and click work; drag-select + Ctrl+C to copy)",
+        "mouse.disabled": "mouse capture off — the terminal handles selection and copy natively",
         "access.ask": "ACCESS: ASK",
         "access.yolo": "ACCESS: YOLO",
         "trust.title": "Allow Samurai AI to work in this directory?",
@@ -112,11 +124,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "trust.state-denied": "directory: {path} (denied)",
         "yolo.enabled": "YOLO mode on: commands run without permission prompts",
         "yolo.disabled": "YOLO mode off: permission prompts enabled",
-        "statusbar.with-operation": (
-            "{status} | TASKS {tasks_done}/{tasks_total} | GATES {gates_passed}/"
-            "{gates_total} | PENDING {pending}"
-        ),
-        "statusbar.idle": "IDLE",
         "lang.current": "Current language: {locale} (available: ru, en)",
         "lang.changed": "Language changed to {locale}",
         "lang.invalid": "Unsupported language: {locale}. Use ru or en.",
@@ -157,8 +164,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "ru": {
         "input.placeholder": "Введите команду; /help показывает возможности ядра операции",
-        "welcome.stage": "Этап 1: планы, задачи, гейты, доступы, доказательства и находки",
-        "welcome.loaded": "Загружена {operation_id}: {name}",
         "welcome.no-operation": (
             "Операция не загружена. Создайте её: samurai operation create --help"
         ),
@@ -194,6 +199,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.model": "/model           Выбрать модель по умолчанию и уровень рассуждений",
         "help.copy": "/copy [code]      Скопировать последний ответ (или блок кода)",
         "help.yolo": "/yolo             Режим YOLO (без запросов разрешений)",
+        "help.mouse": "/mouse            Захват мыши (выкл = обычное выделение терминала)",
         "help.trust": "/trust           Управление доверием к директории",
         "help.exit": "/exit             Закрыть Samurai AI",
         "help.ctrl-o": "Ctrl-O            Переключить журнал событий",
@@ -251,9 +257,22 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "secrets.empty": "Нет секретов в этой области",
         "secrets.global": "глобальный",
         "tabs.journal": "Журнал",
-        "tabs.plan": "План",
+        "tabs.ops": "Red Team OPS",
+        "tabs.bounty": "Bug Bounty",
         "tabs.findings": "Находки",
         "tabs.access": "Доступ",
+        "ops.todo": "TODO — задачи операции",
+        "ops.no-tasks": "Задач пока нет — агент сформирует их по ходу работы",
+        "ops.gates": "Контрольные гейты",
+        "ops.heatmap": "Тепловая карта техник MITRE ATT&CK",
+        "ops.no-steps": "Техники пока не сопоставлены",
+        "bounty.scope": "Скоуп",
+        "bounty.assets": "Активы: {count}",
+        "bounty.findings": "Текущие находки",
+        "strip.agents": "агенты {running}/{total}",
+        "strip.todo": "todo {done}/{total}",
+        "mouse.enabled": "захват мыши включён (hover и клики; выделение + Ctrl+C для копии)",
+        "mouse.disabled": "захват мыши выключен — выделение и копирование обычные, как в терминале",
         "access.ask": "ДОСТУП: СПРОСИТЬ",
         "access.yolo": "ДОСТУП: YOLO",
         "trust.title": "Разрешить Samurai AI работать в этой директории?",
@@ -267,11 +286,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "trust.state-denied": "директория: {path} (запрещена)",
         "yolo.enabled": "режим YOLO включён: команды выполняются без запросов разрешений",
         "yolo.disabled": "режим YOLO выключен: запросы разрешений включены",
-        "statusbar.with-operation": (
-            "{status} | ЗАДАЧИ {tasks_done}/{tasks_total} | ГЕЙТЫ {gates_passed}/"
-            "{gates_total} | ОЖИДАЮТ {pending}"
-        ),
-        "statusbar.idle": "ОЖИДАНИЕ",
         "lang.current": "Текущий язык: {locale} (доступно: ru, en)",
         "lang.changed": "Язык изменён на {locale}",
         "lang.invalid": "Неподдерживаемый язык: {locale}. Используйте ru или en.",
@@ -349,6 +363,7 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.model",
     "help.copy",
     "help.yolo",
+    "help.mouse",
     "help.trust",
     "help.exit",
     "help.ctrl-o",
