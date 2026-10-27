@@ -9,7 +9,7 @@ from textual.widgets import Button, Input, OptionList, RichLog, Static
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
-from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate
+from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate, TaskStatus
 from samurai_ai.domain.memory import MemoryKind
 from samurai_ai.domain.operations import OperationEvent, OperationMode
 from samurai_ai.domain.planning import KillChainPhase, PlannedTest, Runbook
@@ -706,22 +706,31 @@ def test_tabs_switch_views(tmp_path: Path) -> None:
 
             await pilot.pause()
             tabs = app.query_one("#view-tabs", Tabs)
-            assert tabs.active == "tab-journal"
-            tabs.active = "tab-plan"
+            tabs.active = "tab-ops"
             await pilot.pause()
             switcher = app.query_one("#views", ContentSwitcher)
-            assert switcher.current == "view-plan"
-            plan_log = app.query_one("#view-plan", RichLog)
-            text = "\n".join(strip.text for strip in plan_log.lines)
-            assert "Tab kernel plan" in text
+            assert switcher.current == "view-ops"
+            ops_log = app.query_one("#view-ops", RichLog)
+            text = "\n".join(strip.text for strip in ops_log.lines)
+            assert "Map the service" in text
             assert "recon-complete" in text
-            tabs.active = "tab-access"
+            side = app.query_one("#side-tabs", OptionList)
+            side.highlighted = 1  # side-findings
+            await pilot.pause()
+            side.action_select()
+            await pilot.pause()
+            assert switcher.current == "view-findings"
+            side.highlighted = 2  # side-access
+            await pilot.pause()
+            side.action_select()
             await pilot.pause()
             assert switcher.current == "view-access"
             access_log = app.query_one("#view-access", RichLog)
             access_text = "\n".join(strip.text for strip in access_log.lines)
             assert "ACCESS: ASK" in access_text
-            tabs.active = "tab-journal"
+            side.highlighted = 0  # side-journal
+            await pilot.pause()
+            side.action_select()
             await pilot.pause()
             assert switcher.current == "journal"
             await pilot.press("ctrl+c")
@@ -1064,6 +1073,82 @@ def test_chat_renders_markdown_and_copy_commands(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_ops_strip_shows_agents_todo_and_ctx_tokens(tmp_path: Path) -> None:
+    stack, provider, operation = _chat_stack(tmp_path)
+    stack[2].set_value("tui.yolo", "1")
+    kernel = stack[1]
+    agents_repo = stack[6]
+    kernel.create_plan(
+        operation.id,
+        "Strip plan",
+        [
+            PlanTask(id="recon", title="Map the service", risk_class=RiskClass.R1),
+            PlanTask(
+                id="exploit",
+                title="Run the exploit",
+                risk_class=RiskClass.R2,
+                status=TaskStatus.IN_PROGRESS,
+            ),
+        ],
+        [],
+    )
+    agents_repo.add(
+        AgentRun(
+            operation_id=operation.id,
+            task_id="recon",
+            model_route=("gpt/test-model@v1",),
+        )
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            strip_agents = app.query_one("#strip-agents", Static)
+            strip_todo = app.query_one("#strip-todo", Static)
+            strip_task = app.query_one("#strip-task", Static)
+            assert strip_agents.display
+            assert "agents 1/1" in str(strip_agents.render())
+            assert strip_agents.tooltip is not None
+            assert "todo 0/2" in str(strip_todo.render())
+            assert "Run the exploit" in str(strip_task.render())
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "hello"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            status_bar = str(app.query_one("#status-bar", Static).render())
+            assert "ctx 5 tok" in status_bar  # 3 prompt + 2 completion
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_mouse_toggle_switches_capture_setting(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    settings = stack[2]
+    settings.set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "/mouse"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.mouse") == "0"
+            command_input.value = "/mouse"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.mouse") == "1"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_copy_without_reply_shows_hint(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
@@ -1105,8 +1190,8 @@ def test_mouse_drag_selects_and_ctrl_c_copies(tmp_path: Path) -> None:
             assert selected
             # focus stays on the command input after selecting in the journal
             assert app.focused is app.query_one("#command-input", Input)
-            # the selection is auto-copied on mouse-up
-            assert selected.split("\n")[0][:10] in getattr(app, "_clipboard", "")
+            # nothing is copied until Ctrl+C
+            assert not getattr(app, "_clipboard", "")
             await pilot.press("ctrl+c")
             await pilot.pause()
             assert selected.split("\n")[0][:10] in getattr(app, "_clipboard", "")

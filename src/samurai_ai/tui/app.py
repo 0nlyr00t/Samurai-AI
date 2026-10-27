@@ -10,11 +10,11 @@ from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.segment import Segment
 from rich.text import Text
-from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen, Screen
+from textual.events import Mount
+from textual.screen import ModalScreen
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.widgets import (
@@ -30,6 +30,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from samurai_ai import __version__
+from samurai_ai.domain.agents import AgentRunStatus
 from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
 from samurai_ai.domain.operations import Operation
@@ -51,23 +52,6 @@ from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.models import CustomModelConflictError
 from samurai_ai.storage.swarm import SwarmRunRepository
-
-
-class SamuraiScreen(Screen[None]):
-    """Default screen: a finished mouse selection goes straight to the clipboard.
-
-    Some terminals / multiplexers swallow the follow-up Ctrl+C, so the copy
-    happens on mouse-up; Ctrl+C still works as a manual re-copy.
-    """
-
-    def on_text_selected(self, event: events.TextSelected) -> None:
-        text = self.get_selected_text()
-        if not text:
-            return
-        self.app.copy_to_clipboard(text)
-        translator = getattr(self.app, "translator", None)
-        if translator is not None:
-            self.app.notify(translator.t("copy.selection", chars=len(text)))
 
 
 class LanguagePromptScreen(ModalScreen[str]):
@@ -646,6 +630,18 @@ class CustomEndpointScreen(ModalScreen[str | None]):
         self.dismiss(model.id)
 
 
+class ViewTabs(Tabs):
+    """Tabs that stay inactive until the operator picks one.
+
+    Stock Tabs force-activates the first tab on mount, which would switch the
+    main view away from the chat journal before the first render.
+    """
+
+    def _on_mount(self, event: Mount) -> None:
+        if self._first_active:
+            self.active = self._first_active
+
+
 class HistoryInput(Input):
     """Command input with shell-like history and slash-command suggestions."""
 
@@ -703,9 +699,16 @@ class SamuraiApp(App[None]):
         background: #0a0a0a;
     }
     #view-tabs {
-        width: 1fr;
+        width: 32;
         height: 2;
         background: #0a0a0a;
+    }
+    #opname {
+        width: 1fr;
+        height: 2;
+        padding: 0 1;
+        color: #888888;
+        content-align: left middle;
     }
     #brand {
         width: auto;
@@ -714,15 +717,36 @@ class SamuraiApp(App[None]):
         color: #4fa8ff;
         text-style: bold;
         text-align: right;
+        content-align: right middle;
     }
-    #views {
+    #body {
         height: 1fr;
     }
-    #journal, #view-plan, #view-findings, #view-access {
+    #views {
+        width: 1fr;
+        height: 100%;
+    }
+    #journal, #view-ops, #view-bounty, #view-findings, #view-access {
         height: 1fr;
         padding: 0 1;
         border: solid #3a3a3a;
         background: #000000;
+    }
+    #side-tabs {
+        width: 18;
+        height: 100%;
+        border: solid #3a3a3a;
+        background: #0a0a0a;
+    }
+    #ops-strip {
+        height: 1;
+        padding: 0 1;
+        background: #0a0a0a;
+    }
+    .strip-item {
+        width: auto;
+        padding: 0 1;
+        display: none;
     }
     #command-suggestions {
         height: auto;
@@ -745,10 +769,14 @@ class SamuraiApp(App[None]):
     """
 
     _VIEW_BY_TAB = {
-        "tab-journal": "journal",
-        "tab-plan": "view-plan",
-        "tab-findings": "view-findings",
-        "tab-access": "view-access",
+        "tab-ops": "view-ops",
+        "tab-bounty": "view-bounty",
+    }
+
+    _VIEW_BY_SIDE = {
+        "side-journal": "journal",
+        "side-findings": "view-findings",
+        "side-access": "view-access",
     }
 
     _TAG_STYLES = {
@@ -845,9 +873,9 @@ class SamuraiApp(App[None]):
         self._dir_trusted: bool | None = None
         self._last_ai_text: str | None = None
         self._last_ai_code: str | None = None
-
-    def get_default_screen(self) -> Screen[None]:
-        return SamuraiScreen()
+        self._ctx_tokens: int = 0
+        self._auto_title: str | None = None
+        self._tab_activations_seen: int = 0
 
     _DIM_STYLE = "dim #8b949e"
 
@@ -893,21 +921,33 @@ class SamuraiApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
-            yield Tabs(
-                Tab(self.translator.t("tabs.journal"), id="tab-journal"),
-                Tab(self.translator.t("tabs.plan"), id="tab-plan"),
-                Tab(self.translator.t("tabs.findings"), id="tab-findings"),
-                Tab(self.translator.t("tabs.access"), id="tab-access"),
+            yield ViewTabs(
+                Tab(self.translator.t("tabs.ops"), id="tab-ops"),
+                Tab(self.translator.t("tabs.bounty"), id="tab-bounty"),
                 id="view-tabs",
+                active="",
             )
+            yield Static(id="opname")
             yield Static(id="brand")
-        with ContentSwitcher(initial="journal", id="views"):
-            yield SelectableRichLog(
-                id="journal", markup=False, wrap=True, auto_scroll=True
+        with Horizontal(id="body"):
+            with ContentSwitcher(initial="journal", id="views"):
+                yield SelectableRichLog(
+                    id="journal", markup=False, wrap=True, auto_scroll=True
+                )
+                yield SelectableRichLog(id="view-ops", markup=False, wrap=True)
+                yield SelectableRichLog(id="view-bounty", markup=False, wrap=True)
+                yield SelectableRichLog(id="view-findings", markup=False, wrap=True)
+                yield SelectableRichLog(id="view-access", markup=False, wrap=True)
+            yield OptionList(
+                Option(self.translator.t("tabs.journal"), id="side-journal"),
+                Option(self.translator.t("tabs.findings"), id="side-findings"),
+                Option(self.translator.t("tabs.access"), id="side-access"),
+                id="side-tabs",
             )
-            yield SelectableRichLog(id="view-plan", markup=False, wrap=True)
-            yield SelectableRichLog(id="view-findings", markup=False, wrap=True)
-            yield SelectableRichLog(id="view-access", markup=False, wrap=True)
+        with Horizontal(id="ops-strip"):
+            yield Static(id="strip-agents", classes="strip-item")
+            yield Static(id="strip-todo", classes="strip-item")
+            yield Static(id="strip-task", classes="strip-item")
         yield OptionList(id="command-suggestions")
         yield HistoryInput(
             placeholder=self.translator.t("input.placeholder"), id="command-input"
@@ -915,6 +955,7 @@ class SamuraiApp(App[None]):
         yield Static(id="status-bar")
 
     def on_mount(self) -> None:
+        self._apply_mouse()
         try:
             if self.requested_operation_id:
                 self.operation = self.service.get(self.requested_operation_id)
@@ -949,25 +990,25 @@ class SamuraiApp(App[None]):
     def _retitle_tabs(self) -> None:
         tabs = self.query_one("#view-tabs", Tabs)
         for tab_id, key in (
-            ("tab-journal", "tabs.journal"),
-            ("tab-plan", "tabs.plan"),
-            ("tab-findings", "tabs.findings"),
-            ("tab-access", "tabs.access"),
+            ("tab-ops", "tabs.ops"),
+            ("tab-bounty", "tabs.bounty"),
         ):
             tab = tabs.query_one(f"#{tab_id}", Tab)
             tab.label = self.translator.t(key)
+        side = self.query_one("#side-tabs", OptionList)
+        for option_id, key in (
+            ("side-journal", "tabs.journal"),
+            ("side-findings", "tabs.findings"),
+            ("side-access", "tabs.access"),
+        ):
+            index = side.get_option_index(option_id)
+            if index is not None:
+                side.replace_option_prompt_at_index(index, self.translator.t(key))
 
     def _write_welcome(self) -> None:
         journal = self.query_one("#journal", RichLog)
         journal.write(self._brand_text())
-        self._write_dim(self.translator.t("welcome.stage"))
-        if self.operation:
-            self._write_dim(
-                self.translator.t(
-                    "welcome.loaded", operation_id=self.operation.id, name=self.operation.name
-                )
-            )
-        else:
+        if not self.operation:
             self._write_dim(self.translator.t("welcome.no-operation"))
         self._write_dim(self.translator.t("welcome.help-hint"))
 
@@ -1050,9 +1091,23 @@ class SamuraiApp(App[None]):
                 break
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        # The Tabs widget fires one TabActivated for the first tab while
+        # mounting; that one must not switch away from the chat journal.
+        self._tab_activations_seen += 1
+        if self._tab_activations_seen == 1:
+            # Detach the mount-time activation: no dashboard tab is active
+            # while the chat journal is on screen, and the first real click
+            # on "Red Team OPS" must still fire.
+            event.tabs.active = ""
+            return
         pane = self._VIEW_BY_TAB.get(str(event.tab.id))
         if pane is None:
             return
+        side = self.query_one("#side-tabs", OptionList)
+        side.highlighted = None
+        self._switch_view(pane)
+
+    def _switch_view(self, pane: str) -> None:
         self.query_one("#views", ContentSwitcher).current = pane
         if pane != "journal":
             self._render_view(pane)
@@ -1062,16 +1117,107 @@ class SamuraiApp(App[None]):
         log = self.query_one(f"#{pane}", RichLog)
         log.clear()
         for line in self._view_lines(pane):
-            log.write(self._styled(line))
+            log.write(line if isinstance(line, Text) else self._styled(line))
 
-    def _view_lines(self, pane: str) -> list[str]:
-        if pane == "view-plan":
-            return self._plan_lines() + self._task_lines() + self._gate_lines()
+    def _view_lines(self, pane: str) -> list[str | Text]:
+        if pane == "view-ops":
+            return self._ops_lines()
+        if pane == "view-bounty":
+            return self._bounty_lines()
         if pane == "view-findings":
-            return self._finding_lines() + self._evidence_lines()
+            return [*self._finding_lines(), *self._evidence_lines()]
         if pane == "view-access":
-            return self._access_lines()
+            return [*self._access_lines()]
         return []
+
+    _TASK_COLORS = {
+        "done": "#51cf66",
+        "skipped": "#868e96",
+        "in-progress": "#ffd43b",
+        "blocked": "#ff6b6b",
+    }
+
+    _STEP_COLORS = {
+        "executed": "#51cf66",
+        "skipped": "#868e96",
+        "executing": "#ffd43b",
+        "blocked": "#ff6b6b",
+    }
+
+    def _ops_lines(self) -> list[str | Text]:
+        if not self.operation:
+            return [Text(self.translator.t("status.no-operation"), style=self._DIM_STYLE)]
+        lines: list[str | Text] = [Text(self.translator.t("ops.todo"), style="bold #74c0fc")]
+        plan = self.kernel.get_current_plan(self.operation.id)
+        if plan is None or not plan.tasks:
+            lines.append(Text(self.translator.t("ops.no-tasks"), style=self._DIM_STYLE))
+        else:
+            for task in plan.tasks:
+                color = self._TASK_COLORS.get(task.status.value, "#6b7280")
+                lines.append(
+                    Text.assemble(
+                        ("■ ", color),
+                        (f"{task.id} ", "bold #e0e0e0"),
+                        (f"[{task.status.value}] ", color),
+                        (task.title, "#adb5bd"),
+                    )
+                )
+        if plan is not None and plan.gates:
+            lines.append(Text(self.translator.t("ops.gates"), style="bold #74c0fc"))
+            for gate in plan.gates:
+                color = "#51cf66" if gate.status.value == "passed" else "#6b7280"
+                lines.append(
+                    Text.assemble(
+                        ("■ ", color),
+                        (f"{gate.id} ", "bold #e0e0e0"),
+                        (f"[{gate.status.value}] ", color),
+                        (gate.name, "#adb5bd"),
+                    )
+                )
+        steps = self.redteam.list_steps(self.operation.id)
+        lines.append(Text(self.translator.t("ops.heatmap"), style="bold #da77f2"))
+        if not steps:
+            lines.append(Text(self.translator.t("ops.no-steps"), style=self._DIM_STYLE))
+        else:
+            row: list[tuple[str, str]] = []
+            for step in steps:
+                color = self._STEP_COLORS.get(step.status.value, "#3a3a3a")
+                row.append((f" {step.technique_id} ", f"#e0e0e0 on {color}"))
+                if len(row) == 6:
+                    lines.append(Text.assemble(*row))
+                    row = []
+            if row:
+                lines.append(Text.assemble(*row))
+        return lines
+
+    def _bounty_lines(self) -> list[str | Text]:
+        if not self.operation:
+            return [Text(self.translator.t("status.no-operation"), style=self._DIM_STYLE)]
+        scope = self.operation.scope
+        lines: list[str | Text] = [Text(self.translator.t("bounty.scope"), style="bold #a9e34b")]
+        lines.append(
+            Text(
+                self.translator.t("scope.includes", rules=", ".join(scope.includes)),
+                style="#a9e34b",
+            )
+        )
+        excludes = ", ".join(scope.excludes) or self.translator.t("scope.none")
+        lines.append(
+            Text(self.translator.t("scope.excludes", rules=excludes), style="#ffa94d")
+        )
+        assets = self.playbooks.list_assets(self.operation.id)
+        lines.append(
+            Text(
+                self.translator.t("bounty.assets", count=len(assets)),
+                style="bold #a9e34b",
+            )
+        )
+        for entry in assets[:10]:
+            lines.append(
+                Text(f"  {entry.kind.value} | {entry.value} | {entry.source}", style="#adb5bd")
+            )
+        lines.append(Text(self.translator.t("bounty.findings"), style="bold #da77f2"))
+        return lines + self._finding_lines()
 
     # --- slash-command suggestions -------------------------------------
 
@@ -1138,7 +1284,14 @@ class SamuraiApp(App[None]):
     def on_option_list_option_selected(
         self, event: OptionList.OptionSelected
     ) -> None:
-        if event.option_list.id != "command-suggestions" or event.option is None:
+        if event.option is None:
+            return
+        if event.option_list.id == "side-tabs":
+            pane = self._VIEW_BY_SIDE.get(str(event.option.id))
+            if pane is not None:
+                self._switch_view(pane)
+            return
+        if event.option_list.id != "command-suggestions":
             return
         command_input = self.query_one("#command-input", Input)
         command_input.value = str(event.option.id or "")
@@ -1205,6 +1358,27 @@ class SamuraiApp(App[None]):
             + self.translator.t("yolo.enabled" if enabled else "yolo.disabled")
         )
         self._refresh_chrome()
+
+    def _apply_mouse(self) -> None:
+        driver = self._driver
+        if driver is None:
+            return
+        enable = getattr(driver, "_enable_mouse_support", None)
+        disable = getattr(driver, "_disable_mouse_support", None)
+        if enable is None or disable is None:
+            return
+        if self.settings.get_value("tui.mouse") != "0":
+            enable()
+        else:
+            disable()
+
+    def _toggle_mouse(self) -> None:
+        enabled = self.settings.get_value("tui.mouse") == "0"
+        self.settings.set_value("tui.mouse", "1" if enabled else "0")
+        self._apply_mouse()
+        self._write_dim(
+            self.translator.t("mouse.enabled" if enabled else "mouse.disabled")
+        )
 
     def _handle_command(self, command: str) -> None:
         name, _, argument = command.partition(" ")
@@ -1303,6 +1477,9 @@ class SamuraiApp(App[None]):
         if name == "/yolo":
             self._toggle_yolo()
             return
+        if name == "/mouse":
+            self._toggle_mouse()
+            return
         if name == "/trust":
             self._maybe_prompt_trust(force=True)
             return
@@ -1327,6 +1504,9 @@ class SamuraiApp(App[None]):
         if not self.operation:
             self._write_line("[error] " + self.translator.t("welcome.no-operation"))
             return
+        if self._auto_title is None:
+            # The tab names itself from the task at hand
+            self._auto_title = " ".join(text.split()[:6])
         self._write_user_message(text)
         self._write_dim(self.translator.t("chat.thinking", model=model_id))
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
@@ -1353,6 +1533,9 @@ class SamuraiApp(App[None]):
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self._write_line(f"[error] {exc}")
             return
+        self._ctx_tokens += (
+            response.usage.prompt_tokens + response.usage.completion_tokens
+        )
         self._write_ai_message(response)
         self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
@@ -1875,39 +2058,77 @@ class SamuraiApp(App[None]):
         return text
 
     def _refresh_chrome(self) -> None:
-        brand = self.query_one("#brand", Static)
-        status_bar = self.query_one("#status-bar", Static)
+        self.query_one("#brand", Static).update(self._brand_text())
+        title = self._auto_title or (self.operation.name if self.operation else "")
+        self.query_one("#opname", Static).update(title)
         model = self.models.default_model()
-        brand.update(self._brand_text())
-        if self.operation:
-            operation = self.operation
-            summary = self.kernel.summary(operation.id)
-            status_text = self.translator.t(
-                "statusbar.with-operation",
-                status=operation.status.value.upper(),
-                tasks_done=summary.tasks_done,
-                tasks_total=summary.tasks_total,
-                gates_passed=summary.gates_passed,
-                gates_total=summary.gates_total,
-                pending=summary.pending_approvals,
-            )
-        else:
-            status_text = self.translator.t("statusbar.idle")
         directory = self._short_cwd()
         if not self._directory_trusted():
             directory += self.translator.t("trust.untrusted-marker")
-        bar = Text(f"{directory} | {status_text} | ")
+        bar = Text(f"{directory} | ")
         # Green dot: ask before running OS commands; red dot: yolo (no prompts).
         bar.append("●", style="#ff6b6b" if self._yolo else "#51cf66")
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
+        bar.append(f" | ctx {self._ctx_tokens} tok")
         bar.append(" | /help")
-        status_bar.update(bar)
+        self.query_one("#status-bar", Static).update(bar)
+        self._refresh_ops_strip()
         switcher = self.query_one("#views", ContentSwitcher)
         current = str(switcher.current or "journal")
         if current != "journal":
             self._render_view(current)
+
+    def _refresh_ops_strip(self) -> None:
+        agents_item = self.query_one("#strip-agents", Static)
+        todo_item = self.query_one("#strip-todo", Static)
+        task_item = self.query_one("#strip-task", Static)
+        if not self.operation:
+            for item in (agents_item, todo_item, task_item):
+                item.display = False
+            return
+        operation_id = self.operation.id
+        runs = self.agents.list_runs(operation_id)
+        if runs:
+            running = sum(1 for run in runs if run.status == AgentRunStatus.RUNNING)
+            agents_item.update(
+                Text(
+                    self.translator.t("strip.agents", running=running, total=len(runs)),
+                    style="#5bc0be",
+                )
+            )
+            agents_item.tooltip = "\n".join(
+                f"{run.id} | {run.task_id} | {run.status.value}" for run in runs[-8:]
+            )
+            agents_item.display = True
+        else:
+            agents_item.display = False
+        plan = self.kernel.get_current_plan(operation_id)
+        tasks = plan.tasks if plan is not None else []
+        if not tasks:
+            todo_item.display = False
+            task_item.display = False
+            return
+        done = sum(
+            1 for task in tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED)
+        )
+        todo_item.update(
+            Text(self.translator.t("strip.todo", done=done, total=len(tasks)), style="#74c0fc")
+        )
+        todo_item.tooltip = "\n".join(
+            f"{task.id} | {task.status.value} | {task.title}" for task in tasks
+        )
+        todo_item.display = True
+        current = next(
+            (task for task in tasks if task.status == TaskStatus.IN_PROGRESS), None
+        )
+        if current is not None:
+            task_item.update(Text(f"▸ {current.title}", style="#ffd43b"))
+            task_item.tooltip = f"{current.id} | risk={current.risk_class.value}"
+            task_item.display = True
+        else:
+            task_item.display = False
 
     def _show_model_picker(self) -> None:
         self.run_worker(self._open_model_picker(), exclusive=True)
