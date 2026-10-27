@@ -846,3 +846,174 @@ def test_ctrl_c_copies_selection_then_quits(tmp_path: Path) -> None:
             assert not app.is_running
 
     asyncio.run(exercise())
+
+
+class _ChatProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, Usage
+
+        self.calls += 1
+        return ChatResponse(
+            text=f"echo: {request.messages[-1].content}",
+            usage=Usage(prompt_tokens=3, completion_tokens=2),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def _chat_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
+    provider = _ChatProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Chat lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+    return stack, provider, operation
+
+
+def test_chat_approval_allow_and_deny(tmp_path: Path) -> None:
+    stack, provider, operation = _chat_stack(tmp_path)
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "hello world"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # remote model call requires an access decision first
+                assert isinstance(app.screen, AccessPromptScreen)
+                assert provider.calls == 0
+                await pilot.press("enter")  # allow
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert provider.calls == 1
+                assert any("echo: hello world" in str(m) for m in messages)
+                assert any("allowed: model.call" in str(m) for m in messages)
+
+                # second message, denied this time
+                command_input.value = "second"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert isinstance(app.screen, AccessPromptScreen)
+                await pilot.press("down")
+                await pilot.press("enter")  # deny
+                await pilot.pause()
+                assert provider.calls == 1
+                assert any("denied: model.call" in str(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_chat_yolo_auto_allows(tmp_path: Path) -> None:
+    stack, provider, operation = _chat_stack(tmp_path)
+    stack[2].set_value("tui.yolo", "1")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "ping"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert not isinstance(app.screen, AccessPromptScreen)
+                assert provider.calls == 1
+                assert any("echo: ping" in str(m) for m in messages)
+                assert any("auto-allowed (yolo)" in str(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_chat_without_model_shows_error(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "hello"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert any("pick one with /model" in str(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_mouse_drag_selects_and_ctrl_c_copies(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.mouse_down("#journal", offset=(2, 1))
+            await pilot.hover("#journal", offset=(20, 1))
+            await pilot.mouse_up("#journal", offset=(20, 1))
+            await pilot.pause()
+            assert app.screen.selections
+            selected = app.screen.get_selected_text()
+            assert selected
+            # focus stays on the command input after selecting in the journal
+            assert app.focused is app.query_one("#command-input", Input)
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert selected.split("\n")[0][:10] in getattr(app, "_clipboard", "")
+            app.screen.clear_selection()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert not app.is_running
+
+    asyncio.run(exercise())
