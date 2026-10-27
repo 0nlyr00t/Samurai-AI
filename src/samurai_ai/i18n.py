@@ -4,9 +4,6 @@ DEFAULT_LOCALE = "en"
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
         "input.placeholder": "Enter a command; /help lists Operation Kernel capabilities",
-        "welcome.no-operation": (
-            "No operation loaded. Create one with: samurai operation create --help"
-        ),
         "welcome.help-hint": "Use /help to list available commands.",
         "help.help": "/help             Show available commands",
         "help.status": "/status           Show the current operation and kernel summary",
@@ -176,9 +173,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "ru": {
         "input.placeholder": "Введите команду; /help показывает возможности ядра операции",
-        "welcome.no-operation": (
-            "Операция не загружена. Создайте её: samurai operation create --help"
-        ),
         "welcome.help-hint": "Введите /help для списка команд.",
         "help.help": "/help             Показать доступные команды",
         "help.status": "/status           Показать текущую операцию и сводку ядра",
