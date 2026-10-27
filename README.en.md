@@ -83,13 +83,30 @@ Implemented:
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v14, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 598 unit/integration/CLI/TUI tests.
+- 607 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), wave-2 security tools (subfinder/nmap/ffuf —
 technical blockers documented in `md/threat-review-security-tools.md`),
 LLM streaming, full egress enforcement on Docker Desktop
 for Mac, and OS package installers (a bare standalone binary is available).
+
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh | bash
+```
+
+The script installs uv (if missing) and installs `samurai` via
+`uv tool install` from this repository — the Python 3.12+ toolchain is
+provided automatically. A specific release: `... | bash -s -- --ref v0.2.0`.
+
+Update to the latest release:
+
+```bash
+samurai update          # check and update
+samurai update --check  # only check for a newer version
+```
 
 ## Development quick start
 

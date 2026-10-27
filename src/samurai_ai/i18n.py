@@ -48,7 +48,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "error.unknown-command": "Unknown command: {name}. Use /help.",
         "chat.no-model": "No default model configured — pick one with /model.",
-        "chat.thinking": "{model} is thinking…",
+        "chat.thinking": "Thinking",
+        "chat.system": (
+            "You are Samurai, an AI agent embedded in the operator's terminal "
+            "(Samurai AI v{version}) on macOS. Working directory: {cwd}. "
+            "You CAN execute real shell commands on the host with the "
+            "shell_exec tool (bash -lc); never claim you have no shell access — "
+            "call the tool instead. Prefer verifying facts by running commands "
+            "(id, uname, ls, ps, curl for in-scope targets). Commands may "
+            "require operator approval before they run; their bounded output "
+            "comes back to you as a tool result. Answer in the operator's "
+            "language, keep replies concise, format code as Markdown."
+        ),
+        "chat.tool-denied": "denied by operator: {command}",
+        "chat.tool-limit": "tool round limit reached — stopping the command loop",
+        "chat.tool-exit": "exit {code}",
         "copy.done": "copied {chars} chars to the clipboard",
         "copy.empty": "nothing to copy yet — send a message first",
         "copy.code-empty": "the last reply has no code block",
@@ -206,7 +220,22 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "error.unknown-command": "Неизвестная команда: {name}. Используйте /help.",
         "chat.no-model": "Модель по умолчанию не настроена — выберите её через /model.",
-        "chat.thinking": "{model} думает…",
+        "chat.thinking": "Думает",
+        "chat.system": (
+            "Ты — Samurai, AI-агент, встроенный в терминал оператора "
+            "(Samurai AI v{version}) на macOS. Рабочая директория: {cwd}. "
+            "Ты МОЖЕШЬ выполнять реальные shell-команды на хосте через "
+            "инструмент shell_exec (bash -lc); никогда не утверждай, что у "
+            "тебя нет доступа к шеллу, — просто вызывай инструмент. "
+            "Проверяй факты командами (id, uname, ls, ps, curl для целей "
+            "в скоупе). Перед выполнением команда может требовать одобрения "
+            "оператора; ограниченный вывод вернётся тебе как результат "
+            "инструмента. Отвечай на языке оператора, кратко, код "
+            "оформляй в Markdown."
+        ),
+        "chat.tool-denied": "отклонено оператором: {command}",
+        "chat.tool-limit": "достигнут лимит раундов команд — цикл остановлен",
+        "chat.tool-exit": "код выхода {code}",
         "copy.done": "скопировано символов: {chars}",
         "copy.empty": "пока нечего копировать — отправьте сообщение",
         "copy.code-empty": "в последнем ответе нет блока кода",

@@ -135,6 +135,38 @@ def test_gemini_response_mapping_with_function_call() -> None:
     assert response.usage.completion_tokens == 11
 
 
+def test_ollama_payload_includes_tools() -> None:
+    from samurai_ai.agents.ollama import build_chat_payload
+
+    payload = build_chat_payload("qwen3:8b", make_request(tools=True))
+    assert payload["tools"][0]["function"]["name"] == "search"
+    assert payload["tools"][0]["function"]["parameters"]["properties"]["q"] == {
+        "type": "string"
+    }
+
+
+def test_ollama_response_maps_tool_calls() -> None:
+    from samurai_ai.agents.ollama import parse_chat_response
+
+    response = parse_chat_response(
+        "ollama/qwen3:8b@v1",
+        {
+            "message": {
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "shell_exec", "arguments": {"command": "id"}}}
+                ],
+            },
+            "prompt_eval_count": 10,
+            "eval_count": 4,
+        },
+        12,
+    )
+    assert response.tool_calls[0].name == "shell_exec"
+    assert response.tool_calls[0].arguments == {"command": "id"}
+    assert response.usage.prompt_tokens == 10
+
+
 def make_response(model_id: str) -> ChatResponse:
     return ChatResponse(
         text=f"ok:{model_id}",

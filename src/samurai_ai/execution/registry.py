@@ -7,6 +7,7 @@ arbitrary command strings or dynamic callables at runtime.
 from __future__ import annotations
 
 import asyncio
+import shutil
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -269,6 +270,69 @@ class ProcessExecTool:
         )
 
 
+class ShellExecTool:
+    """Run an arbitrary command line through the host shell.
+
+    Unlike ProcessExecTool (allowlisted argv, no shell), this tool exists for
+    the interactive agent loop where the model asks to run real commands.
+    It is risk class R3: every call requires an operator approval (or yolo
+    mode) and is recorded with redacted, bounded output artifacts.
+    """
+
+    def __init__(self, manager: ProcessManager | None = None) -> None:
+        self.manager = manager or ProcessManager(
+            allowed_executables=frozenset({"bash", "sh"})
+        )
+        self._definition = ToolDefinition(
+            id="shell.exec",
+            version=1,
+            kind=ToolKind.PROCESS,
+            description="Run a shell command on the operator host (bash -lc)",
+            risk_class=RiskClass.R3,
+            network_access=False,
+            timeout_seconds=120,
+            output_limit_bytes=65536,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192,
+                    },
+                },
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+            capabilities=("shell",),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        command = str(params["command"])
+        shell = "bash" if shutil.which("bash") else "sh"
+        result = asyncio.run(
+            self.manager.run(
+                [shell, "-lc", command],
+                timeout_seconds=float(self._definition.timeout_seconds),
+            )
+        )
+        stderr = result.stderr
+        if result.timed_out:
+            stderr += "\n[process timed out]"
+        if result.truncated:
+            stderr += "\n[output truncated]"
+        return ToolOutput(
+            stdout=result.stdout,
+            stderr=stderr,
+            exit_code=result.exit_code if result.exit_code is not None else -1,
+            timed_out=result.timed_out,
+        )
+
+
 class HttpFetchTool:
     def __init__(
         self,
@@ -406,6 +470,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
         adapters=(
             LocalEchoTool(),
             ProcessExecTool(),
+            ShellExecTool(),
             HttpFetchTool(),
             SandboxExecTool(),
             HttpxProbeTool(),
@@ -420,6 +485,7 @@ __all__ = [
     "HttpFetchTool",
     "LocalEchoTool",
     "ProcessExecTool",
+    "ShellExecTool",
     "SandboxExecTool",
     "ToolAdapter",
     "ToolOutput",

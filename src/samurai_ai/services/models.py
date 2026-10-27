@@ -17,7 +17,7 @@ from samurai_ai.agents.budgets import (
 from samurai_ai.agents.gemini import GeminiProvider
 from samurai_ai.agents.ollama import OllamaProvider
 from samurai_ai.agents.openai_compat import OpenAICompatProvider
-from samurai_ai.agents.provider import ChatRequest, ChatResponse, Message
+from samurai_ai.agents.provider import ChatRequest, ChatResponse, Message, ToolSpec
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.agents.router import ModelRouter
 from samurai_ai.domain.execution import ApprovalRequiredError, ToolStateError
@@ -258,6 +258,32 @@ class ModelService:
         router: ModelRouter | None = None,
         extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
+        return self.chat(
+            operation_id,
+            model_id,
+            (Message(role="user", content=prompt),),
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            approval_id=approval_id,
+            fallbacks=fallbacks,
+            router=router,
+            extra_payload=extra_payload,
+        )
+
+    def chat(
+        self,
+        operation_id: str,
+        model_id: str,
+        messages: tuple[Message, ...],
+        *,
+        tools: tuple[ToolSpec, ...] = (),
+        max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        approval_id: str | None = None,
+        fallbacks: tuple[str, ...] = (),
+        router: ModelRouter | None = None,
+        extra_payload: dict[str, Any] | None = None,
+    ) -> ChatResponse:
         self.operations.get(operation_id)
         model, provider = self._resolve_model(model_id)
         candidates = [model.id, *fallbacks]
@@ -266,7 +292,8 @@ class ModelService:
         self._resolve_approval(operation_id, model, risk, approval_id)
         request = ChatRequest(
             model_id=model.id,
-            messages=(Message(role="user", content=prompt),),
+            messages=messages,
+            tools=tools,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort or self.default_reasoning_effort(),
         )
@@ -281,6 +308,7 @@ class ModelService:
                 ChatRequest(
                     model_id=candidate_model.id,
                     messages=request.messages,
+                    tools=request.tools,
                     max_tokens=request.max_tokens,
                     temperature=request.temperature,
                     reasoning_effort=request.reasoning_effort,
