@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -58,6 +59,9 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     settings = SettingsService(recovery_repository)
     settings.set_locale("en")
     recovery = RecoveryService(service, kernel, recovery_repository)
+    settings.set_value(
+        "tui.trusted_dirs", json.dumps([str(Path.cwd().resolve())])
+    )
     vault = VaultService(
         VaultRepository(database), operation_repository, tmp_path / "vault.key"
     )
@@ -234,8 +238,8 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            header = app.query_one("#operation-header", Static)
-            assert operation.id in str(header.render())
+            brand = app.query_one("#brand", Static)
+            assert operation.id in str(brand.render())
 
             journal = app.query_one("#journal", RichLog)
             command_input = app.query_one("#command-input", Input)
@@ -290,23 +294,30 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
 
                 assert not any("tui-secret-plaintext" in message for message in messages)
 
-            assert journal.display
+            from textual.widgets import ContentSwitcher
+
+            views = app.query_one("#views", ContentSwitcher)
+            assert views.display
             await pilot.press("ctrl+o")
-            assert not journal.display
+            assert not views.display
             await pilot.press("ctrl+o")
-            assert journal.display
+            assert views.display
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
 
 
-def _minimal_stack(tmp_path: Path, provider_factory=None):  # type: ignore[no-untyped-def]
+def _minimal_stack(tmp_path: Path, provider_factory=None, trust_cwd: bool = True):  # type: ignore[no-untyped-def]
     database = Database(tmp_path / "tui2.db")
     operation_repository = OperationRepository(database)
     service = OperationService(operation_repository)
     kernel = KernelService(service, KernelRepository(database))
     recovery_repository = RecoveryRepository(database)
     settings = SettingsService(recovery_repository)
+    if trust_cwd:
+        settings.set_value(
+            "tui.trusted_dirs", json.dumps([str(Path.cwd().resolve())])
+        )
     recovery = RecoveryService(service, kernel, recovery_repository)
     vault = VaultService(
         VaultRepository(database), operation_repository, tmp_path / "vault.key"
@@ -584,5 +595,254 @@ def test_custom_endpoint_wizard(tmp_path: Path) -> None:
                 status_bar.render()
             )
             await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_brand_shows_configured_model(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("fake-key", "x")
+    models.register_endpoint("fake", "http://127.0.0.1:9/v1", "fake-key")
+    models.add_model("fake/fake-model")
+    settings.set_value("model.default", "fake/fake-model@v1")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            brand = str(app.query_one("#brand", Static).render())
+            assert "fake/fake-model@v1" in brand
+            assert "NOT CONFIGURED" not in brand
+            status_bar = str(app.query_one("#status-bar", Static).render())
+            assert "model=fake/fake-model@v1" in status_bar
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_yolo_toggles_access_mode(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    settings = stack[2]
+    settings.set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            status_bar = app.query_one("#status-bar", Static)
+            assert "ACCESS: ASK" in str(status_bar.render())
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "/yolo"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.yolo") == "1"
+            assert "ACCESS: YOLO" in str(status_bar.render())
+            command_input.value = "/yolo"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.yolo") == "0"
+            assert "ACCESS: ASK" in str(status_bar.render())
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_statusbar_shows_current_directory(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            status_bar = str(app.query_one("#status-bar", Static).render())
+            assert str(Path.cwd().resolve()).replace(str(Path.home()), "~", 1)[:20] in (
+                status_bar
+            )
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_tabs_switch_views(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    service, kernel, settings = stack[0], stack[1], stack[2]
+    settings.set_locale("en")
+    operation = service.create(
+        "Tab lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+        objective="Tab objective",
+    )
+    kernel.create_plan(
+        operation.id,
+        "Tab kernel plan",
+        [PlanTask(id="recon", title="Map the service", risk_class=RiskClass.R1)],
+        [StageGate(id="recon-complete", name="Recon complete")],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            from textual.widgets import ContentSwitcher, Tabs
+
+            await pilot.pause()
+            tabs = app.query_one("#view-tabs", Tabs)
+            assert tabs.active == "tab-journal"
+            tabs.active = "tab-plan"
+            await pilot.pause()
+            switcher = app.query_one("#views", ContentSwitcher)
+            assert switcher.current == "view-plan"
+            plan_log = app.query_one("#view-plan", RichLog)
+            text = "\n".join(strip.text for strip in plan_log.lines)
+            assert "Tab kernel plan" in text
+            assert "recon-complete" in text
+            tabs.active = "tab-access"
+            await pilot.pause()
+            assert switcher.current == "view-access"
+            access_log = app.query_one("#view-access", RichLog)
+            access_text = "\n".join(strip.text for strip in access_log.lines)
+            assert "ACCESS: ASK" in access_text
+            tabs.active = "tab-journal"
+            await pilot.pause()
+            assert switcher.current == "journal"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_command_suggestions(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            popup = app.query_one("#command-suggestions", OptionList)
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/s"
+                await pilot.pause()
+                assert popup.display
+                prompts = [
+                    str(popup.get_option_at_index(i).prompt)
+                    for i in range(popup.option_count)
+                ]
+                assert any(prompt.startswith("/status") for prompt in prompts)
+                assert popup.highlighted == 0
+                # arrows navigate the popup instead of the history
+                await pilot.press("down")
+                assert popup.highlighted == 1
+                assert command_input.value == "/s"
+                await pilot.press("up")
+                assert popup.highlighted == 0
+                # tab completes the highlighted command
+                await pilot.press("tab")
+                assert command_input.value.startswith("/")
+                assert not popup.display
+                # typing a full command hides the popup and enter executes
+                command_input.value = "/status"
+                await pilot.pause()
+                assert not popup.display
+                await pilot.press("enter")
+                await pilot.pause()
+                assert any("no operation" in str(m).lower() for m in messages)
+                # escape closes the popup
+                command_input.value = "/m"
+                await pilot.pause()
+                assert popup.display
+                await pilot.press("escape")
+                assert not popup.display
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_directory_trust_prompt(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path, trust_cwd=False)
+    settings = stack[2]
+    settings.set_locale("en")
+    cwd = str(Path.cwd().resolve())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            from samurai_ai.tui.app import TrustDirectoryScreen
+
+            await pilot.pause()
+            assert isinstance(app.screen, TrustDirectoryScreen)
+            # deny first: arrows down twice, enter
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            status_bar = str(app.query_one("#status-bar", Static).render())
+            assert "(untrusted)" in status_bar
+            assert cwd not in json.loads(
+                settings.get_value("tui.trusted_dirs") or "[]"
+            )
+            # /trust reopens the prompt; trust always
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "/trust"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, TrustDirectoryScreen)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert cwd in json.loads(settings.get_value("tui.trusted_dirs"))
+            status_bar = str(app.query_one("#status-bar", Static).render())
+            assert "(untrusted)" not in status_bar
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+        # second run: trusted, no prompt
+        reopened = SamuraiApp(*stack)
+        async with reopened.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert not isinstance(reopened.screen, TrustDirectoryScreen)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_c_copies_selection_then_quits(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from textual.selection import SELECT_ALL
+
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            app.screen.selections = {journal: SELECT_ALL}
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            # selection copied, app still running, no quit hint
+            assert app.is_running
+            assert "Samurai AI" in getattr(app, "_clipboard", "")
+            app.screen.clear_selection()
+            # with no selection, double ctrl+c quits
+            await pilot.press("ctrl+c")
+            assert app.is_running
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert not app.is_running
 
     asyncio.run(exercise())

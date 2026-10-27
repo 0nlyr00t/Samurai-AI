@@ -200,7 +200,9 @@ Tool params поддерживают `{{secret:name}}` placeholders: значе�
 
 MCP: схемы инструментов импортируются только явным `samurai mcp tools <name>` (deferred, кэшируются в `app_settings`); вызов идёт как обычный governed tool run `mcp.<server>.<tool>` с R2 approval. HTTP MCP endpoints проходят через operation scope (для `health`/`tools` нужен `--operation`). Disabled сервер или unknown tool → fail-closed `ToolNotFoundError`.
 
-TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/agents`, `/secrets`, `/lang`, `/status`, `/scope`.
+TUI команды: `/plan`, `/tasks`, `/gates`, `/findings`, `/evidence`, `/approvals`, `/snapshots`, `/reconcile`, `/tools`, `/runs`, `/agents`, `/secrets`, `/lang`, `/status`, `/scope`, `/model`, `/yolo`, `/trust`.
+
+TUI UX (Этап 8+): верхняя панель со вкладками Журнал/План/Находки/Доступ (ContentSwitcher) и брендом `SAMURAI AI {operation} {mode} · {model}` в правом углу; статус-бар показывает текущую директорию, режим доступа (`ДОСТУП: СПРОСИТЬ|YOLO`) и модель с reasoning; `/yolo` отключает запросы разрешений (setting `tui.yolo`); при первом запуске в директории — модальный запрос доверия (trust always/session/deny, `tui.trusted_dirs`), `/trust` переоткрывает его; в журнале работает mouse-выделение текста и Ctrl+C копирование выделения (двойной Ctrl+C — выход); при наборе `/...` всплывает автодополнение команд (стрелки — навигация по подсказкам, Tab — подставить, Enter — выполнить если команда набрана полностью, Esc — закрыть).
 
 ## 7. Следующий этап — Продуктовые playbooks и отчеты (Этап 4)
 
