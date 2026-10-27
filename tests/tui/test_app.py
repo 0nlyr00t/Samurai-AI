@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from rich.text import Text
 from textual.widgets import Button, Input, OptionList, RichLog, Static
 
 from samurai_ai.agents.registry import ModelRegistry
@@ -239,7 +240,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             brand = app.query_one("#brand", Static)
-            assert operation.id in str(brand.render())
+            assert "Samurai AI" in str(brand.render())
 
             journal = app.query_one("#journal", RichLog)
             command_input = app.query_one("#command-input", Input)
@@ -599,7 +600,7 @@ def test_custom_endpoint_wizard(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_brand_shows_configured_model(tmp_path: Path) -> None:
+def test_brand_shows_name_and_version(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     settings = stack[2]
     settings.set_locale("en")
@@ -611,12 +612,14 @@ def test_brand_shows_configured_model(tmp_path: Path) -> None:
     settings.set_value("model.default", "fake/fake-model@v1")
 
     async def exercise() -> None:
+        from samurai_ai import __version__
+
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             brand = str(app.query_one("#brand", Static).render())
-            assert "fake/fake-model@v1" in brand
-            assert "NOT CONFIGURED" not in brand
+            assert "Samurai AI" in brand
+            assert __version__ in brand
             status_bar = str(app.query_one("#status-bar", Static).render())
             assert "model=fake/fake-model@v1" in status_bar
             await pilot.press("ctrl+c")
@@ -848,6 +851,16 @@ def test_ctrl_c_copies_selection_then_quits(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def _message_text(message) -> str:  # type: ignore[no-untyped-def]
+    markup = getattr(message, "markup", None)
+    if isinstance(markup, str):
+        return markup
+    renderable = getattr(message, "renderable", None)
+    if isinstance(renderable, Text):
+        return renderable.plain
+    return str(message)
+
+
 class _ChatProvider:
     def __init__(self) -> None:
         self.calls = 0
@@ -916,7 +929,7 @@ def test_chat_approval_allow_and_deny(tmp_path: Path) -> None:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 assert provider.calls == 1
-                assert any("echo: hello world" in str(m) for m in messages)
+                assert any("echo: hello world" in _message_text(m) for m in messages)
                 assert any("allowed: model.call" in str(m) for m in messages)
 
                 # second message, denied this time
@@ -958,7 +971,7 @@ def test_chat_yolo_auto_allows(tmp_path: Path) -> None:
                 await pilot.pause()
                 assert not isinstance(app.screen, AccessPromptScreen)
                 assert provider.calls == 1
-                assert any("echo: ping" in str(m) for m in messages)
+                assert any("echo: ping" in _message_text(m) for m in messages)
                 assert any("auto-allowed (yolo)" in str(m) for m in messages)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
@@ -984,6 +997,97 @@ def test_chat_without_model_shows_error(tmp_path: Path) -> None:
                 await pilot.press("enter")
                 await pilot.pause()
                 assert any("pick one with /model" in str(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+class _CodeChatProvider(_ChatProvider):
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, Usage
+
+        self.calls += 1
+        return ChatResponse(
+            text="Here you go:\n```python\nprint('hi')\n```\ndone",
+            usage=Usage(prompt_tokens=3, completion_tokens=2),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def test_chat_renders_markdown_and_copy_commands(tmp_path: Path) -> None:
+    provider = _CodeChatProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("tui.yolo", "1")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Chat lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+
+    async def exercise() -> None:
+        from rich.markdown import Markdown
+        from rich.padding import Padding
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "show me code"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # operator message is a padded bubble, agent reply is Markdown
+                assert any(isinstance(m, Padding) for m in messages)
+                assert any(isinstance(m, Markdown) for m in messages)
+                # /copy grabs the whole reply, /copy code only the fenced block
+                command_input.value = "/copy"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert "Here you go:" in getattr(app, "_clipboard", "")
+                command_input.value = "/copy code"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert getattr(app, "_clipboard", "") == "print('hi')"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_copy_without_reply_shows_hint(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/copy"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert any("nothing to copy" in str(m) for m in messages)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
