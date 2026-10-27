@@ -1266,6 +1266,48 @@ def test_chat_tool_call_denied_by_operator(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_chat_without_operation_autocreates_one(tmp_path: Path) -> None:
+    provider = _ChatProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("tui.yolo", "1")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    # note: no operation exists at all
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert app.operation is None
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "map the target"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # first message spawned its own operation, named from the text
+                assert app.operation is not None
+                assert app.operation.name == "map the target"
+                assert provider.calls == 1
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "echo: map the target" in text
+                assert "operation" not in text.lower() or "not loaded" not in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_plus_button_creates_operation_tab(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")

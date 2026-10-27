@@ -1065,8 +1065,10 @@ class SamuraiApp(App[None]):
                 self.operation = self.service.get(self.requested_operation_id)
             else:
                 self.operation = self.service.latest()
-        except OperationNotFoundError as exc:
-            self._write_line(f"[error] {exc}")
+        except OperationNotFoundError:
+            # Fresh install or empty base: the first chat message will spawn
+            # its own operation tab, so there is nothing to load yet.
+            self.operation = None
 
         self._refresh_chrome()
         if self._locale_known:
@@ -1103,8 +1105,6 @@ class SamuraiApp(App[None]):
     def _write_welcome(self) -> None:
         journal = self.query_one("#journal", RichLog)
         journal.write(self._brand_text())
-        if not self.operation:
-            self._write_dim(self.translator.t("welcome.no-operation"))
         self._write_dim(self.translator.t("welcome.help-hint"))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -1691,12 +1691,17 @@ class SamuraiApp(App[None]):
         if model_id is None:
             self._write_line("[error] " + self.translator.t("chat.no-model"))
             return
+        title = " ".join(text.split()[:6])
         if not self.operation:
-            self._write_line("[error] " + self.translator.t("welcome.no-operation"))
-            return
+            # No ceremony: the first message spawns its own operation tab.
+            self.operation = self.service.create(
+                title or "chat",
+                OperationMode.BUG_BOUNTY,
+                ScopeContract(includes=("127.0.0.1/32",)),
+            )
         if self._auto_title is None:
             # The tab names itself from the task at hand
-            self._auto_title = " ".join(text.split()[:6])
+            self._auto_title = title
         self._write_user_message(text)
         self._thinking_start()
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
