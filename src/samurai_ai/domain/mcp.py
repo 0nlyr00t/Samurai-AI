@@ -7,11 +7,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from samurai_ai import __version__
 from samurai_ai.domain.execution import ToolExecutionError
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 MCP_CLIENT_NAME = "samurai-ai"
-MCP_CLIENT_VERSION = "0.1.0"
+MCP_CLIENT_VERSION = __version__
 MCP_TOOL_ID = re.compile(r"mcp\.([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\.([A-Za-z0-9_-]{1,128})\Z")
 _SERVER_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 
