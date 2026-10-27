@@ -6,6 +6,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -25,6 +27,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
+from samurai_ai import __version__
 from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
 from samurai_ai.domain.operations import Operation
@@ -665,6 +668,10 @@ class SamuraiApp(App[None]):
         background: #000000;
         color: #e0e0e0;
     }
+    .screen--selection {
+        background: #30507a;
+        color: #ffffff;
+    }
     #topbar {
         height: 2;
         background: #0a0a0a;
@@ -722,16 +729,16 @@ class SamuraiApp(App[None]):
         "error": "bold #ff6b6b",
         "deny": "#ff6b6b",
         "allow": "#51cf66",
-        "status": "#4fa8ff",
+        "status": "dim #8b949e",
         "scope": "#4fa8ff",
         "plan": "#74c0fc",
         "task": "#74c0fc",
         "gate": "#ffd43b",
         "approval": "#ffd43b",
         "finding": "#da77f2",
-        "evidence": "#ced4da",
-        "artifact": "#ced4da",
-        "snapshot": "#ced4da",
+        "evidence": "#6b7280",
+        "artifact": "#6b7280",
+        "snapshot": "#6b7280",
         "tools": "#63e6be",
         "tool": "#63e6be",
         "run": "#63e6be",
@@ -752,9 +759,7 @@ class SamuraiApp(App[None]):
         "report": "#ffa94d",
         "model": "#4fa8ff",
         "access": "#ffd43b",
-        "you": "#da77f2",
-        "ai": "#51cf66",
-        "info": "#888888",
+        "info": "dim #8b949e",
     }
 
     BINDINGS = [
@@ -812,6 +817,10 @@ class SamuraiApp(App[None]):
         self._cwd = Path.cwd().resolve()
         self._session_trusted: set[str] = set()
         self._dir_trusted: bool | None = None
+        self._last_ai_text: str | None = None
+        self._last_ai_code: str | None = None
+
+    _DIM_STYLE = "dim #8b949e"
 
     def _styled(self, text: str) -> Text:
         match = re.match(r"^\[([a-z-]+)\]", text)
@@ -821,6 +830,37 @@ class SamuraiApp(App[None]):
     def _write_line(self, text: str) -> None:
         journal = self.query_one("#journal", RichLog)
         journal.write(self._styled(text))
+
+    def _write_dim(self, text: str) -> None:
+        """Dim gray status line (opencode-style transient feedback)."""
+        journal = self.query_one("#journal", RichLog)
+        journal.write(Text(text, style=self._DIM_STYLE))
+
+    def _brand_text(self) -> Text:
+        return Text.assemble(
+            ("Samurai AI", "bold #4fa8ff"),
+            (" v", "dim #565f89"),
+            (__version__, "#ff6b6b"),
+        )
+
+    def _write_user_message(self, text: str) -> None:
+        journal = self.query_one("#journal", RichLog)
+        journal.write(Text())
+        journal.write(
+            Padding(Text(text, style="bold #e6edf3"), (0, 2), style="on #16213e")
+        )
+
+    def _write_ai_message(self, response) -> None:  # type: ignore[no-untyped-def]
+        journal = self.query_one("#journal", RichLog)
+        header = (
+            f"{response.model_id} · {response.latency_ms}ms · "
+            f"{response.usage.prompt_tokens}+{response.usage.completion_tokens} tok"
+        )
+        journal.write(Text())
+        journal.write(Text(header, style=self._DIM_STYLE))
+        journal.write(Markdown(response.text))
+        self._last_ai_text = response.text
+        self._last_ai_code = _first_code_block(response.text)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
@@ -889,17 +929,18 @@ class SamuraiApp(App[None]):
             tab.label = self.translator.t(key)
 
     def _write_welcome(self) -> None:
-        self._write_line(self.translator.t("welcome.title"))
-        self._write_line(self.translator.t("welcome.stage"))
+        journal = self.query_one("#journal", RichLog)
+        journal.write(self._brand_text())
+        self._write_dim(self.translator.t("welcome.stage"))
         if self.operation:
-            self._write_line(
+            self._write_dim(
                 self.translator.t(
                     "welcome.loaded", operation_id=self.operation.id, name=self.operation.name
                 )
             )
         else:
-            self._write_line(self.translator.t("welcome.no-operation"))
-        self._write_line(self.translator.t("welcome.help-hint"))
+            self._write_dim(self.translator.t("welcome.no-operation"))
+        self._write_dim(self.translator.t("welcome.help-hint"))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "command-input":
@@ -1236,6 +1277,9 @@ class SamuraiApp(App[None]):
         if name == "/trust":
             self._maybe_prompt_trust(force=True)
             return
+        if name == "/copy":
+            self._copy_last(argument.strip())
+            return
 
         if name.startswith("/"):
             self._write_line(
@@ -1254,10 +1298,8 @@ class SamuraiApp(App[None]):
         if not self.operation:
             self._write_line("[error] " + self.translator.t("welcome.no-operation"))
             return
-        self._write_line(f"[you] {text}")
-        self._write_line(
-            "[status] " + self.translator.t("chat.thinking", model=model_id)
-        )
+        self._write_user_message(text)
+        self._write_dim(self.translator.t("chat.thinking", model=model_id))
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
 
     async def _chat(
@@ -1282,14 +1324,18 @@ class SamuraiApp(App[None]):
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self._write_line(f"[error] {exc}")
             return
-        self._write_line(
-            f"[ai] {response.model_id} | {response.latency_ms}ms | "
-            f"tokens={response.usage.prompt_tokens}+{response.usage.completion_tokens}"
-        )
-        for line in response.text.splitlines() or (response.text,):
-            self._write_line(f"[ai] {line}")
+        self._write_ai_message(response)
         self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
+
+    def _copy_last(self, what: str) -> None:
+        text = self._last_ai_code if what == "code" else self._last_ai_text
+        if not text:
+            key = "copy.code-empty" if what == "code" else "copy.empty"
+            self._write_dim(self.translator.t(key))
+            return
+        self.copy_to_clipboard(text)
+        self._write_dim(self.translator.t("copy.done", chars=len(text)))
 
     def _request_chat_approval(
         self, exc: ApprovalRequiredError, text: str, model_id: str
@@ -1801,18 +1847,10 @@ class SamuraiApp(App[None]):
         brand = self.query_one("#brand", Static)
         status_bar = self.query_one("#status-bar", Static)
         model = self.models.default_model()
-        model_label = model or self.translator.t("brand.no-model")
+        brand.update(self._brand_text())
         if self.operation:
             operation = self.operation
             summary = self.kernel.summary(operation.id)
-            brand.update(
-                self.translator.t(
-                    "brand.with-operation",
-                    operation_id=operation.id,
-                    mode=operation.mode.value.upper(),
-                    model=model_label,
-                )
-            )
             status_text = self.translator.t(
                 "statusbar.with-operation",
                 status=operation.status.value.upper(),
@@ -1823,7 +1861,6 @@ class SamuraiApp(App[None]):
                 pending=summary.pending_approvals,
             )
         else:
-            brand.update(self.translator.t("brand.no-operation", model=model_label))
             status_text = self.translator.t("statusbar.idle")
         access = self.translator.t("access.yolo" if self._yolo else "access.ask")
         directory = self._short_cwd()
@@ -1927,6 +1964,13 @@ class SamuraiApp(App[None]):
             )
             self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
+
+
+def _first_code_block(text: str) -> str | None:
+    match = re.search(r"```[^\n]*\n(.*?)```", text, re.DOTALL)
+    if match is None:
+        return None
+    return match.group(1).rstrip("\n")
 
 
 def _artifact_links(artifact: Artifact) -> str:
