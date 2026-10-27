@@ -633,23 +633,31 @@ def test_yolo_toggles_access_mode(tmp_path: Path) -> None:
     settings = stack[2]
     settings.set_locale("en")
 
+    def dot_style(status_bar: Static) -> str:
+        content = status_bar.render()
+        for span in getattr(content, "spans", []):
+            if content.plain[span.start:span.end] == "●":
+                return str(span.style)
+        return ""
+
     async def exercise() -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             status_bar = app.query_one("#status-bar", Static)
-            assert "ACCESS: ASK" in str(status_bar.render())
+            assert "●" in str(status_bar.render())
+            assert "81,207,102" in dot_style(status_bar)  # green: ask
             command_input = app.query_one("#command-input", Input)
             command_input.value = "/yolo"
             await pilot.press("enter")
             await pilot.pause()
             assert settings.get_value("tui.yolo") == "1"
-            assert "ACCESS: YOLO" in str(status_bar.render())
+            assert "255,107,107" in dot_style(status_bar)  # red: yolo
             command_input.value = "/yolo"
             await pilot.press("enter")
             await pilot.pause()
             assert settings.get_value("tui.yolo") == "0"
-            assert "ACCESS: ASK" in str(status_bar.render())
+            assert "81,207,102" in dot_style(status_bar)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -903,7 +911,7 @@ def _chat_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
     return stack, provider, operation
 
 
-def test_chat_approval_allow_and_deny(tmp_path: Path) -> None:
+def test_chat_model_call_is_auto_allowed(tmp_path: Path) -> None:
     stack, provider, operation = _chat_stack(tmp_path)
 
     async def exercise() -> None:
@@ -918,31 +926,17 @@ def test_chat_approval_allow_and_deny(tmp_path: Path) -> None:
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
             ):
+                # model calls are covered by directory trust: no access prompt
                 command_input.value = "hello world"
                 await pilot.press("enter")
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                # remote model call requires an access decision first
-                assert isinstance(app.screen, AccessPromptScreen)
-                assert provider.calls == 0
-                await pilot.press("enter")  # allow
-                await app.workers.wait_for_complete()
-                await pilot.pause()
+                assert not isinstance(app.screen, AccessPromptScreen)
                 assert provider.calls == 1
                 assert any("echo: hello world" in _message_text(m) for m in messages)
-                assert any("allowed: model.call" in str(m) for m in messages)
-
-                # second message, denied this time
-                command_input.value = "second"
-                await pilot.press("enter")
-                await app.workers.wait_for_complete()
-                await pilot.pause()
-                assert isinstance(app.screen, AccessPromptScreen)
-                await pilot.press("down")
-                await pilot.press("enter")  # deny
-                await pilot.pause()
-                assert provider.calls == 1
-                assert any("denied: model.call" in str(m) for m in messages)
+                assert any("auto-allowed: model.call" in str(m) for m in messages)
+                approval = stack[1].kernel.list_approvals(operation.id)[-1]
+                assert approval.decided_by == "auto"
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -1111,6 +1105,8 @@ def test_mouse_drag_selects_and_ctrl_c_copies(tmp_path: Path) -> None:
             assert selected
             # focus stays on the command input after selecting in the journal
             assert app.focused is app.query_one("#command-input", Input)
+            # the selection is auto-copied on mouse-up
+            assert selected.split("\n")[0][:10] in getattr(app, "_clipboard", "")
             await pilot.press("ctrl+c")
             await pilot.pause()
             assert selected.split("\n")[0][:10] in getattr(app, "_clipboard", "")
