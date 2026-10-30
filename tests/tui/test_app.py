@@ -271,9 +271,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                 assert any("Test the operator workflow" in message for message in messages)
 
                 for command, expected in (
-                    ("/tasks", "recon"),
                     ("/gates", "recon-complete"),
-                    ("/findings", finding.id),
                     ("/evidence", artifact.id),
                     ("/approvals", approval.id),
                     ("/tools", "local.echo"),
@@ -299,6 +297,21 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     await pilot.press("enter")
                     await pilot.pause()
                     assert any(expected in message for message in messages)
+
+                # /tasks and /findings open boards instead of dumping text
+                from samurai_ai.tui.screens import BoardScreen
+
+                for command, expected in (("/tasks", "recon"), ("/findings", finding.id)):
+                    command_input.value = command
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    assert isinstance(app.screen, BoardScreen)
+                    listed = app.screen.query_one("#board-list", OptionList)
+                    assert any(
+                        expected in str(option.prompt) for option in listed.options
+                    )
+                    await pilot.press("escape")
+                    await pilot.pause()
 
                 assert not any("tui-secret-plaintext" in message for message in messages)
 

@@ -62,6 +62,7 @@ from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
+from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
 from samurai_ai.tui.palette import CommandProvider
@@ -91,7 +92,7 @@ _PERMISSION_MODE_KEY = "tui.permission_mode"
 _YOLO_LEGACY_KEY = "tui.yolo"
 
 
-class SamuraiApp(ChatController, SessionController, App[None]):
+class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
     COMMANDS = {CommandProvider}
 
     CSS = """
@@ -251,6 +252,8 @@ class SamuraiApp(ChatController, SessionController, App[None]):
         Binding("f1", "show_help", "Keys", show=False),
         Binding("ctrl+i", "inspect_last_run", "Inspect run", show=False, priority=True),
         Binding("ctrl+g", "open_sessions", "Child sessions", show=False, priority=True),
+        Binding("ctrl+t", "open_task_board", "Plan board", show=False, priority=True),
+        Binding("ctrl+f", "open_finding_board", "Findings board", show=False, priority=True),
         Binding("ctrl+s", "steer", "Steer the running turn", show=False, priority=True),
         Binding("ctrl+b", "shell_background", "Background the shell job", show=False),
         Binding("ctrl+e", "expand_output", "Expand collapsed output", show=False, priority=True),
@@ -1207,6 +1210,12 @@ class SamuraiApp(ChatController, SessionController, App[None]):
 
     def action_open_sessions(self) -> None:
         self._show_sessions()
+
+    def action_open_task_board(self) -> None:
+        self._show_task_board()
+
+    def action_open_finding_board(self) -> None:
+        self._show_finding_board()
 
     def _session_rows(self) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
