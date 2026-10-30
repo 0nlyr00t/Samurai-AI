@@ -165,6 +165,25 @@ def print_version_banner() -> None:
     )
 
 
+def _warn_legacy_state() -> None:
+    """A stale ``.samurai/`` next to the caller is the top "where is my data?" cause."""
+    from samurai_ai import config
+    from samurai_ai.i18n import Translator
+
+    if config.is_overridden():
+        return
+    legacy = config.legacy_directory()
+    if legacy is None:
+        return
+    locale = os.environ.get("SAMURAI_LANG", "").strip().lower()
+    print(
+        Translator(locale if locale in {"ru", "en"} else "en").t(
+            "config.legacy", legacy=legacy, current=config.config_directory()
+        ),
+        file=sys.stderr,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="samurai")
     parser.add_argument("--version", action=_VersionAction)
@@ -524,6 +543,8 @@ def _make_services(
     IntegrationExportService,
 ]:
     path = database_path or default_database_path()
+    if database_path is None:
+        _warn_legacy_state()
     database = Database(path)
     operation_repository = OperationRepository(database)
     operations = OperationService(operation_repository)
