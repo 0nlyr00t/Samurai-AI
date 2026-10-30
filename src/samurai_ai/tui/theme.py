@@ -9,12 +9,13 @@ at write time through :meth:`App.token_color`.
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from textual.theme import Theme
+
+from samurai_ai import config as _config
 
 #: Tokens every theme must fill. Ordered from the surface outwards.
 TOKENS: tuple[str, ...] = (
@@ -137,12 +138,8 @@ class LoadedTheme:
 
 
 def config_directory() -> Path:
-    """Where themes and key bindings live: ``$XDG_CONFIG_HOME/samurai`` or the default."""
-    override = os.environ.get("SAMURAI_CONFIG_HOME")
-    if override:
-        return Path(override).expanduser()
-    base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
-    return Path(base).expanduser() / "samurai"
+    """Where the appearance files live; the same directory as everything else."""
+    return _config.config_directory()
 
 
 def themes_directory() -> Path:
