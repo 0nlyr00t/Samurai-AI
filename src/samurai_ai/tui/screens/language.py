@@ -16,17 +16,17 @@ class LanguagePromptScreen(ModalScreen[str]):
         width: 52;
         height: auto;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #language-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
         padding-bottom: 1;
     }
     #language-options {
         height: auto;
-        background: #0a0a0a;
+        background: $panel;
     }
     """
 
@@ -46,7 +46,5 @@ class LanguagePromptScreen(ModalScreen[str]):
     def on_mount(self) -> None:
         self.query_one("#language-options", OptionList).focus()
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(str(event.option.id or "en"))

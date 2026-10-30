@@ -45,6 +45,8 @@ class ChatController:
         translator: Translator
         operation: Operation | None
         _cwd: Any
+
+        def paint(self, style: str) -> str: ...
         _chat_history: list[Message]
         _steer_queue: list[str]
         _chat_busy: bool
@@ -79,7 +81,6 @@ class ChatController:
         def _count_goal_step(self) -> None: ...
         def run_worker(self, *args: Any, **kwargs: Any) -> Any: ...
         def push_screen_wait(self, screen: Any) -> Any: ...
-
 
     def action_steer(self) -> None:
         """Ctrl-S: inject into the running turn, or send when nothing runs."""
@@ -155,7 +156,7 @@ class ChatController:
     }
 
     _THINKING_FRAMES = "⠋⠙⠹⠸⠼⴦⦧⡇⠏"
-    _THINKING_COLORS = ("#5bc0be", "#4fa8ff", "#b197fc", "#74c0fc")
+    _THINKING_COLORS = ("accent-alt", "accent", "accent", "accent")
 
     def _chat_system_prompt(self) -> str:
         autonomy = self.translator.t(
@@ -173,7 +174,7 @@ class ChatController:
     def _trim_chat_history(self) -> None:
         if len(self._chat_history) > self._CHAT_HISTORY_LIMIT + 1:
             self._chat_history = (
-                self._chat_history[:1] + self._chat_history[-self._CHAT_HISTORY_LIMIT:]
+                self._chat_history[:1] + self._chat_history[-self._CHAT_HISTORY_LIMIT :]
             )
 
     def _thinking_start(self) -> None:
@@ -187,17 +188,13 @@ class ChatController:
 
     def _thinking_tick(self) -> None:
         widget = self.query_one("#thinking", Static)
-        frame = self._THINKING_FRAMES[
-            self._thinking_frame % len(self._THINKING_FRAMES)
-        ]
+        frame = self._THINKING_FRAMES[self._thinking_frame % len(self._THINKING_FRAMES)]
         dots = "·" * (1 + (self._thinking_frame // 4) % 3)
-        color = self._THINKING_COLORS[
-            (self._thinking_frame // 8) % len(self._THINKING_COLORS)
-        ]
+        color = self._THINKING_COLORS[(self._thinking_frame // 8) % len(self._THINKING_COLORS)]
         widget.update(
             Text(
                 f"{frame} {self.translator.t('chat.thinking')}{dots}",
-                style=f"bold {color}",
+                style=self.paint(f"bold {color}"),
             )
         )
         self._thinking_frame += 1
@@ -336,9 +333,7 @@ class ChatController:
         self._trim_chat_history()
         self._shell_running = ""
 
-    async def _chat(
-        self, text: str, model_id: str, approval_id: str | None
-    ) -> None:
+    async def _chat(self, text: str, model_id: str, approval_id: str | None) -> None:
         self._chat_busy = True
         try:
             await self._chat_loop(text, model_id, approval_id)
@@ -378,9 +373,7 @@ class ChatController:
                     # Model calls are covered by the directory trust granted at
                     # startup; only OS-level command execution still prompts.
                     decided_by = (
-                        "auto"
-                        if action.startswith("model.call")
-                        else self._permission_mode.value
+                        "auto" if action.startswith("model.call") else self._permission_mode.value
                     )
                     self.kernel.approve(exc.approval_id, decided_by=decided_by)
                     approval_id = exc.approval_id
@@ -396,14 +389,10 @@ class ChatController:
                     approval_id = exc.approval_id
                     continue
                 self.kernel.reject(exc.approval_id, decided_by="operator")
-                self._write_line(
-                    "[deny] " + self.translator.t("access.denied", action=action)
-                )
+                self._write_line("[deny] " + self.translator.t("access.denied", action=action))
                 return None
 
-    async def _chat_loop(
-        self, text: str, model_id: str, approval_id: str | None
-    ) -> None:
+    async def _chat_loop(self, text: str, model_id: str, approval_id: str | None) -> None:
         del approval_id  # approvals are handled per call inside the loop
         reasoning = (
             self.settings.get_value(f"model.reasoning_effort.{model_id}")
@@ -411,9 +400,7 @@ class ChatController:
         )
         operation_id = self.operation.id if self.operation else ""
         if not self._chat_history:
-            self._chat_history.append(
-                Message(role="system", content=self._chat_system_prompt())
-            )
+            self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
         self._chat_history.append(Message(role="user", content=text))
         for _round in range(self._CHAT_MAX_TOOL_ROUNDS):
             self._drain_steering()
@@ -427,13 +414,9 @@ class ChatController:
                 return
             if response is None:
                 return
-            self._ctx_tokens += (
-                response.usage.prompt_tokens + response.usage.completion_tokens
-            )
+            self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
             if not response.tool_calls:
-                self._chat_history.append(
-                    Message(role="assistant", content=response.text)
-                )
+                self._chat_history.append(Message(role="assistant", content=response.text))
                 self._trim_chat_history()
                 if response.text.strip():
                     self._write_ai_message(response)
@@ -444,9 +427,7 @@ class ChatController:
                     continue
                 return
             if response.text.strip():
-                self._chat_history.append(
-                    Message(role="assistant", content=response.text)
-                )
+                self._chat_history.append(Message(role="assistant", content=response.text))
             for call in response.tool_calls:
                 self._chat_history.append(await self._run_chat_tool(call))
             self._trim_chat_history()
@@ -455,9 +436,7 @@ class ChatController:
         # silence after the loop.
         self._write_dim(self.translator.t("chat.tool-limit"))
         try:
-            final = await self._request_chat_completion(
-                operation_id, model_id, reasoning, ()
-            )
+            final = await self._request_chat_completion(operation_id, model_id, reasoning, ())
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self._write_line(f"[error] {exc}")
             return
@@ -481,9 +460,7 @@ class ChatController:
                 content=f"[tool error] unknown tool: {call.name!r}",
             )
         if not self._directory_trusted():
-            self._write_dim(
-                self.translator.t("chat.tool-denied", command=call.name)
-            )
+            self._write_dim(self.translator.t("chat.tool-denied", command=call.name))
             return Message(
                 role="user",
                 content=f"[tool {call.name}] the operator has not trusted this directory",
@@ -494,35 +471,25 @@ class ChatController:
     async def _run_spawn_tool(self, call: ToolCall) -> Message:
         instruction = str(call.arguments.get("instruction", "")).strip()
         if not instruction:
-            return Message(
-                role="user", content="[tool agent_spawn] empty instruction"
-            )
+            return Message(role="user", content="[tool agent_spawn] empty instruction")
         if self._plan_mode:
-            self._write_dim(
-                self.translator.t("plan.blocked", command=f"agent_spawn {instruction}")
-            )
+            self._write_dim(self.translator.t("plan.blocked", command=f"agent_spawn {instruction}"))
             return Message(
                 role="user",
-                content=(
-                    "[tool agent_spawn] blocked: plan mode allows read-only calls only"
-                ),
+                content=("[tool agent_spawn] blocked: plan mode allows read-only calls only"),
             )
         raw = str(call.arguments.get("specialization", "") or "general")
         try:
             specialization = AgentSpecialization(raw)
         except ValueError:
             specialization = AgentSpecialization.GENERAL
-        run_id = await self.spawn_subagent(
-            instruction, specialization=specialization
-        )
+        run_id = await self.spawn_subagent(instruction, specialization=specialization)
         if run_id is None:
             return Message(
                 role="user",
                 content="[tool agent_spawn] the child did not start (see the journal)",
             )
-        self._write_dim(
-            self.translator.t("subagent.tool-started", run=run_id)
-        )
+        self._write_dim(self.translator.t("subagent.tool-started", run=run_id))
         return Message(
             role="user",
             content=(
@@ -554,9 +521,7 @@ class ChatController:
         # A tool already approved for this operation is not asked again, except
         # for a sensitive path or a destructive shape, which stay worth a look.
         mode = self._permission_mode
-        ask = mode.prompts_for_tools and (
-            not self._reusable_approval(tool_id) or not risk.empty
-        )
+        ask = mode.prompts_for_tools and (not self._reusable_approval(tool_id) or not risk.empty)
         if ask:
             allowed = await self.push_screen_wait(
                 AccessPromptScreen(
@@ -566,9 +531,7 @@ class ChatController:
                 )
             )
             if not allowed:
-                self._write_dim(
-                    self.translator.t("chat.tool-denied", command=command)
-                )
+                self._write_dim(self.translator.t("chat.tool-denied", command=command))
                 return Message(
                     role="user",
                     content=f"[tool {call.name}] denied by the operator",
@@ -584,9 +547,7 @@ class ChatController:
         except ApprovalRequiredError as exc:
             self.kernel.approve(
                 exc.approval_id,
-                decided_by=(
-                    "operator" if mode.prompts_for_tools and ask else mode.value
-                ),
+                decided_by=("operator" if mode.prompts_for_tools and ask else mode.value),
             )
             approval_id = exc.approval_id
             try:
@@ -599,9 +560,7 @@ class ChatController:
                 )
             except Exception as exc:  # noqa: BLE001 - fed back to the model
                 self._write_line(f"[error] {exc}")
-                return Message(
-                    role="user", content=f"[tool {call.name}] error: {exc}"
-                )
+                return Message(role="user", content=f"[tool {call.name}] error: {exc}")
         except Exception as exc:  # noqa: BLE001 - fed back to the model
             self._write_line(f"[error] {exc}")
             return Message(role="user", content=f"[tool {call.name}] error: {exc}")
@@ -621,8 +580,7 @@ class ChatController:
         return Message(
             role="user",
             content=(
-                f"[tool result {call.name} exit={exit_code}]\n"
-                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+                f"[tool result {call.name} exit={exit_code}]\nstdout:\n{stdout}\nstderr:\n{stderr}"
             ),
         )
 
@@ -633,8 +591,7 @@ class ChatController:
             return
         for command, exit_code, stdout, stderr in self._expandable:
             self._write_dim(
-                f"▾ ⚙ {command} — "
-                + self.translator.t("chat.tool-exit", code=exit_code)
+                f"▾ ⚙ {command} — " + self.translator.t("chat.tool-exit", code=exit_code)
             )
             text = stdout if stdout.strip() else stderr
             for line in text.rstrip().splitlines():
@@ -648,4 +605,3 @@ class ChatController:
             return
         self.copy_to_clipboard(text)
         self._write_dim(self.translator.t("copy.done", chars=len(text)))
-

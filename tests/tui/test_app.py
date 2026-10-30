@@ -3274,3 +3274,253 @@ def test_boards_show_empty_states(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
+
+
+def _config(tmp_path: Path) -> Path:
+    return tmp_path / "config"
+
+
+def test_theme_starts_dark_and_switches(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import PickerScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            assert app.theme == "dark"
+            app._show_themes()
+            await pilot.pause()
+            assert isinstance(app.screen, PickerScreen)
+            listed = app.screen.query_one("#picker-list", OptionList)
+            labels = [str(option.prompt) for option in listed.options]
+            assert any("light" in label for label in labels)
+            index = next(i for i, label in enumerate(labels) if label.startswith("light"))
+            listed.highlighted = index
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.theme == "light"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_theme_choice_survives_a_restart(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            app._on_theme_picked("high-contrast")
+            await pilot.pause()
+            assert app.theme == "high-contrast"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+        second = SamuraiApp(*stack, operation.id)
+        async with second.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            assert second.theme == "high-contrast"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_theme_file_is_offered_and_broken_file_reported(tmp_path: Path) -> None:
+    from samurai_ai.tui import theme as theme_module
+
+    themes = _config(tmp_path) / "themes"
+    themes.mkdir(parents=True)
+    (themes / "mine.json").write_text(
+        json.dumps(
+            {
+                "surface": "#101010",
+                "panel": "#101010",
+                "text": "#eeeeee",
+                "text-dim": "#999999",
+                "accent": "#00ffff",
+                "success": "#00ff00",
+                "warning": "#ffff00",
+                "danger": "#ff0000",
+            }
+        )
+    )
+    (themes / "broken.json").write_text('{"nope": "#ffffff"}')
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            assert "mine" in app.available_themes
+            assert any("nope" in problem for problem in app._theme_problems)
+            app._on_theme_picked("mine")
+            await pilot.pause()
+            assert app.token_color("accent") == "#00ffff"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    assert theme_module  # imported for clarity of the module under test
+    asyncio.run(exercise())
+
+
+def test_low_contrast_theme_warns_but_loads(tmp_path: Path) -> None:
+    themes = _config(tmp_path) / "themes"
+    themes.mkdir(parents=True)
+    (themes / "faint.json").write_text(
+        json.dumps(
+            {
+                "surface": "#101010",
+                "panel": "#101010",
+                "text": "#141414",
+                "text-dim": "#999999",
+                "accent": "#00ffff",
+                "success": "#00ff00",
+                "warning": "#ffff00",
+                "danger": "#ff0000",
+            }
+        )
+    )
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            assert "faint" in app.available_themes
+            assert any("text on surface" in problem for problem in app._theme_problems)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_key_override_is_loaded_and_fires(tmp_path: Path) -> None:
+    from samurai_ai.tui import preferences
+
+    preferences.keys_path().parent.mkdir(parents=True, exist_ok=True)
+    preferences.keys_path().write_text(json.dumps({"toggle_journal": "ctrl+j"}))
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            from textual.widgets import ContentSwitcher
+
+            views = app.query_one("#views", ContentSwitcher)
+            assert views.display is True
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            assert views.display is False
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_conflicting_key_override_is_refused(tmp_path: Path) -> None:
+    from samurai_ai.tui import preferences
+
+    preferences.keys_path().parent.mkdir(parents=True, exist_ok=True)
+    preferences.keys_path().write_text(json.dumps({"steer": "ctrl+t"}))
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            assert app.keymap["steer"] == "ctrl+s"
+            assert any("open_task_board" in problem for problem in app._key_problems)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_keys_screen_refuses_a_taken_key(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import KeyCaptureScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            app._show_keys()
+            await pilot.pause()
+            listed = app.screen.query_one("#picker-list", OptionList)
+            listed.highlighted = 1
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, KeyCaptureScreen)
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert app.keymap["toggle_journal"] == "ctrl+o"
+            journal = app.query_one("#journal", RichLog)
+            assert any("taken" in str(line.text) for line in journal.lines)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_keys_screen_binds_a_free_key_and_saves(tmp_path: Path) -> None:
+    from samurai_ai.tui import preferences
+
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            app._show_keys()
+            await pilot.pause()
+            listed = app.screen.query_one("#picker-list", OptionList)
+            listed.highlighted = 1
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            assert app.keymap["toggle_journal"] == "ctrl+j"
+            saved = json.loads(preferences.keys_path().read_text())
+            assert saved["toggle_journal"] == "ctrl+j"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_help_sheet_shows_the_current_board_keys(tmp_path: Path) -> None:
+    from samurai_ai.tui import preferences
+
+    preferences.keys_path().parent.mkdir(parents=True, exist_ok=True)
+    preferences.keys_path().write_text(json.dumps({"open_task_board": "ctrl+y"}))
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            await pilot.press("f1")
+            await pilot.pause()
+            lines = [str(node.render()) for node in app.screen.query(".help-line")]
+            assert any("Ctrl+Y" in line for line in lines)
+            assert not any("Ctrl+T" in line for line in lines)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())

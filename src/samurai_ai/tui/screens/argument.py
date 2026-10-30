@@ -22,11 +22,11 @@ class ArgumentScreen(ModalScreen[str | None]):
         width: 64;
         height: auto;
         padding: 1 2;
-        border: solid #4fa8ff;
-        background: #0a0a0a;
+        border: solid $accent;
+        background: $panel;
     }
     #argument-label {
-        color: #e0e0e0;
+        color: $text;
         padding-bottom: 1;
     }
     """

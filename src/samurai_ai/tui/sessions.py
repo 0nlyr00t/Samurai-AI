@@ -51,6 +51,7 @@ class SessionController:
         def _write_dim(self, message: str) -> None: ...
         def _refresh_chrome(self) -> None: ...
         def run_worker(self, *args: Any, **kwargs: Any) -> Any: ...
+
         # App methods with generic signatures: typed loosely so the mixin fits
         push_screen: Any
         call_from_thread: Any
@@ -105,15 +106,11 @@ class SessionController:
             return None
         instruction = instruction.strip()
         if not instruction:
-            self._write_line(
-                "[subagent] " + self.translator.t("subagent.empty-instruction")
-            )
+            self._write_line("[subagent] " + self.translator.t("subagent.empty-instruction"))
             return None
         active = self._active_spawn(operation.id)
         if active is not None:
-            self._write_line(
-                "[subagent] " + self.translator.t("subagent.busy", run=active.run_id)
-            )
+            self._write_line("[subagent] " + self.translator.t("subagent.busy", run=active.run_id))
             return None
         try:
             task_id = self._task_for_instruction(operation.id, instruction)
@@ -141,9 +138,7 @@ class SessionController:
         model_id = self.models.default_model()
         if not model_id:
             started.set()
-            self._session_finished(
-                spawn, None, self.translator.t("subagent.no-model")
-            )
+            self._session_finished(spawn, None, self.translator.t("subagent.no-model"))
             return
 
         def on_start(run: AgentRun) -> None:
@@ -172,14 +167,10 @@ class SessionController:
         self._session_finished(spawn, run, "")
 
     def _session_started(self, spawn: _Spawn) -> None:
-        self._write_dim(
-            self.translator.t("subagent.started", run=spawn.run_id, task=spawn.task_id)
-        )
+        self._write_dim(self.translator.t("subagent.started", run=spawn.run_id, task=spawn.task_id))
         self._refresh_chrome()
 
-    def _session_finished(
-        self, spawn: _Spawn, run: AgentRun | None, error: str
-    ) -> None:
+    def _session_finished(self, spawn: _Spawn, run: AgentRun | None, error: str) -> None:
         if getattr(self, "_spawn", None) is spawn:
             self._spawn = None
         if run is None:
@@ -190,9 +181,7 @@ class SessionController:
                 if run.status is AgentRunStatus.COMPLETED
                 else "subagent.stopped"
             )
-            self._write_line(
-                self.translator.t(key, run=run.id, status=run.status.value)
-            )
+            self._write_line(self.translator.t(key, run=run.id, status=run.status.value))
         self._refresh_chrome()
 
     # -- stop -------------------------------------------------------------
@@ -250,9 +239,7 @@ class SessionController:
                 holder["allowed"] = bool(allowed)
                 answered.set()
 
-            self.push_screen(
-                AccessPromptScreen(self.translator, "tool.run", subtitle), decided
-            )
+            self.push_screen(AccessPromptScreen(self.translator, "tool.run", subtitle), decided)
 
         self._approval_wait = (holder, answered)
         try:
