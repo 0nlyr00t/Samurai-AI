@@ -646,6 +646,21 @@ _MIGRATION_16 = """
 ALTER TABLE model_endpoints ADD COLUMN verify_tls INTEGER NOT NULL DEFAULT 1;
 """
 
+_MIGRATION_17 = """
+CREATE TABLE IF NOT EXISTS goals (
+    id TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    data TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS goals_operation_state
+ON goals(operation_id, state, created_at);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -663,6 +678,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (14, _MIGRATION_14),
     (15, _MIGRATION_15),
     (16, _MIGRATION_16),
+    (17, _MIGRATION_17),
 )
 
 
