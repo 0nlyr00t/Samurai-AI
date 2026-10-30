@@ -80,10 +80,11 @@ Implemented:
   interventions, invalid actions and false positive metrics computed from the
   event journal, and baseline comparison for regression gating (`eval run`,
   `eval compare`), with the `evals/smoke.json` smoke suite in CI;
+- a `Ctrl-P` palette over every action, a `?` key overlay, a run inspector (`/inspect`, `Ctrl-I`) with eight groups and a freshly re-checked scope decision, a first-run welcome pane and empty states;
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v17, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 681 unit/integration/CLI/TUI tests.
+- 697 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), wave-2 security tools (subfinder/nmap/ffuf —
