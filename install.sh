@@ -6,7 +6,7 @@
 # Installs the `samurai` CLI with uv (https://docs.astral.sh/uv/), which also
 # provides the required Python 3.12+ toolchain. To install a specific release:
 #
-#   curl -fsSL .../install.sh | bash -s -- --ref v0.2.0
+#   curl -fsSL .../install.sh | bash -s -- --ref v0.3.0
 #
 set -euo pipefail
 
