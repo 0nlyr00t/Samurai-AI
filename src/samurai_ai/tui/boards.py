@@ -38,10 +38,13 @@ class BoardController:
         orchestrator: Any
         translator: Any
 
+        def child_runs(self) -> list[Any]: ...
+
         def _write_line(self, message: Any) -> None: ...
         def _write_dim(self, message: str) -> None: ...
         def _refresh_chrome(self) -> None: ...
         def push_screen(self, screen: Any, callback: Any = None) -> Any: ...
+
         push_screen_wait: Any
 
     # -- plan board -------------------------------------------------------
@@ -90,18 +93,14 @@ class BoardController:
             "c": self._task_spawn,
             "g": self._gate_pass,
         }
-        labels = {
-            key: self.translator.t(f"board.action.{key}") for key in actions
-        }
+        labels = {key: self.translator.t(f"board.action.{key}") for key in actions}
         self.push_screen(
             BoardScreen(
                 self.translator,
                 self.translator.t("board.plan-title"),
                 self.translator.t(
                     "board.hint",
-                    actions=" · ".join(
-                        f"{key.upper()} {label}" for key, label in labels.items()
-                    ),
+                    actions=" · ".join(f"{key.upper()} {label}" for key, label in labels.items()),
                 ),
                 self._task_rows,
                 actions,
@@ -158,9 +157,7 @@ class BoardController:
                 self.translator.t("board.finding-title"),
                 self.translator.t(
                     "board.hint",
-                    actions=" · ".join(
-                        f"{key.upper()} {label}" for key, label in labels.items()
-                    ),
+                    actions=" · ".join(f"{key.upper()} {label}" for key, label in labels.items()),
                 ),
                 self._finding_rows,
                 actions,
@@ -280,9 +277,7 @@ class BoardController:
                 for item in self._findings()
                 if item.id != finding_id and item.status not in _FINDING_CLOSED
             ]
-            label = self.translator.t(
-                "board.duplicate-of", candidates=", ".join(candidates) or "—"
-            )
+            label = self.translator.t("board.duplicate-of", candidates=", ".join(candidates) or "—")
             original = await self.push_screen_wait(ArgumentScreen(self.translator, label))
             if not original or not original.strip():
                 return
@@ -310,12 +305,8 @@ class BoardController:
             if not artifacts:
                 self._write_line(self.translator.t("board.no-artifacts"))
                 return
-            label = self.translator.t(
-                "board.evidence-of", candidates=", ".join(artifacts[-8:])
-            )
-            artifact_id = await self.push_screen_wait(
-                ArgumentScreen(self.translator, label)
-            )
+            label = self.translator.t("board.evidence-of", candidates=", ".join(artifacts[-8:]))
+            artifact_id = await self.push_screen_wait(ArgumentScreen(self.translator, label))
             if not artifact_id or not artifact_id.strip():
                 return
             self._finding_action(
@@ -369,7 +360,9 @@ class BoardController:
             if run.task_id == task.id
         ]
         children = [
-            run.id for run in self.child_runs() if run.task_id == task.id  # type: ignore[attr-defined]
+            run.id
+            for run in self.child_runs()
+            if run.task_id == task.id
         ]
         return [
             (
@@ -441,9 +434,7 @@ class BoardController:
             ),
             (
                 t.t("board.section.text"),
-                [finding.title, finding.summary]
-                if finding.summary
-                else [finding.title],
+                [finding.title, finding.summary] if finding.summary else [finding.title],
             ),
             (
                 t.t("board.section.remediation"),

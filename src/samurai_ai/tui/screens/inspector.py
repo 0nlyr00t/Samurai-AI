@@ -31,12 +31,12 @@ class InspectorScreen(ModalScreen[None]):
         max-width: 98%;
         height: 85%;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #inspector-title {
         text-style: bold;
-        color: #5bc0be;
+        color: $accent-alt;
         padding-bottom: 1;
     }
     #inspector-body {
@@ -44,15 +44,15 @@ class InspectorScreen(ModalScreen[None]):
         scrollbar-size-vertical: 1;
     }
     .inspector-section {
-        color: #b197fc;
+        color: $accent;
         padding-top: 1;
     }
     .inspector-line {
-        color: #c9d1d9;
+        color: $text;
     }
     #inspector-hint {
         padding-top: 1;
-        color: #7d8590;
+        color: $text-dim;
     }
     """
 

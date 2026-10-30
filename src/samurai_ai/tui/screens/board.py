@@ -41,21 +41,21 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
         height: auto;
         max-height: 85%;
         padding: 1 2;
-        border: solid #4fa8ff;
-        background: #0a0a0a;
+        border: solid $accent;
+        background: $panel;
     }
     #board-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
     }
     #board-hint {
-        color: #7d8590;
+        color: $text-dim;
         padding-bottom: 1;
     }
     #board-list {
         height: auto;
         max-height: 22;
-        background: #0a0a0a;
+        background: $panel;
     }
     """
 
@@ -103,9 +103,7 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
             return
         for kind, item_id, label in rows:
             if kind == "group":
-                listed.add_option(
-                    Option(f"── {item_id} ──", id=f"g-{item_id}", disabled=True)
-                )
+                listed.add_option(Option(f"── {item_id} ──", id=f"g-{item_id}", disabled=True))
                 continue
             listed.add_option(Option(label, id=item_id))
             self._items.append(item_id)
@@ -173,15 +171,15 @@ class ItemDetailScreen(ModalScreen[str | None]):
         height: auto;
         max-height: 85%;
         padding: 1 2;
-        border: solid #4fa8ff;
-        background: #0a0a0a;
+        border: solid $accent;
+        background: $panel;
     }
     #item-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
     }
     #item-hint {
-        color: #7d8590;
+        color: $text-dim;
         padding-bottom: 1;
     }
     #item-body {
@@ -190,11 +188,11 @@ class ItemDetailScreen(ModalScreen[str | None]):
     }
     .item-heading {
         text-style: bold;
-        color: #74c0fc;
+        color: $accent;
         padding-top: 1;
     }
     .item-line {
-        color: #e6edf3;
+        color: $text;
     }
     """
 

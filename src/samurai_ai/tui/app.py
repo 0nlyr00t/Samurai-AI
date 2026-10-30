@@ -11,7 +11,7 @@ from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
 from textual.timer import Timer
 from textual.widgets import (
@@ -62,9 +62,11 @@ from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
+from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
+from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.screens import (
     ADD_CUSTOM_ID,
@@ -81,6 +83,16 @@ from samurai_ai.tui.screens import (
 )
 from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
 from samurai_ai.tui.sessions import SessionController
+from samurai_ai.tui.theme import (
+    BUILTIN,
+    DEFAULT_THEME,
+    TOKENS,
+    build_theme,
+    builtin_theme,
+    load_theme_files,
+    themes_directory,
+)
+from samurai_ai.tui.themes import ThemeController
 from samurai_ai.tui.widgets import (
     HistoryInput,
     PlusButton,
@@ -89,47 +101,59 @@ from samurai_ai.tui.widgets import (
 )
 
 _PERMISSION_MODE_KEY = "tui.permission_mode"
+
+_TOKEN_REFERENCE = re.compile(r"\$([a-z-]+)")
+_BARE_TOKEN = re.compile(
+    r"(?<![\w-])(?:" + "|".join(sorted(TOKENS, key=len, reverse=True)) + r")(?![\w-])"
+)
 _YOLO_LEGACY_KEY = "tui.yolo"
 
 
-class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
+class SamuraiApp(
+    ChatController,
+    SessionController,
+    BoardController,
+    ThemeController,
+    KeyMapController,
+    App[None],
+):
     COMMANDS = {CommandProvider}
 
     CSS = """
     Screen {
         layout: vertical;
-        background: #000000;
-        color: #e0e0e0;
+        background: $surface;
+        color: $text;
     }
     .screen--selection {
-        background: #30507a;
-        color: #ffffff;
+        background: $border;
+        color: $text;
     }
     #topbar {
         height: 2;
-        background: #0a0a0a;
+        background: $panel;
     }
     #view-tabs {
         width: 32;
         height: 2;
-        background: #0a0a0a;
+        background: $panel;
     }
     #new-tab {
         width: 5;
         height: 2;
         content-align: center middle;
-        background: #101018;
-        color: #51cf66;
+        background: $panel-alt;
+        color: $success;
         text-style: bold;
     }
     #new-tab:hover {
-        background: #16213e;
+        background: $panel-alt;
     }
     #opname {
         width: 1fr;
         height: 2;
         padding: 0 1;
-        color: #888888;
+        color: $text-dim;
         content-align: left middle;
     }
     #brand {
@@ -148,25 +172,25 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
     #journal, #view-ops, #view-bounty {
         height: 1fr;
         padding: 0 1;
-        border: solid #3a3a3a;
-        background: #000000;
+        border: solid $border;
+        background: $surface;
     }
     #side {
         width: 18;
         height: 100%;
-        border: solid #3a3a3a;
-        background: #0a0a0a;
+        border: solid $border;
+        background: $panel;
     }
     #side-workspace {
         height: 2;
         padding: 0 1;
-        background: #16213e;
-        color: #74c0fc;
+        background: $panel-alt;
+        color: $accent;
     }
     #ops-strip {
         height: 1;
         padding: 0 1;
-        background: #0a0a0a;
+        background: $panel;
     }
     .strip-item {
         width: auto;
@@ -180,26 +204,26 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
     #thinking {
         height: 1;
         padding: 0 1;
-        background: #000000;
+        background: $surface;
         display: none;
     }
     #command-suggestions {
         height: auto;
         max-height: 9;
-        border: solid #3a3a3a;
-        background: #0a0a0a;
+        border: solid $border;
+        background: $panel;
         display: none;
     }
     #command-input {
         height: 3;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #status-bar {
         height: 1;
         padding: 0 1;
-        background: #0a0a0a;
-        color: #888888;
+        background: $panel;
+        color: $text-dim;
     }
     """
 
@@ -208,41 +232,42 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         "tab-bounty": "view-bounty",
     }
 
-    _TAG_STYLES = {
-        "error": "bold #ff6b6b",
-        "deny": "#ff6b6b",
-        "allow": "#51cf66",
-        "status": "dim #8b949e",
-        "scope": "#4fa8ff",
-        "plan": "#74c0fc",
-        "task": "#74c0fc",
-        "gate": "#ffd43b",
-        "approval": "#ffd43b",
-        "finding": "#da77f2",
-        "evidence": "#6b7280",
-        "artifact": "#6b7280",
-        "snapshot": "#6b7280",
-        "tools": "#63e6be",
-        "tool": "#63e6be",
-        "run": "#63e6be",
-        "runs": "#63e6be",
-        "agent": "#5bc0be",
-        "agents": "#5bc0be",
-        "swarm": "#5bc0be",
-        "member": "#5bc0be",
-        "memory": "#b197fc",
-        "skill": "#b197fc",
-        "skills": "#b197fc",
-        "playbook": "#b197fc",
-        "playbooks": "#b197fc",
-        "secret": "#ffa94d",
-        "secrets": "#ffa94d",
-        "asset": "#a9e34b",
-        "assets": "#a9e34b",
-        "report": "#ffa94d",
-        "model": "#4fa8ff",
-        "access": "#ffd43b",
-        "info": "dim #8b949e",
+    #: Journal tag styles, as token names resolved against the active theme.
+    _TAG_TOKENS = {
+        "error": ("bold", "danger"),
+        "deny": ("", "danger"),
+        "allow": ("", "success"),
+        "status": ("dim", "text-dim"),
+        "scope": ("", "accent"),
+        "plan": ("", "accent"),
+        "task": ("", "accent"),
+        "gate": ("", "warning"),
+        "approval": ("", "warning"),
+        "finding": ("", "accent-alt"),
+        "evidence": ("", "text-faint"),
+        "artifact": ("", "text-faint"),
+        "snapshot": ("", "text-faint"),
+        "tools": ("", "accent-alt"),
+        "tool": ("", "accent-alt"),
+        "run": ("", "accent-alt"),
+        "runs": ("", "accent-alt"),
+        "agent": ("", "accent-alt"),
+        "agents": ("", "accent-alt"),
+        "swarm": ("", "accent-alt"),
+        "member": ("", "accent-alt"),
+        "memory": ("", "accent"),
+        "skill": ("", "accent"),
+        "skills": ("", "accent"),
+        "playbook": ("", "accent"),
+        "playbooks": ("", "accent"),
+        "secret": ("", "risk-mid"),
+        "secrets": ("", "risk-mid"),
+        "asset": ("", "risk-low"),
+        "assets": ("", "risk-low"),
+        "report": ("", "risk-mid"),
+        "model": ("", "accent"),
+        "access": ("", "warning"),
+        "info": ("dim", "text-dim"),
     }
 
     BINDINGS = [
@@ -286,6 +311,8 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
+        self._theme_files: list[str] = []
+        self._theme_problems = self._register_themes()
         self.service = service
         self.kernel = kernel
         self.settings = settings
@@ -307,6 +334,9 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
+        self._key_problems: list[str] = []
+        self.keymap = self._apply_keymap()
+        self._key_capture = False
         self._locale_known = settings.get_locale() is not None
         self._last_quit_request = 0.0
         self._history: list[str] = json.loads(settings.get_value("tui.history") or "[]")
@@ -334,11 +364,75 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         self._thinking_depth: int = 0
         self._thinking_frame: int = 0
 
-    _DIM_STYLE = "dim #8b949e"
+    _DIM_STYLE = "dim text-dim"
+
+    def _register_themes(self) -> list[str]:
+        """Register the built-in presets and any theme files.
+
+        Files are read before the first frame so ``$token`` in CSS and Rich styles
+        already resolves; problems are reported into the journal instead of
+        stopping the start.
+        """
+        for name in BUILTIN:
+            self.register_theme(builtin_theme(name))
+        loaded, problems = load_theme_files(themes_directory())
+        for theme in loaded:
+            self.register_theme(build_theme(theme.name, theme.palette, dark=theme.dark))
+        wanted = preferences.load_theme()
+        self.theme = wanted if wanted in self.available_themes else DEFAULT_THEME
+        self._theme_files = [theme.name for theme in loaded]
+        return problems
+
+    def _apply_keymap(self) -> dict[str, str]:
+        """Load the operator's bindings and install them on this instance.
+
+        Textual builds ``BINDINGS`` once per class, so the merged map is replaced
+        on the instance instead of mutating the class attribute.
+        """
+        mapping, problems = keys.load(preferences.keys_path())
+        self._key_problems = problems
+        labels = {action.name: self.translator.t(action.label_key) for action in keys.ACTIONS}
+        self._bindings = BindingsMap(keys.to_bindings(mapping, labels))
+        return mapping
+
+    def _refresh_keymap(self) -> None:
+        labels = {action.name: self.translator.t(action.label_key) for action in keys.ACTIONS}
+        self._bindings = BindingsMap(keys.to_bindings(self.keymap, labels))
+
+    def get_css_variables(self) -> dict[str, str]:
+        """Fill tokens Textual's own themes do not define.
+
+        The shell's CSS references tokens a stock theme has never heard of, so a
+        theme picked outside our presets would otherwise fail to parse.
+        """
+        variables = super().get_css_variables()
+        for token in TOKENS:
+            variables.setdefault(token, BUILTIN[DEFAULT_THEME][token])
+        return variables
+
+    def token_color(self, token: str) -> str:
+        """Hex colour of a token in the active theme, for Rich styles."""
+        theme = self.available_themes.get(self.theme)
+        value = theme.variables.get(token) if theme is not None else None
+        return value or BUILTIN[DEFAULT_THEME][token]
+
+    def paint(self, style: str) -> str:
+        """Resolve token references in a Rich style string.
+
+        Rich has no idea about CSS variables, so Rich-bound styles are resolved
+        against the active theme here. Both ``$accent`` and a bare ``accent`` are
+        accepted: CSS-adjacent call sites keep the ``$``, colour tables do not.
+        """
+        resolved = _TOKEN_REFERENCE.sub(lambda m: self.token_color(m.group(1)), style)
+        return _BARE_TOKEN.sub(lambda m: self.token_color(m.group(0)), resolved)
 
     def _styled(self, text: str) -> Text:
         match = re.match(r"^\[([a-z-]+)\]", text)
-        style = self._TAG_STYLES.get(match.group(1), "") if match else ""
+        paint = self._TAG_TOKENS.get(match.group(1)) if match else None
+        if paint is None:
+            return Text(text)
+        weight, token = paint
+        style = f"{weight} {self.token_color(token)}".strip()
         return Text(text, style=style)
 
     def _write_line(self, text: str) -> None:
@@ -348,21 +442,23 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
     def _write_dim(self, text: str) -> None:
         """Dim gray status line (opencode-style transient feedback)."""
         journal = self.query_one("#journal", RichLog)
-        journal.write(Text(text, style=self._DIM_STYLE))
+        journal.write(Text(text, style=self.paint(self._DIM_STYLE)))
 
     def _brand_text(self) -> Text:
         # The version dangles from the "I" of "AI" on a little thread.
         return Text.assemble(
-            ("Samurai AI", "bold #4fa8ff"),
-            ("\n         ╰╴", "dim #565f89"),
-            (f"v{__version__}", "dim #ff6b6b"),
+            ("Samurai AI", self.paint("bold $accent")),
+            ("\n         ╰╴", self.paint("dim $text-faint")),
+            (f"v{__version__}", self.paint("dim $danger")),
         )
 
     def _write_user_message(self, text: str) -> None:
         journal = self.query_one("#journal", RichLog)
         journal.write(Text())
         journal.write(
-            Padding(Text(text, style="bold #e6edf3"), (0, 2), style="on #16213e")
+            Padding(
+                Text(text, style=self.paint("bold $text")), (0, 2), style=self.paint("on panel-alt")
+            )
         )
 
     def _write_ai_message(self, response) -> None:  # type: ignore[no-untyped-def]
@@ -372,7 +468,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             f"{response.usage.prompt_tokens}+{response.usage.completion_tokens} tok"
         )
         journal.write(Text())
-        journal.write(Text(header, style=self._DIM_STYLE))
+        journal.write(Text(header, style=self.paint(self._DIM_STYLE)))
         journal.write(Markdown(response.text))
         self._last_ai_text = response.text
         self._last_ai_code = _first_code_block(response.text)
@@ -391,9 +487,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         yield Static(id="welcome")
         with Horizontal(id="body"):
             with ContentSwitcher(initial="journal", id="views"):
-                yield SelectableRichLog(
-                    id="journal", markup=False, wrap=True, auto_scroll=True
-                )
+                yield SelectableRichLog(id="journal", markup=False, wrap=True, auto_scroll=True)
                 yield SelectableRichLog(id="view-ops", markup=False, wrap=True)
                 yield SelectableRichLog(id="view-bounty", markup=False, wrap=True)
             with Vertical(id="side"):
@@ -405,9 +499,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             yield Static(id="strip-goal", classes="strip-item")
         yield Static(id="thinking")
         yield OptionList(id="command-suggestions")
-        yield HistoryInput(
-            placeholder=self.translator.t("input.placeholder"), id="command-input"
-        )
+        yield HistoryInput(placeholder=self.translator.t("input.placeholder"), id="command-input")
         yield Static(id="status-bar")
 
     def on_mount(self) -> None:
@@ -423,6 +515,10 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             self.operation = None
 
         self._refresh_chrome()
+        for problem in self._theme_problems:
+            self._write_dim(self.translator.t("theme.problem", problem=problem))
+        for problem in self._key_problems:
+            self._write_dim(self.translator.t("keys.problem", problem=problem))
         if self._locale_known:
             self._after_locale()
         else:
@@ -434,9 +530,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             self.translator.set_locale(locale)
             self._locale_known = True
             self._retitle_tabs()
-        self.query_one("#command-input", Input).placeholder = self.translator.t(
-            "input.placeholder"
-        )
+        self.query_one("#command-input", Input).placeholder = self.translator.t("input.placeholder")
         self._after_locale()
 
     def _after_locale(self) -> None:
@@ -464,9 +558,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             return
         popup = self._suggestions_popup()
         if popup.display and popup.highlighted is not None:
-            highlighted = str(
-                popup.get_option_at_index(popup.highlighted).id or ""
-            )
+            highlighted = str(popup.get_option_at_index(popup.highlighted).id or "")
             if highlighted and highlighted != event.value.strip():
                 self.accept_suggestion()
                 return
@@ -532,9 +624,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
 
     def _set_plan_mode(self, enabled: bool) -> None:
         self._plan_mode = enabled
-        self._write_line(
-            "[status] " + self.translator.t("plan.on" if enabled else "plan.off")
-        )
+        self._write_line("[status] " + self.translator.t("plan.on" if enabled else "plan.off"))
         operation = self.operation
         if operation is not None:
             self.service.repository.append_event(
@@ -565,9 +655,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         ):
             if shutil.which(command[0]):
                 try:
-                    subprocess.run(
-                        command, input=text.encode("utf-8"), check=False, timeout=2
-                    )
+                    subprocess.run(command, input=text.encode("utf-8"), check=False, timeout=2)
                 except OSError:
                     pass
                 break
@@ -600,27 +688,21 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         self._show_new_operation()
 
     def _show_new_operation(self) -> None:
-        self.push_screen(
-            NewOperationScreen(self.translator), self._on_new_operation
-        )
+        self.push_screen(NewOperationScreen(self.translator), self._on_new_operation)
 
     def _on_new_operation(self, choice: tuple[str, str, str] | None) -> None:
         if choice is None:
             self.query_one("#command-input", Input).focus()
             return
         name, mode, scope = choice
-        includes = tuple(
-            rule.strip() for rule in scope.split(",") if rule.strip()
-        ) or ("127.0.0.1/32",)
-        operation = self.service.create(
-            name, OperationMode(mode), ScopeContract(includes=includes)
+        includes = tuple(rule.strip() for rule in scope.split(",") if rule.strip()) or (
+            "127.0.0.1/32",
         )
+        operation = self.service.create(name, OperationMode(mode), ScopeContract(includes=includes))
         self.operation = operation
         self._auto_title = None
         self._chat_history.clear()
-        self._write_dim(
-            self.translator.t("newop.created", name=name, mode=mode)
-        )
+        self._write_dim(self.translator.t("newop.created", name=name, mode=mode))
         self._switch_view("journal")
         self._refresh_chrome()
 
@@ -638,58 +720,62 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         return []
 
     _TASK_COLORS = {
-        "done": "#51cf66",
-        "skipped": "#868e96",
-        "in-progress": "#ffd43b",
-        "blocked": "#ff6b6b",
+        "done": "success",
+        "skipped": "text-dim",
+        "in-progress": "warning",
+        "blocked": "danger",
     }
 
     _STEP_COLORS = {
-        "executed": "#51cf66",
-        "skipped": "#868e96",
-        "executing": "#ffd43b",
-        "blocked": "#ff6b6b",
+        "executed": "success",
+        "skipped": "text-dim",
+        "executing": "warning",
+        "blocked": "danger",
     }
 
     def _ops_lines(self) -> list[str | Text]:
         if not self.operation:
-            return [Text(self.translator.t("status.no-operation"), style=self._DIM_STYLE)]
-        lines: list[str | Text] = [Text(self.translator.t("ops.todo"), style="bold #74c0fc")]
+            return [
+                Text(self.translator.t("status.no-operation"), style=self.paint(self._DIM_STYLE))
+            ]
+        lines: list[str | Text] = [
+            Text(self.translator.t("ops.todo"), style=self.paint("bold $accent"))
+        ]
         plan = self.kernel.get_current_plan(self.operation.id)
         if plan is None or not plan.tasks:
-            lines.append(Text(self.translator.t("ops.no-tasks"), style=self._DIM_STYLE))
+            lines.append(Text(self.translator.t("ops.no-tasks"), style=self.paint(self._DIM_STYLE)))
         else:
             for task in plan.tasks:
-                color = self._TASK_COLORS.get(task.status.value, "#6b7280")
+                color = self._TASK_COLORS.get(task.status.value, self.paint("$text-faint"))
                 lines.append(
                     Text.assemble(
                         ("■ ", color),
-                        (f"{task.id} ", "bold #e0e0e0"),
+                        (f"{task.id} ", self.paint("bold $text")),
                         (f"[{task.status.value}] ", color),
-                        (task.title, "#adb5bd"),
+                        (task.title, self.paint("$text-dim")),
                     )
                 )
         if plan is not None and plan.gates:
-            lines.append(Text(self.translator.t("ops.gates"), style="bold #74c0fc"))
+            lines.append(Text(self.translator.t("ops.gates"), style=self.paint("bold $accent")))
             for gate in plan.gates:
-                color = "#51cf66" if gate.status.value == "passed" else "#6b7280"
+                color = "success" if gate.status.value == "passed" else "text-faint"
                 lines.append(
                     Text.assemble(
                         ("■ ", color),
-                        (f"{gate.id} ", "bold #e0e0e0"),
+                        (f"{gate.id} ", self.paint("bold $text")),
                         (f"[{gate.status.value}] ", color),
-                        (gate.name, "#adb5bd"),
+                        (gate.name, self.paint("$text-dim")),
                     )
                 )
         steps = self.redteam.list_steps(self.operation.id)
-        lines.append(Text(self.translator.t("ops.heatmap"), style="bold #da77f2"))
+        lines.append(Text(self.translator.t("ops.heatmap"), style=self.paint("bold $accent-alt")))
         if not steps:
-            lines.append(Text(self.translator.t("ops.no-steps"), style=self._DIM_STYLE))
+            lines.append(Text(self.translator.t("ops.no-steps"), style=self.paint(self._DIM_STYLE)))
         else:
             row: list[tuple[str, str]] = []
             for step in steps:
-                color = self._STEP_COLORS.get(step.status.value, "#3a3a3a")
-                row.append((f" {step.technique_id} ", f"#e0e0e0 on {color}"))
+                color = self._STEP_COLORS.get(step.status.value, "border")
+                row.append((f" {step.technique_id} ", self.paint(f"text on {color}")))
                 if len(row) == 6:
                     lines.append(Text.assemble(*row))
                     row = []
@@ -699,31 +785,40 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
 
     def _bounty_lines(self) -> list[str | Text]:
         if not self.operation:
-            return [Text(self.translator.t("status.no-operation"), style=self._DIM_STYLE)]
+            return [
+                Text(self.translator.t("status.no-operation"), style=self.paint(self._DIM_STYLE))
+            ]
         scope = self.operation.scope
-        lines: list[str | Text] = [Text(self.translator.t("bounty.scope"), style="bold #a9e34b")]
+        lines: list[str | Text] = [
+            Text(self.translator.t("bounty.scope"), style=self.paint("bold $risk-low"))
+        ]
         lines.append(
             Text(
                 self.translator.t("scope.includes", rules=", ".join(scope.includes)),
-                style="#a9e34b",
+                style=self.paint("$risk-low"),
             )
         )
         excludes = ", ".join(scope.excludes) or self.translator.t("scope.none")
         lines.append(
-            Text(self.translator.t("scope.excludes", rules=excludes), style="#ffa94d")
+            Text(self.translator.t("scope.excludes", rules=excludes), style=self.paint("$risk-mid"))
         )
         assets = self.playbooks.list_assets(self.operation.id)
         lines.append(
             Text(
                 self.translator.t("bounty.assets", count=len(assets)),
-                style="bold #a9e34b",
+                style=self.paint("bold $risk-low"),
             )
         )
         for entry in assets[:10]:
             lines.append(
-                Text(f"  {entry.kind.value} | {entry.value} | {entry.source}", style="#adb5bd")
+                Text(
+                    f"  {entry.kind.value} | {entry.value} | {entry.source}",
+                    style=self.paint("$text-dim"),
+                )
             )
-        lines.append(Text(self.translator.t("bounty.findings"), style="bold #da77f2"))
+        lines.append(
+            Text(self.translator.t("bounty.findings"), style=self.paint("bold $accent-alt"))
+        )
         return lines + self._finding_lines()
 
     # --- slash-command suggestions -------------------------------------
@@ -788,9 +883,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         if popup.display:
             popup.display = False
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option is None:
             return
         if event.option_list.id != "command-suggestions":
@@ -833,25 +926,17 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         previous = self._permission_mode
         self.settings.set_value(_PERMISSION_MODE_KEY, mode.value)
         # keep the legacy flag in step so older readers stay truthful
-        self.settings.set_value(
-            _YOLO_LEGACY_KEY, "0" if mode is PermissionMode.ASK else "1"
-        )
-        self._write_line(
-            "[status] " + self.translator.t(f"permission.mode.{mode.value}")
-        )
+        self.settings.set_value(_YOLO_LEGACY_KEY, "0" if mode is PermissionMode.ASK else "1")
+        self._write_line("[status] " + self.translator.t(f"permission.mode.{mode.value}"))
         self._record_permission_mode(previous, mode)
         if self._chat_history and (
             previous.allows_operator_questions != mode.allows_operator_questions
         ):
             # the prompt carries the autonomy hint, so it has to keep up
-            self._chat_history[0] = Message(
-                role="system", content=self._chat_system_prompt()
-            )
+            self._chat_history[0] = Message(role="system", content=self._chat_system_prompt())
         self._refresh_chrome()
 
-    def _record_permission_mode(
-        self, previous: PermissionMode, mode: PermissionMode
-    ) -> None:
+    def _record_permission_mode(self, previous: PermissionMode, mode: PermissionMode) -> None:
         """The mode change is operator state, so it belongs in the journal."""
         operation = self.operation
         if operation is None or previous is mode:
@@ -942,9 +1027,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         if len(self._chat_history) <= 1 or self._chat_busy:
             self._write_dim(self.translator.t("chat.undo-empty"))
             return
-        while len(self._chat_history) > 1 and self._is_turn_payload(
-            self._chat_history[-1]
-        ):
+        while len(self._chat_history) > 1 and self._is_turn_payload(self._chat_history[-1]):
             self._chat_history.pop()
         if len(self._chat_history) > 1:
             self._chat_history.pop()
@@ -982,9 +1065,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             Message(role="user", content=f"[compacted]\n{digest}"),
             *kept,
         ]
-        self._write_dim(
-            self.translator.t("chat.compacted", count=len(older), kept=len(kept))
-        )
+        self._write_dim(self.translator.t("chat.compacted", count=len(older), kept=len(kept)))
         if self.operation is not None:
             self.service.repository.append_event(
                 OperationEvent(
@@ -1124,9 +1205,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         enabled = self.settings.get_value("tui.mouse") != "1"
         self.settings.set_value("tui.mouse", "1" if enabled else "0")
         self._apply_mouse()
-        self._write_dim(
-            self.translator.t("mouse.enabled" if enabled else "mouse.disabled")
-        )
+        self._write_dim(self.translator.t("mouse.enabled" if enabled else "mouse.disabled"))
 
     def _handle_command(self, command: str) -> None:
         if command.startswith("!"):
@@ -1136,9 +1215,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         spec = find_command(name)
         if spec is None:
             if name.startswith("/"):
-                self._write_line(
-                    "[error] " + self.translator.t("error.unknown-command", name=name)
-                )
+                self._write_line("[error] " + self.translator.t("error.unknown-command", name=name))
             else:
                 self._start_chat(command)
             return
@@ -1240,9 +1317,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             return
         self.push_screen(
             SessionsScreen(self.translator, self._session_rows(), self._stop_session),
-            lambda outcome: (
-                self._show_session_detail(outcome) if outcome else None
-            ),
+            lambda outcome: self._show_session_detail(outcome) if outcome else None,
         )
 
     def _stop_session(self, run_id: str) -> None:
@@ -1265,9 +1340,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             lambda outcome: self._on_session_detail(outcome, run.id, run.task_id),
         )
 
-    def _on_session_detail(
-        self, outcome: str | None, run_id: str, task_id: str
-    ) -> None:
+    def _on_session_detail(self, outcome: str | None, run_id: str, task_id: str) -> None:
         if outcome == "stop":
             self._stop_session(run_id)
         elif outcome == "replay":
@@ -1315,9 +1388,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
                 if payload.get("run_id") != run.id:
                     continue
                 if event.event_type == "agent.note":
-                    notes.append(
-                        f"{payload.get('key')} = {str(payload.get('value'))[:200]}"
-                    )
+                    notes.append(f"{payload.get('key')} = {str(payload.get('value'))[:200]}")
                 elif event.event_type == "agent.step":
                     if payload.get("finding_id"):
                         findings.append(str(payload.get("title")))
@@ -1406,9 +1477,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
                     t.t(
                         "inspector.trust-line",
                         trust=run.trust.value,
-                        warnings=t.t("inspector.warnings", count=warnings)
-                        if warnings
-                        else "",
+                        warnings=t.t("inspector.warnings", count=warnings) if warnings else "",
                     )
                 ],
             )
@@ -1529,7 +1598,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         self._show_help()
 
     def _show_help(self) -> None:
-        self.push_screen(HelpScreen(self.translator))
+        self.push_screen(HelpScreen(self.translator, self.keymap))
 
     def _cmd_exit(self) -> None:
         # ``_exit`` is already Textual's own hook, so the command differs
@@ -1573,13 +1642,10 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         scope = self.operation.scope
         if not target:
             self._write_line(
-                "[scope] "
-                + self.translator.t("scope.includes", rules=", ".join(scope.includes))
+                "[scope] " + self.translator.t("scope.includes", rules=", ".join(scope.includes))
             )
             excludes = ", ".join(scope.excludes) or self.translator.t("scope.none")
-            self._write_line(
-                "[scope] " + self.translator.t("scope.excludes", rules=excludes)
-            )
+            self._write_line("[scope] " + self.translator.t("scope.excludes", rules=excludes))
             return
         decision = scope.evaluate(target)
         level = "allow" if decision.allowed else "deny"
@@ -1595,16 +1661,12 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         plan = self.kernel.get_current_plan(operation.id)
         lines = [
             "[plan] "
-            + self.translator.t(
-                "plan.stage", stage=operation.status.value, objective=objective
-            )
+            + self.translator.t("plan.stage", stage=operation.status.value, objective=objective)
         ]
         if plan is None:
             lines.append("[plan] " + self.translator.t("plan.no-plan"))
             return lines
-        approved = self.translator.t(
-            "plan.approved" if plan.approved else "plan.not-approved"
-        )
+        approved = self.translator.t("plan.approved" if plan.approved else "plan.not-approved")
         tasks_done = sum(
             1 for task in plan.tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED)
         )
@@ -1751,11 +1813,14 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             self._write_line("[runs] " + self.translator.t("runs.empty"))
             return
         for run in runs:
-            artifacts = ",".join(
-                artifact_id
-                for artifact_id in (run.stdout_artifact_id, run.stderr_artifact_id)
-                if artifact_id
-            ) or "-"
+            artifacts = (
+                ",".join(
+                    artifact_id
+                    for artifact_id in (run.stdout_artifact_id, run.stderr_artifact_id)
+                    if artifact_id
+                )
+                or "-"
+            )
             warnings = ",".join(run.injection_warnings) or "-"
             self._write_line(
                 f"[run] {run.id} | {run.tool_id} v{run.tool_version} | {run.status.value} | "
@@ -1802,8 +1867,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             return
         for entry in entries:
             self._write_line(
-                f"[memory] {entry.id} | {entry.workspace} | {entry.kind.value} | "
-                f"{entry.title}"
+                f"[memory] {entry.id} | {entry.workspace} | {entry.kind.value} | {entry.title}"
             )
 
     def _show_skills(self) -> None:
@@ -1874,9 +1938,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             self._write_line("[hypotheses] " + self.translator.t("hypotheses.empty"))
             return
         for item in hypotheses:
-            self._write_line(
-                f"[hypothesis] {item.id} | {item.status.value} | {item.title}"
-            )
+            self._write_line(f"[hypothesis] {item.id} | {item.status.value} | {item.title}")
 
     def _show_flags(self) -> None:
         if not self.operation:
@@ -1970,21 +2032,16 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
     def _show_lang(self, argument: str) -> None:
         if not argument:
             self._write_line(
-                "[lang] "
-                + self.translator.t("lang.current", locale=self.translator.locale)
+                "[lang] " + self.translator.t("lang.current", locale=self.translator.locale)
             )
             return
         try:
             locale = self.settings.set_locale(argument)
         except InvalidLocaleError:
-            self._write_line(
-                "[error] " + self.translator.t("lang.invalid", locale=argument)
-            )
+            self._write_line("[error] " + self.translator.t("lang.invalid", locale=argument))
             return
         self.translator.set_locale(locale)
-        self.query_one("#command-input", Input).placeholder = self.translator.t(
-            "input.placeholder"
-        )
+        self.query_one("#command-input", Input).placeholder = self.translator.t("input.placeholder")
         self._retitle_tabs()
         self._write_line("[lang] " + self.translator.t("lang.changed", locale=locale))
         self._refresh_chrome()
@@ -1993,7 +2050,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         text = str(self._cwd)
         home = str(Path.home())
         if text.startswith(home):
-            text = "~" + text[len(home):]
+            text = "~" + text[len(home) :]
         return text
 
     def _refresh_welcome(self) -> None:
@@ -2004,18 +2061,18 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         welcome.display = True
         latest = self.service.latest()
         lines = Text()
-        lines.append(self.translator.t("welcome.title"), style="bold #4fa8ff")
+        lines.append(self.translator.t("welcome.title"), style=self.paint("bold $accent"))
         lines.append("\n\n")
-        lines.append(self.translator.t("welcome.palette"), style="#e6edf3")
+        lines.append(self.translator.t("welcome.palette"), style=self.paint("$text"))
         lines.append("\n")
-        lines.append(self.translator.t("welcome.new"), style="#e6edf3")
+        lines.append(self.translator.t("welcome.new"), style=self.paint("$text"))
         if latest is not None:
             lines.append("\n")
             lines.append(
-                self.translator.t("welcome.last", name=latest.name), style="#e6edf3"
+                self.translator.t("welcome.last", name=latest.name), style=self.paint("$text")
             )
         lines.append("\n\n")
-        lines.append(self.translator.t("welcome.hint"), style="#7d8590")
+        lines.append(self.translator.t("welcome.hint"), style=self.paint("$text-dim"))
         welcome.update(lines)
 
     def _open_latest_operation(self) -> None:
@@ -2032,8 +2089,8 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         title = self._auto_title or (self.operation.name if self.operation else "")
         self.query_one("#opname", Static).update(title)
         workspace = Text.assemble(
-            (self.translator.t("side.workspace"), "dim #565f89"),
-            ("\n" + self._short_cwd(), "#74c0fc"),
+            (self.translator.t("side.workspace"), self.paint("dim text-faint")),
+            ("\n" + self._short_cwd(), self.paint("accent")),
         )
         self.query_one("#side-workspace", Static).update(workspace)
         model = self.models.default_model()
@@ -2045,15 +2102,17 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         mode = self._permission_mode
         bar.append(
             "●",
-            style={
-                PermissionMode.ASK: "#51cf66",
-                PermissionMode.YOLO: "#ffa94d",
-                PermissionMode.NEVER: "#ff6b6b",
-            }[mode],
+            style=self.paint(
+                {
+                    PermissionMode.ASK: "success",
+                    PermissionMode.YOLO: "risk-mid",
+                    PermissionMode.NEVER: "danger",
+                }[mode]
+            ),
         )
         bar.append(f" {mode.value}")
         if self._plan_mode:
-            bar.append(" | plan", style="#b197fc")
+            bar.append(" | plan", style=self.paint("$accent"))
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
@@ -2078,7 +2137,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
                     steps=f"{goal.spent_steps}/{goal.budget_steps}",
                     seconds=f"{goal.spent_seconds}/{goal.budget_seconds}",
                 ),
-                style="#b197fc",
+                style=self.paint("$accent"),
             )
         )
         item.tooltip = goal.objective
@@ -2107,19 +2166,15 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             if active is not None:
                 agents_item.update(
                     Text(
-                        self.translator.t(
-                            "strip.subagent", run=active.run_id, task=active.task_id
-                        ),
-                        style="#5bc0be",
+                        self.translator.t("strip.subagent", run=active.run_id, task=active.task_id),
+                        style=self.paint("$accent-alt"),
                     )
                 )
             else:
                 agents_item.update(
                     Text(
-                        self.translator.t(
-                            "strip.agents", running=running, total=len(runs)
-                        ),
-                        style="#5bc0be",
+                        self.translator.t("strip.agents", running=running, total=len(runs)),
+                        style=self.paint("$accent-alt"),
                     )
                 )
             agents_item.tooltip = "\n".join(
@@ -2134,21 +2189,20 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             todo_item.display = False
             task_item.display = False
             return
-        done = sum(
-            1 for task in tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED)
-        )
+        done = sum(1 for task in tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED))
         todo_item.update(
-            Text(self.translator.t("strip.todo", done=done, total=len(tasks)), style="#74c0fc")
+            Text(
+                self.translator.t("strip.todo", done=done, total=len(tasks)),
+                style=self.paint("$accent"),
+            )
         )
         todo_item.tooltip = "\n".join(
             f"{task.id} | {task.status.value} | {task.title}" for task in tasks
         )
         todo_item.display = True
-        current = next(
-            (task for task in tasks if task.status == TaskStatus.IN_PROGRESS), None
-        )
+        current = next((task for task in tasks if task.status == TaskStatus.IN_PROGRESS), None)
         if current is not None:
-            task_item.update(Text(f"▸ {current.title}", style="#ffd43b"))
+            task_item.update(Text(f"▸ {current.title}", style=self.paint("$warning")))
             task_item.tooltip = f"{current.id} | risk={current.risk_class.value}"
             task_item.display = True
         else:
@@ -2165,17 +2219,13 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             if provider["local"] or provider["auth"] in ("configured", "none")
         }
         model_ids: list[str] = [
-            model.id
-            for model in self.models.list_models()
-            if model.provider_id in configured
+            model.id for model in self.models.list_models() if model.provider_id in configured
         ]
         for provider in providers:
             if provider["id"] not in configured:
                 continue
             try:
-                discovered = await asyncio.to_thread(
-                    self.models.discover_models, provider["id"]
-                )
+                discovered = await asyncio.to_thread(self.models.discover_models, provider["id"])
                 for model in discovered:
                     if model.id not in model_ids:
                         model_ids.append(model.id)
@@ -2191,9 +2241,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             in REASONING_LEVELS
         }
         reasoning = (
-            reasoning_by_model.get(current or "")
-            or self.models.default_reasoning_effort()
-            or "off"
+            reasoning_by_model.get(current or "") or self.models.default_reasoning_effort() or "off"
         )
         self.push_screen(
             ModelPickerScreen(
@@ -2214,9 +2262,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         model_id, reasoning = choice
         if model_id == ADD_CUSTOM_ID:
             self.push_screen(
-                CustomEndpointScreen(
-                    self.translator, self.models, self.vault, self.settings
-                ),
+                CustomEndpointScreen(self.translator, self.models, self.vault, self.settings),
                 self._on_custom_endpoint_done,
             )
             return
@@ -2224,8 +2270,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         self.settings.set_value("model.reasoning_effort", reasoning)
         self.settings.set_value(f"model.reasoning_effort.{model_id}", reasoning)
         self._write_line(
-            "[model] "
-            + self.translator.t("model.selected", model=model_id, reasoning=reasoning)
+            "[model] " + self.translator.t("model.selected", model=model_id, reasoning=reasoning)
         )
         self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
@@ -2235,9 +2280,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             reasoning = self.models.default_reasoning_effort() or "off"
             self._write_line(
                 "[model] "
-                + self.translator.t(
-                    "model.selected", model=model_id, reasoning=reasoning
-                )
+                + self.translator.t("model.selected", model=model_id, reasoning=reasoning)
             )
             self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
