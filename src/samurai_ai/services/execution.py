@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from samurai_ai.domain.execution import (
@@ -8,6 +9,7 @@ from samurai_ai.domain.execution import (
     PromptInjectionScanner,
     SecretRedactor,
     ToolDefinition,
+    ToolDeniedError,
     ToolExecutionError,
     ToolResult,
     ToolRun,
@@ -79,6 +81,7 @@ class ToolExecutionService:
         task_id: str | None = None,
         approval_id: str | None = None,
         tool_version: int | None = None,
+        approval_resolver: Callable[[str], bool] | None = None,
     ) -> ToolResult:
         operation = self.operations.get(operation_id)
         adapter = self.registry.get(tool_id, tool_version)
@@ -93,7 +96,7 @@ class ToolExecutionService:
         if callable(preflight):
             preflight(resolved)
         approval = self._resolve_approval(
-            operation_id, definition, task_id, approval_id
+            operation_id, definition, task_id, approval_id, approval_resolver
         )
         redacted_params, _ = self._redact_params(validated)
 
@@ -155,6 +158,7 @@ class ToolExecutionService:
         definition: ToolDefinition,
         task_id: str | None,
         approval_id: str | None,
+        resolver: Callable[[str], bool] | None = None,
     ) -> Approval:
         action = f"tool.run {definition.id}"
         if approval_id is None:
@@ -172,7 +176,13 @@ class ToolExecutionService:
                 requested_by="operator",
             )
             if approval.status != ApprovalStatus.APPROVED:
-                raise ApprovalRequiredError(approval.id)
+                if resolver is None:
+                    raise ApprovalRequiredError(approval.id)
+                if not resolver(approval.id):
+                    raise ToolDeniedError(
+                        f"operator denied approval {approval.id} for {definition.id}"
+                    )
+                approval = self.kernel.approve(approval.id, decided_by="subagent")
             return approval
         stored = self.kernel.kernel.get_approval(approval_id)
         if stored is None:
