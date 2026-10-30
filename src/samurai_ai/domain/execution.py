@@ -37,6 +37,10 @@ class ToolStateError(ToolExecutionError):
     pass
 
 
+class ToolDeniedError(ToolExecutionError):
+    """The operator refused the approval for this call."""
+
+
 class ToolValidationError(ToolExecutionError):
     pass
 

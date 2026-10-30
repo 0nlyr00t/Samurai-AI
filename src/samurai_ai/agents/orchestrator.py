@@ -13,6 +13,7 @@ not implemented).
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
@@ -129,6 +130,9 @@ class AgentOrchestrator:
         max_depth: int = DEFAULT_MAX_DEPTH,
         approval_id: str | None = None,
         created_by: str = "operator",
+        stop_event: threading.Event | None = None,
+        read_only_only: bool = False,
+        approval_resolver: Callable[[str], bool] | None = None,
         specialization: AgentSpecialization = AgentSpecialization.GENERAL,
         swarm_id: str | None = None,
         workspace: str | None = None,
@@ -206,9 +210,17 @@ class AgentOrchestrator:
         try:
             steps = self._plan(operation_id, run, task.title, approval_id, extra_context)
             self._execute_steps(
-                operation_id, run, steps[:max_steps], approval_id, extra_context
+                operation_id,
+                run,
+                steps[:max_steps],
+                approval_id,
+                extra_context,
+                stop_event=stop_event,
+                read_only_only=read_only_only,
+                approval_resolver=approval_resolver,
             )
-            if run.status is AgentRunStatus.RUNNING:
+            succeeded = run.status is AgentRunStatus.RUNNING
+            if succeeded:
                 run.finish(AgentRunStatus.COMPLETED)
         except BudgetExceededError as exc:
             self._finish_failed(run, AgentRunStatus.BUDGET_EXCEEDED, str(exc))
@@ -227,13 +239,14 @@ class AgentOrchestrator:
             )
             return self.get_run(run.id)
 
-        self.runs.finish(run)
-        self._append(
-            operation_id,
-            "agent.run.finish",
-            {"run_id": run.id, "status": run.status.value, "steps": len(steps)},
-        )
-        return run
+        if succeeded:
+            self.runs.finish(run)
+            self._append(
+                operation_id,
+                "agent.run.finish",
+                {"run_id": run.id, "status": run.status.value, "steps": len(steps)},
+            )
+        return self.get_run(run.id)
 
     def _resolve_context(
         self, workspace: str | None, skill_names: Sequence[str]
@@ -291,6 +304,15 @@ class AgentOrchestrator:
         )
         return output.steps
 
+    def _stop_requested(
+        self, run: AgentRun, stop_event: threading.Event | None
+    ) -> bool:
+        """Cooperative cancellation: the operator's stop wins over the budget."""
+        if stop_event is None or not stop_event.is_set():
+            return False
+        self._finish_failed(run, AgentRunStatus.FAILED, "cancelled by the operator")
+        return True
+
     def _execute_steps(
         self,
         operation_id: str,
@@ -298,16 +320,30 @@ class AgentOrchestrator:
         steps: tuple[str, ...],
         approval_id: str | None,
         extra_context: str,
+        *,
+        stop_event: threading.Event | None = None,
+        read_only_only: bool = False,
+        approval_resolver: Callable[[str], bool] | None = None,
     ) -> None:
         consecutive_rejects = 0
         for index, step in enumerate(steps):
             if run.status is not AgentRunStatus.RUNNING:
                 return
+            if self._stop_requested(run, stop_event):
+                return
             commands = self._execute_step_prompt(
                 operation_id, run, step, index, approval_id, extra_context
             )
             for command in commands:
-                accepted = self._apply_command(operation_id, run, command)
+                if self._stop_requested(run, stop_event):
+                    return
+                accepted = self._apply_command(
+                    operation_id,
+                    run,
+                    command,
+                    read_only_only=read_only_only,
+                    approval_resolver=approval_resolver,
+                )
                 if accepted:
                     consecutive_rejects = 0
                 else:
@@ -380,11 +416,27 @@ class AgentOrchestrator:
         raise AgentOutputError("unreachable parser retry state")
 
     def _apply_command(
-        self, operation_id: str, run: AgentRun, command: AgentCommand
+        self,
+        operation_id: str,
+        run: AgentRun,
+        command: AgentCommand,
+        *,
+        read_only_only: bool = False,
+        approval_resolver: Callable[[str], bool] | None = None,
     ) -> bool:
         try:
             if isinstance(command, RequestToolRunCommand):
-                self._command_tool_run(operation_id, run, command)
+                if read_only_only and not self._is_read_only(command.tool_id):
+                    self._reject(
+                        operation_id,
+                        run,
+                        command,
+                        "plan mode allows read-only tool calls only",
+                    )
+                    return False
+                self._command_tool_run(
+                    operation_id, run, command, approval_resolver=approval_resolver
+                )
             elif isinstance(command, NoteCommand):
                 try:
                     self._append_note(operation_id, run, command)
@@ -410,8 +462,19 @@ class AgentOrchestrator:
             return False
         return True
 
+    def _is_read_only(self, tool_id: str) -> bool:
+        try:
+            return self.execution.registry.get(tool_id).definition.read_only
+        except ToolNotFoundError:
+            return False
+
     def _command_tool_run(
-        self, operation_id: str, run: AgentRun, command: RequestToolRunCommand
+        self,
+        operation_id: str,
+        run: AgentRun,
+        command: RequestToolRunCommand,
+        *,
+        approval_resolver: Callable[[str], bool] | None = None,
     ) -> None:
         self.execution.registry.get(command.tool_id)
         result = self.execution.run_tool(
@@ -419,6 +482,7 @@ class AgentOrchestrator:
             command.tool_id,
             command.params,
             task_id=run.task_id,
+            approval_resolver=approval_resolver,
         )
         # Feed a bounded, already-redacted excerpt back into the blackboard so
         # the next executor step can actually see what the tool returned.

@@ -439,3 +439,112 @@ def test_consecutive_rejects_fail_run(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "too many consecutive rejected" in [
         e for e in events if e.event_type == "agent.run.finish"
     ][-1].payload["reason"]
+
+
+def test_approval_resolver_decides_instead_of_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch, "res.db")
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": ['
+        '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "echo hi"}}'
+        "]}",
+    )
+    seen: list[str] = []
+
+    def resolver(approval_id: str) -> bool:
+        seen.append(approval_id)
+        return True
+
+    result = orchestrator.run_task(operation_id, "probe", [MODEL_ID], approval_resolver=resolver)
+    assert result.status is AgentRunStatus.COMPLETED
+    assert seen
+    approvals = [
+        approval
+        for approval in kernel.kernel.list_approvals(operation_id)
+        if approval.action == "tool.run shell.exec"
+    ]
+    assert approvals and all(approval.decided_by == "subagent" for approval in approvals)
+
+
+def test_denied_resolver_rejects_the_command_and_the_run_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, models, orchestrator, fake = make_stack(
+        tmp_path, monkeypatch, "deny.db"
+    )
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": ['
+        '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "echo hi"}},'
+        '{"type": "complete_task"}'
+        "]}",
+    )
+    run = orchestrator.run_task(
+        operation_id, "probe", [MODEL_ID], approval_resolver=lambda approval_id: False
+    )
+    assert run.status is AgentRunStatus.COMPLETED
+    rejected = [
+        event
+        for event in service.events(operation_id)
+        if event.event_type.endswith("rejected")
+    ]
+    assert rejected
+    assert "denied" in str(rejected[0].payload)
+
+
+def test_stop_event_fails_the_run_as_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch, "stop.db")
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["a", "b", "c"]}',
+        '{"commands": [{"type": "note", "key": "k1", "value": "v"}]}',
+    )
+    stop = threading.Event()
+    stop.set()
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID], stop_event=stop)
+    assert run.status is AgentRunStatus.FAILED
+    finishes = [
+        event
+        for event in service.events(operation_id)
+        if event.event_type == "agent.run.finish"
+    ]
+    assert len(finishes) == 1
+    assert "cancelled" in str(finishes[0].payload)
+    plan = kernel.get_current_plan(operation_id)
+    assert plan is not None
+    assert plan.task_by_id("probe").status is TaskStatus.IN_PROGRESS  # type: ignore[union-attr]
+
+
+def test_read_only_only_mode_rejects_mutating_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch, "ro.db")
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": ['
+        '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "ls"}}'
+        "]}",
+    )
+    assert orchestrator._is_read_only("shell.exec") is False
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID], read_only_only=True)
+    assert run.status is AgentRunStatus.COMPLETED
+    rejected = [
+        event
+        for event in service.events(operation_id)
+        if event.event_type.endswith("rejected")
+    ]
+    assert rejected
+    assert "read-only" in str(rejected[0].payload)
