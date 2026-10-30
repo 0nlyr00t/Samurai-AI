@@ -63,6 +63,27 @@ class OutputTrust(StrEnum):
     UNTRUSTED_EXTERNAL = "untrusted-external"
 
 
+class NetworkAccess(StrEnum):
+    """How a tool can reach the network.
+
+    A plain boolean conflated "cannot reach the network" with "reaches it,
+    but only through the scoped egress proxy", which made the UI report
+    sandbox scanners as ``no-network``.
+
+    NONE — no network at all. PROXIED — reachable only through the scoped
+    egress proxy that enforces operation scope. DIRECT — the adapter opens a
+    host socket itself and checks scope before connecting (the HTTP broker).
+    """
+
+    NONE = "none"
+    PROXIED = "proxied"
+    DIRECT = "direct"
+
+    @property
+    def reaches_network(self) -> bool:
+        return self is not NetworkAccess.NONE
+
+
 class ToolDefinition(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -71,7 +92,7 @@ class ToolDefinition(BaseModel):
     kind: ToolKind
     description: str = ""
     risk_class: RiskClass
-    network_access: bool = False
+    network: NetworkAccess = NetworkAccess.NONE
     timeout_seconds: int = Field(default=30, ge=1)
     output_limit_bytes: int = Field(default=65536, ge=1)
     parameters: dict[str, Any] = Field(default_factory=dict)

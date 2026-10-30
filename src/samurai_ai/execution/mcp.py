@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any, Protocol
 
-from samurai_ai.domain.execution import ToolDefinition, ToolKind
+from samurai_ai.domain.execution import NetworkAccess, ToolDefinition, ToolKind
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.mcp import (
     MCP_CLIENT_NAME,
@@ -378,7 +378,11 @@ class McpToolAdapter:
             kind=ToolKind.MCP,
             description=tool.description or f"MCP tool {tool.name} on {server.name}",
             risk_class=RiskClass.R2,
-            network_access=server.transport == "http",
+            network=(
+                NetworkAccess.DIRECT
+                if server.transport == "http"
+                else NetworkAccess.NONE
+            ),
             timeout_seconds=60,
             output_limit_bytes=65536,
             parameters=normalize_input_schema(tool.input_schema),

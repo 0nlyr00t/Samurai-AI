@@ -19,6 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from samurai_ai.domain.execution import (
+    NetworkAccess,
     ToolDefinition,
     ToolKind,
     ToolScopeError,
@@ -159,7 +160,7 @@ class HttpxProbeTool(_ScopedSandboxTool):
             description="Probe in-scope web targets with httpx in the scoped "
             "sandbox (status, title, tech fingerprint)",
             risk_class=RiskClass.R2,
-            network_access=False,
+            network=NetworkAccess.PROXIED,
             timeout_seconds=300,
             output_limit_bytes=262144,
             parameters={
@@ -258,7 +259,7 @@ class NucleiScanTool(_ScopedSandboxTool):
             description="Run nuclei template scan against in-scope targets in "
             "the scoped sandbox (bundled templates, updates disabled)",
             risk_class=RiskClass.R3,
-            network_access=False,
+            network=NetworkAccess.PROXIED,
             timeout_seconds=600,
             output_limit_bytes=524288,
             parameters={

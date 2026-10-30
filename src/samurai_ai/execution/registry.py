@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from samurai_ai.config import sandbox_allowlist_path, vault_key_path
 from samurai_ai.domain.execution import (
+    NetworkAccess,
     ToolDefinition,
     ToolKind,
     ToolNotFoundError,
@@ -141,13 +142,23 @@ class ToolRegistry:
             raise ToolValidationError(
                 f"parameters properties for {definition.id} must be an object"
             )
-        if definition.kind == ToolKind.HTTP and not definition.network_access:
+        if definition.kind == ToolKind.HTTP and definition.network is not NetworkAccess.DIRECT:
             raise ToolValidationError(
-                f"http tool {definition.id} must declare network_access=True"
+                f"http tool {definition.id} must declare network=direct"
             )
-        if definition.kind not in (ToolKind.HTTP, ToolKind.MCP) and definition.network_access:
+        if definition.kind == ToolKind.MCP and definition.network is NetworkAccess.PROXIED:
             raise ToolValidationError(
-                f"non-http tool {definition.id} cannot declare network_access=True"
+                f"mcp tool {definition.id} reaches the network directly or not at all"
+            )
+        if definition.kind in (ToolKind.LOCAL, ToolKind.PROCESS) and (
+            definition.network is not NetworkAccess.NONE
+        ):
+            raise ToolValidationError(
+                f"{definition.kind.value} tool {definition.id} cannot declare network access"
+            )
+        if definition.kind == ToolKind.SANDBOX and definition.network is NetworkAccess.DIRECT:
+            raise ToolValidationError(
+                f"sandbox tool {definition.id} reaches the network only via the proxy"
             )
 
 
@@ -199,7 +210,7 @@ class LocalEchoTool:
             kind=ToolKind.LOCAL,
             description="Echo a short text back to the operator",
             risk_class=RiskClass.R0,
-            network_access=False,
+            network=NetworkAccess.NONE,
             timeout_seconds=5,
             output_limit_bytes=4096,
             parameters={
@@ -230,7 +241,7 @@ class ProcessExecTool:
             kind=ToolKind.PROCESS,
             description="Run an allowlisted executable with an argv vector (no shell)",
             risk_class=RiskClass.R1,
-            network_access=False,
+            network=NetworkAccess.NONE,
             timeout_seconds=30,
             output_limit_bytes=65536,
             parameters={
@@ -289,7 +300,7 @@ class ShellExecTool:
             kind=ToolKind.PROCESS,
             description="Run a shell command on the operator host (bash -lc)",
             risk_class=RiskClass.R3,
-            network_access=False,
+            network=NetworkAccess.NONE,
             timeout_seconds=120,
             output_limit_bytes=65536,
             parameters={
@@ -345,7 +356,7 @@ class HttpFetchTool:
             kind=ToolKind.HTTP,
             description="Fetch an in-scope URL over HTTP(S) with bounded output",
             risk_class=RiskClass.R2,
-            network_access=True,
+            network=NetworkAccess.DIRECT,
             timeout_seconds=15,
             output_limit_bytes=65536,
             parameters={
@@ -400,9 +411,9 @@ class SandboxExecTool:
             version=1,
             kind=ToolKind.SANDBOX,
             description="Run a profile-allowlisted executable in a signed, "
-            "networkless Docker sandbox",
+            "sandbox in a signed allowlist profile (network only via the scoped proxy)",
             risk_class=RiskClass.R2,
-            network_access=False,
+            network=NetworkAccess.PROXIED,
             timeout_seconds=90,
             output_limit_bytes=65536,
             parameters={

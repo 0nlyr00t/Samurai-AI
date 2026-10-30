@@ -2122,11 +2122,7 @@ class SamuraiApp(App[None]):
             self._write_line("[tools] " + self.translator.t("tools.empty"))
             return
         for definition in definitions:
-            network = (
-                self.translator.t("tools.network")
-                if definition.network_access
-                else self.translator.t("tools.no-network")
-            )
+            network = self.translator.t(f"tools.network.{definition.network.value}")
             self._write_line(
                 f"[tool] {definition.id} | v{definition.version} | {definition.kind.value} | "
                 f"risk={definition.risk_class.value} | {network} | {definition.description}"
