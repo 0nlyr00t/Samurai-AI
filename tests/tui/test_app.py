@@ -2296,3 +2296,133 @@ def test_compact_without_enough_history_skips(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
+
+
+def _palette(app):  # type: ignore[no-untyped-def]
+    from textual.command import CommandPalette
+
+    return app.screen if isinstance(app.screen, CommandPalette) else None
+
+
+def test_command_palette_opens_and_filters(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            palette = _palette(app)
+            assert palette is not None
+
+            await pilot.press("i", "n", "s", "p")
+            await pilot.pause()
+            rows = [str(option.prompt) for option in palette.query("OptionList").first().options]
+            assert any(row.startswith("/inspect") for row in rows)
+            assert not any(row.startswith("/exit") for row in rows)
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert _palette(app) is None
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_palette_runs_an_action(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                for char in "status":
+                    await pilot.press(char)
+                await pilot.pause()
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                text = "\n".join(str(message) for message in messages)
+                assert "[status]" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_palette_asks_for_an_argument(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import ArgumentScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                await pilot.press("ctrl+p")
+                await pilot.pause()
+                for char in "scope":
+                    await pilot.press(char)
+                await pilot.pause()
+                await pilot.press("enter")
+                for _ in range(50):
+                    await pilot.pause()
+                    if isinstance(app.screen, ArgumentScreen):
+                        break
+                assert isinstance(app.screen, ArgumentScreen)
+                app.screen.query_one("#argument-input", Input).value = "a.example.com"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                text = "\n".join(str(message) for message in messages)
+                assert "a.example.com" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_palette_cancelled_argument_runs_nothing(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import ArgumentScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            for char in "scope":
+                await pilot.press(char)
+            await pilot.pause()
+            await pilot.press("enter")
+            for _ in range(50):
+                await pilot.pause()
+                if isinstance(app.screen, ArgumentScreen):
+                    break
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, ArgumentScreen)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
