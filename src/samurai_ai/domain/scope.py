@@ -162,12 +162,12 @@ def _parse_rule(raw_rule: str) -> _Rule:
         return _Rule(kind=_RuleKind.NETWORK, text=str(network), network=network)
 
     try:
-        address = ip_address(raw)
+        parsed = ip_address(raw)
     except ValueError:
         host = _normalize_domain(raw)
         return _Rule(kind=_RuleKind.DOMAIN, text=host, host=host)
-    else:
-        return _Rule(kind=_RuleKind.IP, text=str(address), address=address)
+    address = _collapse_mapped(parsed)
+    return _Rule(kind=_RuleKind.IP, text=str(address), address=address)
 
 
 def _parse_url_rule(raw: str) -> _Rule:
@@ -206,11 +206,7 @@ def _parse_target(raw_target: str) -> _Target:
         if "/" in raw or raw.startswith("*."):
             raise ScopeValidationError("target must be a domain, IP address, or HTTP(S) URL")
         host = _normalize_host(raw)
-        try:
-            address = ip_address(host)
-        except ValueError:
-            address = None
-        return _Target(text=host, host=host, is_url=False, address=address)
+        return _Target(text=host, host=host, is_url=False, address=_address_of(host))
 
     try:
         parts = urlsplit(raw)
@@ -230,11 +226,6 @@ def _parse_target(raw_target: str) -> _Target:
     except ValueError as exc:
         raise ScopeValidationError("invalid target URL port") from exc
 
-    try:
-        address = ip_address(host)
-    except ValueError:
-        address = None
-
     netloc = _format_netloc(host, scheme, port)
     text = urlunsplit((scheme, netloc, parts.path, parts.query, parts.fragment))
     return _Target(
@@ -243,8 +234,27 @@ def _parse_target(raw_target: str) -> _Target:
         is_url=True,
         scheme=scheme,
         port=port,
-        address=address,
+        address=_address_of(host),
     )
+
+
+def _collapse_mapped(address: _IPAddress) -> _IPAddress:
+    """Fold an IPv4-mapped IPv6 address to its IPv4 form.
+
+    ``::ffff:198.51.100.7`` reaches the same host as ``198.51.100.7``; without
+    folding, a v4 scope rule would not cover the mapped spelling a URL or a
+    resolver can legitimately produce.
+    """
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
+def _address_of(host: str) -> _IPAddress | None:
+    try:
+        return _collapse_mapped(ip_address(host))
+    except ValueError:
+        return None
 
 
 def _normalize_host(raw_host: str) -> str:
@@ -288,7 +298,11 @@ def _matches(rule: _Rule, target: _Target) -> bool:
     if rule.kind == _RuleKind.DOMAIN:
         return target.address is None and target.host == rule.host
     if rule.kind == _RuleKind.WILDCARD:
-        return target.address is None and target.host.endswith(f".{rule.host}")
+        # ``*.example.com`` covers the apex as well as every subdomain: a
+        # program that publishes a wildcard means the bare domain too.
+        return target.address is None and (
+            target.host == rule.host or target.host.endswith(f".{rule.host}")
+        )
     if rule.kind == _RuleKind.IP:
         return target.address == rule.address
     if rule.kind == _RuleKind.NETWORK:

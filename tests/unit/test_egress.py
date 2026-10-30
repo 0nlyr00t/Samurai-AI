@@ -101,4 +101,6 @@ def test_verdict_allowed_with_wildcard_scope() -> None:
         resolver=lambda host: ["93.184.216.34"],
     )
     assert proxy._verdict("api.example.com", 443, "https") == VERDICT_ALLOWED
-    assert proxy._verdict("example.com", 443, "https") == VERDICT_DENIED_SCOPE
+    # the apex is covered by the wildcard too
+    assert proxy._verdict("example.com", 443, "https") == VERDICT_ALLOWED
+    assert proxy._verdict("example.org", 443, "https") == VERDICT_DENIED_SCOPE

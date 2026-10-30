@@ -24,12 +24,41 @@ def test_domain_wildcard_and_exclusion_priority() -> None:
     assert denied.reason == ScopeDecisionReason.OUT_OF_SCOPE
 
 
-def test_wildcard_does_not_include_apex_domain() -> None:
+def test_wildcard_covers_apex_and_subdomains() -> None:
     scope = ScopeContract(includes=("*.example.com",))
 
     assert scope.evaluate("www.example.com").allowed
     assert scope.evaluate("deep.www.example.com").allowed
-    assert not scope.evaluate("example.com").allowed
+    # a published wildcard means the bare domain too
+    assert scope.evaluate("example.com").allowed
+    assert not scope.evaluate("notexample.com").allowed
+    assert not scope.evaluate("example.com.evil.test").allowed
+
+
+def test_ipv4_mapped_ipv6_is_the_same_target_as_ipv4() -> None:
+    scope = ScopeContract(includes=("198.51.100.7",))
+
+    assert scope.includes == ("198.51.100.7",)
+    assert scope.evaluate("::ffff:198.51.100.7").allowed
+    assert scope.evaluate("http://[::ffff:198.51.100.7]/").allowed
+    assert scope.evaluate("https://[::FFFF:C633:6407]:8443/x").allowed
+
+
+def test_ipv4_mapped_rule_covers_ipv4_target() -> None:
+    scope = ScopeContract(includes=("::ffff:198.51.100.7",))
+
+    assert scope.includes == ("198.51.100.7",)
+    assert scope.evaluate("198.51.100.7").allowed
+    assert not scope.evaluate("198.51.100.8").allowed
+
+
+def test_mapped_address_still_honours_excludes() -> None:
+    scope = ScopeContract(includes=("198.51.100.0/24",), excludes=("198.51.100.7",))
+
+    denied = scope.evaluate("::ffff:198.51.100.7")
+    assert not denied.allowed
+    assert denied.reason == ScopeDecisionReason.EXCLUDED
+    assert scope.evaluate("::ffff:198.51.100.8").allowed
 
 
 def test_url_origin_rule_checks_scheme_host_and_effective_port() -> None:
@@ -70,7 +99,7 @@ def test_idna_rules_and_targets_are_normalized() -> None:
 
     assert scope.includes[0].startswith("*.xn--")
     assert scope.evaluate("https://test.пример.рф/").allowed
-    assert not scope.evaluate("пример.рф").allowed
+    assert scope.evaluate("пример.рф").allowed
 
 
 @pytest.mark.parametrize(
