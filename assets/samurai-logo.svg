@@ -1,17 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title description">
   <title id="title">Samurai AI logo</title>
-  <desc id="description">A dark geometric emblem with a torii-inspired mark, red moon, and Samurai AI wordmark.</desc>
+  <desc id="description">A katana cutting upward, leaving a red arc of its swing, beside the Samurai AI wordmark.</desc>
   <defs>
     <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0D1117"/>
-      <stop offset="1" stop-color="#172033"/>
+      <stop offset="1" stop-color="#141C28"/>
     </linearGradient>
-    <linearGradient id="emblem" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4FA8FF"/>
-      <stop offset="1" stop-color="#5BC0BE"/>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5C6A78"/>
+      <stop offset="0.42" stop-color="#EEF4FA"/>
+      <stop offset="1" stop-color="#9FB0C0"/>
     </linearGradient>
-    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="10" result="blur"/>
+    <linearGradient id="arc" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#E85454" stop-opacity="0"/>
+      <stop offset="0.28" stop-color="#E85454" stop-opacity="0.85"/>
+      <stop offset="0.62" stop-color="#FF7A7A" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#FF8A8A" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="hilt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#39424E"/>
+      <stop offset="1" stop-color="#1B222A"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
       <feMerge>
         <feMergeNode in="blur"/>
         <feMergeNode in="SourceGraphic"/>
@@ -19,33 +30,35 @@
     </filter>
   </defs>
 
-  <rect width="1200" height="400" rx="48" fill="#0D1117"/>
-  <circle cx="1030" cy="92" r="130" fill="#4FA8FF" opacity="0.06"/>
-  <circle cx="1080" cy="310" r="180" fill="#5BC0BE" opacity="0.05"/>
+  <rect width="1200" height="400" rx="48" fill="#0B0E13"/>
+  <rect x="24" y="24" width="1152" height="352" rx="34" fill="url(#panel)" stroke="#22303F"/>
 
-  <rect x="56" y="56" width="288" height="288" rx="64" fill="url(#panel)" stroke="#4FA8FF" stroke-opacity="0.65" stroke-width="3"/>
-  <circle cx="238" cy="126" r="42" fill="#E85454" opacity="0.94"/>
-  <path d="M116 145 C158 122 242 122 284 145" fill="none" stroke="url(#emblem)" stroke-width="18" stroke-linecap="round"/>
-  <path d="M143 174 H257" stroke="#F5F5F5" stroke-width="13" stroke-linecap="round"/>
-  <path d="M165 174 V281 M235 174 V281" stroke="#F5F5F5" stroke-width="15" stroke-linecap="round"/>
-  <path d="M139 281 H261" stroke="#5BC0BE" stroke-width="11" stroke-linecap="round"/>
-  <path d="M111 300 L289 184" stroke="#E85454" stroke-width="7" stroke-linecap="round" opacity="0.9"/>
-  <path d="M276 176 L296 188 L278 196" fill="none" stroke="#E85454" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
-  <circle cx="200" cy="200" r="94" fill="none" stroke="#4FA8FF" stroke-opacity="0.18" stroke-width="2" stroke-dasharray="7 11"/>
+  <circle cx="1010" cy="86" r="150" fill="#4FA8FF" opacity="0.05"/>
+  <circle cx="1120" cy="336" r="190" fill="#E85454" opacity="0.045"/>
 
-  <text x="414" y="176" fill="#F5F5F5" font-family="Inter, 'SF Pro Display', 'Segoe UI', Arial, sans-serif" font-size="82" font-weight="800" letter-spacing="9">SAMURAI</text>
-  <rect x="421" y="204" width="90" height="38" rx="19" fill="#E85454"/>
-  <text x="444" y="232" fill="#FFFFFF" font-family="Inter, 'SF Pro Display', 'Segoe UI', Arial, sans-serif" font-size="28" font-weight="800" letter-spacing="3">AI</text>
-  <text x="532" y="232" fill="#5BC0BE" font-family="Inter, 'SF Pro Display', 'Segoe UI', Arial, sans-serif" font-size="25" font-weight="700" letter-spacing="5">OPERATION HARNESS</text>
+  <g transform="translate(88 54)">
+    <!-- the swing: an arc under the blade, widest at the tip end -->
+    <path d="M8 250 C112 288 240 250 336 140" fill="none" stroke="url(#arc)" stroke-width="11" stroke-linecap="round" filter="url(#glow)"/>
+    <path d="M20 262 C118 302 244 262 324 170" fill="none" stroke="#E85454" stroke-opacity="0.3" stroke-width="3.5" stroke-linecap="round"/>
 
-  <path d="M421 282 H1018" stroke="#263244" stroke-width="2"/>
-  <g fill="#888888" font-family="Inter, 'SF Pro Display', 'Segoe UI', Arial, sans-serif" font-size="19" font-weight="600" letter-spacing="3">
-    <text x="421" y="322">SCOPE</text>
-    <circle cx="535" cy="315" r="4" fill="#4FA8FF"/>
-    <text x="563" y="322">WORKFLOW</text>
-    <circle cx="727" cy="315" r="4" fill="#5BC0BE"/>
-    <text x="755" y="322">EVIDENCE</text>
-    <circle cx="908" cy="315" r="4" fill="#E85454"/>
-    <text x="936" y="322">CONTROL</text>
+    <!-- the katana, drawn along its own axis then swung up -->
+    <g transform="translate(166 226) rotate(-35)">
+      <path d="M0 -10 C55 -14 128 -15 178 -12 C193 -11 205 -8 216 -3 C205 2 193 6 178 8 C128 12 55 12 0 9 Z" fill="url(#steel)"/>
+      <path d="M216 -3 C205 2 193 6 178 8 L178 -0.5 Z" fill="#FFFFFF" opacity="0.9"/>
+      <path d="M6 -2 C55 -6 128 -7 174 -4" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M4 7 C55 11 128 11 176 8" stroke="#1B222A" stroke-opacity="0.55" stroke-width="2" stroke-linecap="round"/>
+      <rect x="-14" y="-23" width="12" height="46" rx="6" fill="#B197FC"/>
+      <rect x="-86" y="-10" width="72" height="20" rx="9" fill="url(#hilt)"/>
+      <g stroke="#93A3B4" stroke-opacity="0.5" stroke-width="3" stroke-linecap="round">
+        <path d="M-74 -5 L-62 5"/>
+        <path d="M-58 -5 L-46 5"/>
+        <path d="M-42 -5 L-30 5"/>
+        <path d="M-26 -5 L-14 5"/>
+      </g>
+      <rect x="-93" y="-12" width="11" height="24" rx="5" fill="#2B333D"/>
+    </g>
   </g>
+
+  <text x="512" y="192" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="80" font-weight="700" letter-spacing="0.5" fill="#F4F7FA">Samurai AI</text>
+  <text x="516" y="236" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" letter-spacing="3.2" fill="#7C8896">AUTHORISED OPERATIONS · OPERATOR IN CHARGE</text>
 </svg>
