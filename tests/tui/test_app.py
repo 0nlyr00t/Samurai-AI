@@ -1,11 +1,13 @@
 import asyncio
 import json
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
 from rich.text import Text
 from textual.widgets import Button, Input, OptionList, RichLog, Static
 
+from samurai_ai.agents.provider import Message
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
@@ -20,6 +22,7 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization, SwarmRun
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
+from samurai_ai.services.goals import GoalService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -36,6 +39,7 @@ from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
+from samurai_ai.storage.goals import GoalRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.memory import MemoryRepository
 from samurai_ai.storage.models import CustomModelRepository, ModelEndpointRepository
@@ -234,8 +238,9 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         )
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
-            playbooks, reports, ctf, redteam, planning, swarms, memory, skills,
-            models, operation.id,
+            playbooks, reports, ctf, redteam, planning, swarms,
+            GoalService(service, GoalRepository(database)),
+            memory, skills, models, operation.id,
         )
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -344,6 +349,7 @@ def _minimal_stack(tmp_path: Path, provider_factory=None, trust_cwd: bool = True
         RedTeamService(service, kernel, RedTeamRepository(database)),
         PlanningService(service, kernel, PlanningRepository(database)),
         SwarmRunRepository(database),
+        GoalService(OperationService(OperationRepository(database)), GoalRepository(database)),
         CampaignMemoryService(MemoryRepository(database)),
         SkillService(SkillRepository(database)),
         models,
@@ -1701,6 +1707,591 @@ def test_chat_never_mode_never_prompts(tmp_path: Path) -> None:
             approval = stack[1].kernel.get_approval(run.approval_id)
             assert approval is not None
             assert approval.decided_by == "never"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_never_mode_prompt_forbids_questions(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("tui.permission_mode", "never")
+    stack[2].set_locale("ru")
+
+    from samurai_ai.domain.permission import PermissionMode as _Mode
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            prompt = app._chat_system_prompt()
+            assert "never" in prompt
+            assert "решай сам" in prompt
+            # switching back to ask drops the hint from the live history
+            app._chat_history = [
+                stack_app_message(app),
+            ]
+            app._set_permission_mode(_Mode.ASK)
+            await pilot.pause()
+            assert "решай сам" not in app._chat_history[0].content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def stack_app_message(app):  # type: ignore[no-untyped-def]
+    from samurai_ai.agents.provider import Message
+
+    return Message(role="system", content="stale prompt")
+
+
+def test_plan_mode_blocks_state_changing_calls(tmp_path: Path) -> None:
+    stack, provider, operation = _sequence_stack(tmp_path, ["echo one", "echo two"])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert "plan" not in str(app.query_one("#status-bar", Static).render())
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app._plan_mode is True
+            assert "plan" in str(app.query_one("#status-bar", Static).render())
+
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "go"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            # shell.exec changes state, so it is refused in plan mode
+            assert stack[4].list_runs(operation.id) == []
+            assert provider.calls == 2
+            text = _message_text(provider.requests[1])
+            assert "plan mode allows read-only" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_plan_mode_admits_read_only_tools(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._set_plan_mode(True)
+            assert app._tool_is_read_only("process.exec") is True
+            assert app._tool_is_read_only("shell.exec") is False
+            assert app._tool_is_read_only("nope.tool") is False
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_leaving_plan_mode_asks_even_in_never_mode(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._set_plan_mode(True)
+            await pilot.press("shift+tab")
+            for _ in range(100):
+                await pilot.pause()
+                if isinstance(app.screen, AccessPromptScreen):
+                    break
+            assert isinstance(app.screen, AccessPromptScreen)
+            app.screen.dismiss(False)
+            await pilot.pause()
+            assert app._plan_mode is True  # staying in plan mode
+
+            await pilot.press("shift+tab")
+            for _ in range(100):
+                await pilot.pause()
+                if isinstance(app.screen, AccessPromptScreen):
+                    break
+            app.screen.dismiss(True)
+            await pilot.pause()
+            assert app._plan_mode is False
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_plan_mode_toggle_is_journalled(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._set_plan_mode(True)
+            app._set_plan_mode(False)
+            events = [
+                event.payload["enabled"]
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "operator.plan_mode"
+            ]
+            assert events == [True, False]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_goal_command_starts_a_goal_and_shows_it(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/goal Get admin on DC01"
+                await pilot.press("enter")
+                await pilot.pause()
+                goal = app._current_goal()
+                assert goal is not None
+                assert goal.objective == "Get admin on DC01"
+                strip = app.query_one("#strip-goal", Static)
+                assert strip.display
+                assert "goal" in str(strip.render())
+                assert any("Get admin on DC01" in str(m) for m in messages)
+
+                command_input.value = "/goal pause"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert app._current_goal().state.value == "paused"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_goal_next_queues_without_replacing(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._handle_goal_command("first")
+            app._handle_goal_command("next second")
+            assert app._current_goal().objective == "first"
+            states = [goal.state.value for goal in app.goals.list(operation.id)]
+            assert states == ["active", "queued"]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_goal_step_budget_blocks_the_goal(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app.goals.create(operation.id, "short", budget_steps=1)
+                app._count_goal_step()
+                goal = app._current_goal()
+                assert goal.state.value == "blocked"
+                assert "step budget 1 spent" in goal.block_reason
+                assert any("goal blocked" in str(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_goal_commands_without_a_goal_report_cleanly(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app._handle_goal_command("pause")
+                app._handle_goal_command("status")
+                app._handle_goal_command("next")
+                text = " ".join(str(m) for m in messages)
+                assert "no current goal" in text
+                assert "give an objective" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+class _BlockingProvider:
+    """Holds the first reply until the test releases it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.requests: list[object] = []
+        # threading.Event: complete() runs inside a worker thread
+        self._gate = threading.Event()
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    def release(self) -> None:
+        self._gate.set()
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, Usage
+
+        self.calls += 1
+        self.requests.append(request)
+        if self.calls == 1:
+            await asyncio.to_thread(self._gate.wait)
+        return ChatResponse(
+            text="ok",
+            usage=Usage(prompt_tokens=3, completion_tokens=2),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def test_ctrl_s_steers_the_running_turn(tmp_path: Path) -> None:
+    """Ctrl-S must reach the model inside the same turn, not start a new one."""
+    provider = _BlockingProvider()
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Steer lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "start"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._chat_busy is True
+
+            command_input.value = "no, check the other host"
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert app._steer_queue == ["no, check the other host"]
+            assert command_input.value == ""
+
+            provider.release()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            # the steered message entered the same conversation as a user turn
+            contents = [
+                getattr(message, "content", "")
+                for message in provider.requests[-1].messages
+            ]
+            assert any("check the other host" in str(entry) for entry in contents)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_s_without_a_running_turn_sends(tmp_path: Path) -> None:
+    stack, provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "hello"
+            await pilot.press("ctrl+s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app._steer_queue == []
+            assert provider.calls == 1
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_shell_mode_runs_without_a_model_round(tmp_path: Path) -> None:
+    stack, provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "!echo shell-mode-out"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # no model call, but a governed tool run happened
+                assert provider.calls == 0
+                runs = stack[4].list_runs(operation.id)
+                assert [run.tool_id for run in runs] == ["shell.exec"]
+                text = "\n".join(str(m) for m in messages)
+                assert "!echo shell-mode-out" in text
+            # the output is in the conversation context for the next model turn
+            assert any(
+                "shell-mode-out" in message.content for message in app._chat_history
+            )
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_shell_mode_denied_by_the_operator(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "!cat .env"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause()
+                if isinstance(app.screen, AccessPromptScreen):
+                    break
+            assert isinstance(app.screen, AccessPromptScreen)
+            app.screen.dismiss(False)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert stack[4].list_runs(operation.id) == []
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_e_expands_collapsed_tool_output(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "!echo expand-me"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert app._expandable, "shell run must leave a collapsed entry"
+                assert not any(
+                    "  expand-me" in _message_text(m) for m in messages
+                )
+
+                await pilot.press("ctrl+e")
+                await pilot.pause()
+                assert any("  expand-me" in _message_text(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_b_marks_a_shell_job_as_background(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # no job running: harmless
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            app._shell_running = "sleep 5"
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            assert app._shell_background is True
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_undo_drops_the_last_turn_and_its_output(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("tui.permission_mode", "never")
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._chat_history = [
+                Message(role="system", content="prompt"),
+                Message(role="user", content="first"),
+                Message(role="assistant", content="answer"),
+                Message(role="user", content="[tool shell_exec] ok"),
+                Message(role="user", content="second"),
+                Message(role="assistant", content="answer2"),
+            ]
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/undo"
+                await pilot.press("enter")
+                await pilot.pause()
+                contents = [message.content for message in app._chat_history]
+                assert contents == ["prompt", "first", "answer", "[tool shell_exec] ok"]
+                assert any("undone" in str(m) for m in messages)
+            events = [
+                event.event_type
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "chat.undo"
+            ]
+            assert events == ["chat.undo"]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_undo_on_an_empty_history_reports(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/undo"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert any("nothing to undo" in str(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_compact_folds_old_messages_into_a_digest(tmp_path: Path) -> None:
+    stack, provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._chat_history = [Message(role="system", content="prompt")]
+            for index in range(20):
+                app._chat_history.append(Message(role="user", content=f"u{index}"))
+                app._chat_history.append(
+                    Message(role="assistant", content=f"a{index}")
+                )
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/compact"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert provider.calls == 1
+                # system + digest + the kept tail
+                assert len(app._chat_history) == 1 + 1 + app._COMPACT_KEEP
+                assert app._chat_history[1].content.startswith("[compacted]")
+                assert any("compacted" in str(m) for m in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_compact_without_enough_history_skips(tmp_path: Path) -> None:
+    stack, provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._chat_history = [
+                Message(role="system", content="prompt"),
+                Message(role="user", content="only"),
+            ]
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/compact"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert provider.calls == 0
+                assert any("nothing to compact" in str(m) for m in messages)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 

@@ -10,6 +10,7 @@ from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
+from samurai_ai.services.goals import GoalService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -26,6 +27,7 @@ from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
+from samurai_ai.storage.goals import GoalRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.memory import MemoryRepository
 from samurai_ai.storage.models import ModelEndpointRepository
@@ -82,6 +84,7 @@ def make_stack(
     redteam = RedTeamService(service, kernel, RedTeamRepository(database))
     planning = PlanningService(service, kernel, PlanningRepository(database))
     swarms = SwarmRunRepository(database)
+    goals = GoalService(service, GoalRepository(database))
     memory = CampaignMemoryService(MemoryRepository(database))
     skills = SkillService(SkillRepository(database))
     models = ModelService(
@@ -106,6 +109,7 @@ def make_stack(
         redteam,
         planning,
         swarms,
+        goals,
         memory,
         skills,
         models,

@@ -14,6 +14,7 @@ from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
 from samurai_ai.cli_eval import handle_eval_command, register_eval_commands
 from samurai_ai.cli_events import handle_events_command, register_events_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
+from samurai_ai.cli_goals import handle_goal_command, register_goal_commands
 from samurai_ai.cli_headless import handle_headless_command, register_headless_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
@@ -38,6 +39,7 @@ from samurai_ai.domain.ctf import (
 )
 from samurai_ai.domain.eval import EvalError
 from samurai_ai.domain.execution import ToolExecutionError, ToolNotFoundError
+from samurai_ai.domain.goal import GoalError
 from samurai_ai.domain.kernel import KernelError
 from samurai_ai.domain.mcp import McpServerNotFoundError
 from samurai_ai.domain.memory import MemoryError, MemoryNotFoundError
@@ -73,6 +75,7 @@ from samurai_ai.self_update import run_update
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.exports import IntegrationExportService
+from samurai_ai.services.goals import GoalNotFoundError, GoalService
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
 from samurai_ai.services.memory import CampaignMemoryService
@@ -96,6 +99,7 @@ from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfConflictError, CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
+from samurai_ai.storage.goals import GoalConflictError, GoalRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
 from samurai_ai.storage.memory import MemoryConflictError, MemoryRepository
@@ -191,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_redteam_commands(subcommands)
     register_planning_commands(subcommands)
     register_swarm_commands(subcommands)
+    register_goal_commands(subcommands)
     register_memory_commands(subcommands)
     register_skill_commands(subcommands)
     register_events_commands(subcommands)
@@ -220,6 +225,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         redteam_service,
         planning_service,
         swarm_service,
+        goal_service,
         memory_service,
         skill_service,
         export_service,
@@ -275,6 +281,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         swarm_result = handle_swarm_command(args, swarm_service, model_service)
         if swarm_result is not None:
             return swarm_result
+        goal_result = handle_goal_command(args, goal_service)
+        if goal_result is not None:
+            return goal_result
         memory_result = handle_memory_command(args, memory_service)
         if memory_result is not None:
             return memory_result
@@ -315,6 +324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             redteam_service,
             planning_service,
             swarm_service.swarms,
+            goal_service,
             memory_service,
             skill_service,
             model_service,
@@ -343,6 +353,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         McpServerConflictError,
         ModelError,
         ModelNotFoundError,
+        GoalError,
+        GoalConflictError,
+        GoalNotFoundError,
         AgentError,
         AgentRunNotFoundError,
         PlaybookError,
@@ -462,6 +475,7 @@ def _make_services(
     RedTeamService,
     PlanningService,
     SwarmService,
+    GoalService,
     CampaignMemoryService,
     SkillService,
     IntegrationExportService,
@@ -512,6 +526,7 @@ def _make_services(
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     planning = PlanningService(operations, kernel, PlanningRepository(database), vault)
     swarm = SwarmService(operations, kernel, agents, SwarmRunRepository(database))
+    goals = GoalService(operations, GoalRepository(database))
     exports = IntegrationExportService(operations, kernel, redteam, planning, vault)
     return (
         operations,
@@ -529,6 +544,7 @@ def _make_services(
         redteam,
         planning,
         swarm,
+        goals,
         memory_service,
         skill_service,
         exports,
