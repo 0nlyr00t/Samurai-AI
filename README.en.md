@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/samurai-logo.svg" width="760" alt="Samurai AI — a katana that nearly closes a red circle of its swing">
+  <img src="assets/samurai-logo.svg" width="760" alt="Samurai AI — a ninja mid-lunge cutting a red circle open">
 </p>
 
-<p align="center"><em>One swing, one move. The katana leaves an arc, the operation leaves a trail.</em></p>
+<p align="center"><em>ONE SHOT. MANY KILLS.</em></p>
 
 <p align="center">
   <a href="README.md">Русский</a> · <strong>English</strong>
@@ -10,7 +10,7 @@
 
 # Samurai AI
 
-Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug Bounty research, CTF/HTB, and Operation Planning. The product is built around a governed operation rather than an unrestricted chat connected to tools. The mark is a katana and the nearly closed circle of its swing: the motion reads, and the trail stays. The shell itself carries only a busy spinner.
+Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug Bounty research, CTF/HTB, and Operation Planning. The product is built around a governed operation rather than an unrestricted chat connected to tools. The mark is a ninja mid-lunge cutting a red circle open: one entry, many targets. The shell itself carries only a busy spinner.
 
 ## Principles
 
