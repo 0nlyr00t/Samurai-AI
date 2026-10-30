@@ -77,10 +77,10 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/help", GROUP_OPERATION, "_show_help"),
     # kernel
     _spec("/plan", GROUP_KERNEL, "_show_plan", operation=True),
-    _spec("/tasks", GROUP_KERNEL, "_show_tasks", operation=True),
+    _spec("/tasks", GROUP_KERNEL, "_show_task_board", operation=True),
     _spec("/gates", GROUP_KERNEL, "_show_gates", operation=True),
     _spec("/approvals", GROUP_KERNEL, "_show_approvals", operation=True),
-    _spec("/findings", GROUP_KERNEL, "_show_findings", operation=True),
+    _spec("/findings", GROUP_KERNEL, "_show_finding_board", operation=True),
     _spec("/evidence", GROUP_KERNEL, "_show_evidence", operation=True),
     # tools and agents
     _spec("/tools", GROUP_TOOLS, "_show_tools"),
