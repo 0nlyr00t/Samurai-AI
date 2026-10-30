@@ -12,7 +12,16 @@ from samurai_ai.agents.provider import Message
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
-from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, StageGate, TaskStatus
+from samurai_ai.domain.kernel import (
+    ArtifactKind,
+    FindingSeverity,
+    FindingStatus,
+    GateStatus,
+    PlanTask,
+    RiskClass,
+    StageGate,
+    TaskStatus,
+)
 from samurai_ai.domain.memory import MemoryKind
 from samurai_ai.domain.operations import OperationEvent, OperationMode
 from samurai_ai.domain.planning import KillChainPhase, PlannedTest, Runbook
@@ -2957,6 +2966,310 @@ def test_subagent_asks_for_approvals_in_ask_mode(tmp_path: Path) -> None:
                 if item.action.startswith("model.call")
             ]
             assert any(item.decided_by == "subagent" for item in approvals)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def _board_stack(tmp_path: Path):
+    """A stack with a plan, a gate, findings and one evidence artifact."""
+    stack, provider, _operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Board lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("a.test",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Board plan",
+        [
+            PlanTask(id="recon", title="Recon the host", risk_class=RiskClass.R1),
+            PlanTask(
+                id="exploit",
+                title="Exploit it",
+                risk_class=RiskClass.R2,
+                depends_on=("recon",),
+            ),
+        ],
+        [StageGate(id="recon-done", name="Recon complete")],
+    )
+    finding = stack[1].create_finding(
+        operation.id, "SQLi in login", FindingSeverity.HIGH, summary="payload works"
+    )
+    duplicate = stack[1].create_finding(operation.id, "Same SQLi", FindingSeverity.LOW)
+    artifact = stack[1].register_artifact(
+        operation.id, ArtifactKind.NOTE, "note.txt", "response dump"
+    )
+    return stack, provider, operation, finding, duplicate, artifact
+
+
+def _highlight(options: OptionList, option_id: str) -> None:
+    index = next(
+        index for index, option in enumerate(options.options) if option.id == option_id
+    )
+    options.highlighted = index
+
+
+def test_task_board_opens_and_starts_a_task(tmp_path: Path) -> None:
+    stack, _provider, operation, *_rest = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import BoardScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert isinstance(app.screen, BoardScreen)
+            listed = app.screen.query_one("#board-list", OptionList)
+            assert "recon" in str(listed.options[1].prompt)
+            listed.highlighted = 1
+            await pilot.press("s")
+            await pilot.pause()
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            assert plan.task_by_id("recon").status is TaskStatus.IN_PROGRESS  # type: ignore[union-attr]
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_task_board_completes_and_skips(tmp_path: Path) -> None:
+    stack, _provider, operation, *_rest = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._show_task_board()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            listed.highlighted = 1
+            await pilot.press("s")
+            await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            assert plan.task_by_id("recon").status is TaskStatus.DONE  # type: ignore[union-attr]
+            # exploit is the only open task now, still first in the open group
+            _highlight(app.screen.query_one("#board-list", OptionList), "exploit")
+            await pilot.press("k")
+            await pilot.pause()
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            assert plan.task_by_id("exploit").status is TaskStatus.SKIPPED  # type: ignore[union-attr]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_task_board_passes_a_gate(tmp_path: Path) -> None:
+    stack, _provider, operation, *_rest = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._show_task_board()
+            await pilot.pause()
+            _highlight(
+                app.screen.query_one("#board-list", OptionList), "gate:recon-done"
+            )
+            await pilot.press("g")
+            await pilot.pause()
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            assert plan.gates[0].status is GateStatus.PASSED
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_task_board_filter_reveals_finished_rows(tmp_path: Path) -> None:
+    stack, _provider, operation, *_rest = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            stack[1].start_task(operation.id, "recon")
+            stack[1].complete_task(operation.id, "recon")
+            app._show_task_board()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            before = len(listed.options)
+            await pilot.press("f")
+            await pilot.pause()
+            after = len(app.screen.query_one("#board-list", OptionList).options)
+            assert after >= before
+            headings = [
+                str(option.prompt) for option in listed.options if str(option.id).startswith("g-")
+            ]
+            assert any("finished" in heading for heading in headings)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_task_detail_shows_dependencies(tmp_path: Path) -> None:
+    stack, _provider, operation, *_rest = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import ItemDetailScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._show_task_board()
+            await pilot.pause()
+            _highlight(app.screen.query_one("#board-list", OptionList), "exploit")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ItemDetailScreen)
+            headings = [str(node.render()) for node in app.screen.query(".item-heading")]
+            assert "DEPENDS ON" in headings
+            body = "\n".join(str(node.render()) for node in app.screen.query(".item-line"))
+            assert "Recon the host" in body
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_finding_board_validates_with_evidence(tmp_path: Path) -> None:
+    stack, _provider, operation, finding, _duplicate, artifact = _board_stack(tmp_path)
+    stack[1].attach_evidence(finding.id, artifact.id)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+f")
+            await pilot.pause()
+            _highlight(app.screen.query_one("#board-list", OptionList), finding.id)
+            await pilot.press("v")
+            await pilot.pause()
+            assert stack[1].kernel.get_finding(finding.id).status is FindingStatus.VALIDATED
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_finding_without_evidence_says_so(tmp_path: Path) -> None:
+    stack, _provider, operation, finding, _duplicate, _artifact = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app._finding_validate(finding.id)
+                await pilot.pause()
+                assert any("no evidence" in str(message) for message in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_finding_evidence_and_duplicate_prompt_for_an_id(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens import ArgumentScreen
+
+    stack, _provider, operation, finding, duplicate, artifact = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._finding_evidence(finding.id)
+            for _ in range(20):
+                await pilot.pause()
+                if isinstance(app.screen, ArgumentScreen):
+                    break
+            assert isinstance(app.screen, ArgumentScreen)
+            app.screen.dismiss(artifact.id)
+            for _ in range(20):
+                await pilot.pause()
+                if stack[1].kernel.get_finding(finding.id).evidence_ids:
+                    break
+            assert stack[1].kernel.get_finding(finding.id).evidence_ids == (artifact.id,)
+
+            app._finding_duplicate(duplicate.id)
+            for _ in range(20):
+                await pilot.pause()
+                if isinstance(app.screen, ArgumentScreen):
+                    break
+            assert isinstance(app.screen, ArgumentScreen)
+            app.screen.dismiss(finding.id)
+            for _ in range(20):
+                await pilot.pause()
+                if stack[1].kernel.get_finding(duplicate.id).duplicate_of:
+                    break
+            assert stack[1].kernel.get_finding(duplicate.id).duplicate_of == finding.id
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_boards_report_missing_operation(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app.action_open_task_board()
+                await pilot.pause()
+                assert any("No operation loaded" in str(message) for message in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_boards_show_empty_states(tmp_path: Path) -> None:
+    stack, _provider, _operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Empty", OperationMode.CTF_HTB, ScopeContract(includes=("b.test",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._show_task_board()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            assert "no plan" in str(listed.options[0].prompt)
+            await pilot.press("escape")
+            await pilot.pause()
+            app._show_finding_board()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            assert "no findings" in str(listed.options[0].prompt)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
