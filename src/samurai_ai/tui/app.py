@@ -62,7 +62,7 @@ from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
-from samurai_ai.tui import keys, preferences
+from samurai_ai.tui import brand, keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
@@ -444,13 +444,24 @@ class SamuraiApp(
         journal = self.query_one("#journal", RichLog)
         journal.write(Text(text, style=self.paint(self._DIM_STYLE)))
 
-    def _brand_text(self) -> Text:
-        # The version dangles from the "I" of "AI" on a little thread.
-        return Text.assemble(
-            ("Samurai AI", self.paint("bold $accent")),
-            ("\n         ╰╴", self.paint("dim $text-faint")),
-            (f"v{__version__}", self.paint("dim $danger")),
+    def brand_painter(self) -> brand.Painter:
+        """Mark colours: steel, guard in the theme accent, blood-red arc."""
+        return brand.Painter(
+            {
+                brand.BLADE: self.paint("text"),
+                brand.GUARD: self.paint("accent"),
+                brand.HILT: self.paint("text-dim"),
+                brand.ARC: self.paint("danger"),
+            }
         )
+
+    def _brand_text(self) -> Text:
+        """The mark beside the name, for the side strip."""
+        block = Text()
+        block.append_text(brand.render(self.brand_painter()))
+        block.append("  ")
+        block.append("Samurai AI", style=self.paint("bold accent"))
+        return block
 
     def _write_user_message(self, text: str) -> None:
         journal = self.query_one("#journal", RichLog)
@@ -550,8 +561,19 @@ class SamuraiApp(
 
     def _write_welcome(self) -> None:
         journal = self.query_one("#journal", RichLog)
-        journal.write(self._brand_text())
+        journal.write(self._banner())
         self._write_dim(self.translator.t("welcome.help-hint"))
+
+    def _banner(self) -> Text:
+        """Opening frame: the mark, the name, the version, one line of what it is."""
+        block = Text()
+        block.append_text(brand.render(self.brand_painter()))
+        block.append("\n  ")
+        block.append("Samurai AI", style=self.paint("bold accent"))
+        block.append(f"  v{__version__}", style=self.paint("dim text-faint"))
+        block.append("\n  ")
+        block.append(self.translator.t("brand.tagline"), style=self.paint("text-dim"))
+        return block
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command-input":

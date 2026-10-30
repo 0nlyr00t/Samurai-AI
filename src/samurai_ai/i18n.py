@@ -4,6 +4,7 @@ DEFAULT_LOCALE = "en"
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
         "input.placeholder": "Enter a command; /help lists Operation Kernel capabilities",
+        "brand.tagline": "authorised operations, the operator in charge",
         "welcome.help-hint": "Use /help to list available commands.",
         "help.help": "/help             Show available commands",
         "help.status": "/status           Show the current operation and kernel summary",
@@ -402,6 +403,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "ru": {
         "input.placeholder": "Введите команду; /help показывает возможности ядра операции",
+        "brand.tagline": "авторизованные операции, оператор решает",
         "welcome.help-hint": "Введите /help для списка команд.",
         "help.help": "/help             Показать доступные команды",
         "help.status": "/status           Показать текущую операцию и сводку ядра",

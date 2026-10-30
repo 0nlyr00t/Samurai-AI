@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -121,11 +122,52 @@ from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
 
+class _VersionAction(argparse.Action):
+    """``--version`` prints the mark next to the name, not just a number."""
+
+    def __init__(self, option_strings: Sequence[str], **kwargs: object) -> None:
+        super().__init__(option_strings, nargs=0, **kwargs)  # type: ignore[arg-type]
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        print_version_banner()
+        parser.exit()
+
+
+def print_version_banner() -> None:
+    from rich.console import Console
+
+    from samurai_ai.i18n import Translator
+    from samurai_ai.tui import brand
+    from samurai_ai.tui.theme import BUILTIN, DEFAULT_THEME
+
+    palette = BUILTIN[DEFAULT_THEME]
+    painter = brand.Painter(
+        {
+            brand.BLADE: palette["text"],
+            brand.GUARD: palette["accent"],
+            brand.HILT: palette["text-dim"],
+            brand.ARC: palette["danger"],
+        }
+    )
+    console = Console()
+    console.print(brand.render(painter))
+    console.print(f"[bold {palette['accent']}]samurai[/] {__version__}")
+    locale = os.environ.get("SAMURAI_LANG", "").strip().lower()
+    console.print(
+        Translator(locale if locale in {"ru", "en"} else "en").t("brand.tagline"),
+        style=palette["text-dim"],
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="samurai")
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}"
-    )
+    parser.add_argument("--version", action=_VersionAction)
     parser.add_argument("--db", type=Path, help="Path to the Samurai SQLite database")
     parser.add_argument("--json", action="store_true", dest="json_output")
     subcommands = parser.add_subparsers(dest="command")

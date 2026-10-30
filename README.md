@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="assets/samurai-logo.svg" width="760" alt="Samurai AI logo">
+  <img src="assets/samurai-logo.svg" width="760" alt="Samurai AI — катана, оставляющая красную дугу взмаха">
 </p>
+
+<p align="center"><em>Один взмах — один ход. Катана оставляет дугу, операция — след в журнале.</em></p>
 
 <p align="center">
   <strong>Русский</strong> · <a href="README.en.md">English</a>
@@ -8,7 +10,7 @@
 
 # Samurai AI
 
-Samurai AI — local-first TUI harness для авторизованных Red Team-операций, Bug Bounty, CTF/HTB и Operation Planning. Продукт строится вокруг управляемой операции, а не вокруг неограниченного чата с инструментами.
+Samurai AI — local-first TUI harness для авторизованных Red Team-операций, Bug Bounty, CTF/HTB и Operation Planning. Продукт строится вокруг управляемой операции, а не вокруг неограниченного чата с инструментами. Знак — катана и дуга взмаха: движение читается, а след остаётся.
 
 ## Принципы
 
