@@ -456,12 +456,8 @@ class SamuraiApp(
         )
 
     def _brand_text(self) -> Text:
-        """The mark beside the name, for the side strip."""
-        block = Text()
-        block.append_text(brand.render(self.brand_painter()))
-        block.append("  ")
-        block.append("Samurai AI", style=self.paint("bold accent"))
-        return block
+        """The side strip carries the name; the mark lives in ``--version`` and the README."""
+        return Text("Samurai AI", style=self.paint("bold accent"))
 
     def _write_user_message(self, text: str) -> None:
         journal = self.query_one("#journal", RichLog)
@@ -565,13 +561,11 @@ class SamuraiApp(
         self._write_dim(self.translator.t("welcome.help-hint"))
 
     def _banner(self) -> Text:
-        """Opening frame: the mark, the name, the version, one line of what it is."""
+        """Opening frame: name, version, one line of what this is. No mark."""
         block = Text()
-        block.append_text(brand.render(self.brand_painter()))
-        block.append("\n  ")
         block.append("Samurai AI", style=self.paint("bold accent"))
         block.append(f"  v{__version__}", style=self.paint("dim text-faint"))
-        block.append("\n  ")
+        block.append("\n")
         block.append(self.translator.t("brand.tagline"), style=self.paint("text-dim"))
         return block
 
