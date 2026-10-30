@@ -76,10 +76,11 @@ Samurai AI — local-first TUI harness для авторизованных Red T
   событий, сравнение с baseline для регрессий (`eval run`, `eval compare`),
   smoke-сьют `evals/smoke.json` в CI;
 - режимы разрешений `ask`/`yolo`/`never` с переиспользованием approval и бейджами чувствительных путей, plan mode (`Shift-Tab`) по признаку `read_only`, goal mode с бюджетом шагов и времени, steering `Ctrl-S`, shell-режим `!`, `/undo` и `/compact`;
+- палитра всех действий `Ctrl-P`, оверлей клавиш `?`, инспектор запуска (`/inspect`, `Ctrl-I`) на восемь групп с пере-проверкой scope, экран приветствия и пустые состояния;
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v17, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 681 unit/integration/CLI/TUI tests.
+- 697 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), security tools волны 2 (subfinder/nmap/ffuf —
