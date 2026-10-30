@@ -62,7 +62,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - custom playbooks (JSON templates со структурной валидацией, immutable
   хранилище, `playbook install/use/list-custom`) и trusted versioned skills
   (`--trusted` обязателен, sha256, инжекция в executor prompt), TUI
-  `/playbooks` и `/skills`, SQLite v14;
+  `/playbooks` и `/skills`, SQLite v16;
 - стабильный контракт exit codes (0/1/2, зафиксирован тестами), экспорт
   журнала в NDJSON (`events export`), headless mode для CI (`headless run`
   с JSON summary), GitHub Actions CI (ruff, strict mypy, pytest, build);
@@ -76,14 +76,15 @@ Samurai AI — local-first TUI harness для авторизованных Red T
   событий, сравнение с baseline для регрессий (`eval run`, `eval compare`),
   smoke-сьют `evals/smoke.json` в CI;
 - RU/EN first-run выбор языка и переключение через `/lang`;
-- SQLite migrations v1–v14, append-only events и optimistic concurrency;
+- SQLite migrations v1–v16, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 609 unit/integration/CLI/TUI tests.
+- 621 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), security tools волны 2 (subfinder/nmap/ffuf —
 технические блокеры в `md/threat-review-security-tools.md`), LLM streaming,
-полный egress enforcement на
+поаргументные permission-правила с doom-loop guard, extension seams/плагины,
+web-поверхность операции, полный egress enforcement на
 Docker Desktop for Mac и OS-пакеты installers (есть bare standalone binary).
 
 ## Установка
