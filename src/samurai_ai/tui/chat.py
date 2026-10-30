@@ -20,7 +20,6 @@ from samurai_ai.domain.permission import classify_command
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.i18n import Translator
-from samurai_ai.tui import brand
 from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
@@ -48,7 +47,6 @@ class ChatController:
         _cwd: Any
 
         def paint(self, style: str) -> str: ...
-        def brand_painter(self) -> Any: ...
         _chat_history: list[Message]
         _steer_queue: list[str]
         _chat_busy: bool
@@ -157,7 +155,17 @@ class ChatController:
         "agent_spawn": "_run_spawn_tool",
     }
 
-    _THINKING_DOTS = (0, 1, 2, 3, 2, 1)
+    #: Braille spinner, the way quiet harnesses show work in progress.
+    _THINKING_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    #: The colour walks the theme accent as the spinner turns, so the turn reads.
+    _THINKING_RAMP = (
+        "accent",
+        "accent",
+        "accent-alt",
+        "accent-alt",
+        "accent-alt",
+        "accent",
+    )
 
     def _chat_system_prompt(self) -> str:
         autonomy = self.translator.t(
@@ -188,18 +196,11 @@ class ChatController:
             self._thinking_timer = self.set_interval(0.12, self._thinking_tick)
 
     def _thinking_tick(self) -> None:
-        """A breathing katana, then the word: the mark carries the motion."""
+        """A turning glyph whose colour drifts: no words, no timer."""
         widget = self.query_one("#thinking", Static)
-        mark = brand.frame(self._thinking_frame, self.brand_painter())
-        dots = "·" * self._THINKING_DOTS[self._thinking_frame % len(self._THINKING_DOTS)]
-        line = Text()
-        line.append_text(mark)
-        line.append(" ")
-        line.append(
-            self.translator.t("chat.thinking") + dots,
-            style=self.paint("bold accent"),
-        )
-        widget.update(line)
+        frame = self._THINKING_FRAMES[self._thinking_frame % len(self._THINKING_FRAMES)]
+        token = self._THINKING_RAMP[(self._thinking_frame // 3) % len(self._THINKING_RAMP)]
+        widget.update(Text(frame, style=self.paint(f"bold {token}")))
         self._thinking_frame += 1
 
     def _thinking_stop(self) -> None:
