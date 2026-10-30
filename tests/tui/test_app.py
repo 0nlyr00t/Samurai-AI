@@ -648,9 +648,12 @@ def test_brand_shows_name_and_version(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            brand = str(app.query_one("#brand", Static).render())
-            assert "Samurai AI" in brand
-            assert __version__ in brand
+            strip = app.query_one("#brand", Static).render()
+            assert "Samurai AI" in strip.plain
+            assert "╪" in strip.plain  # the mark rides the strip
+            banner = "\n".join(line.text for line in app.query_one("#journal", RichLog).lines)
+            assert "Samurai AI" in banner
+            assert __version__ in banner
             status_bar = str(app.query_one("#status-bar", Static).render())
             assert "model=fake/fake-model@v1" in status_bar
             await pilot.press("ctrl+c")
@@ -3520,6 +3523,48 @@ def test_help_sheet_shows_the_current_board_keys(tmp_path: Path) -> None:
             lines = [str(node.render()) for node in app.screen.query(".help-line")]
             assert any("Ctrl+Y" in line for line in lines)
             assert not any("Ctrl+T" in line for line in lines)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_thinking_indicator_breathes_the_mark(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            app._thinking_start()
+            seen = []
+            for _ in range(6):
+                await asyncio.sleep(0.14)
+                seen.append(app.query_one("#thinking").render().plain)
+            app._thinking_stop()
+            assert all(line.startswith("╰") for line in seen)
+            assert all("╪" in line for line in seen)
+            assert len({line.split(" ")[0] for line in seen}) > 1
+            assert not app.query_one("#thinking").display
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_welcome_shows_the_mark_and_the_tagline(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(90, 26)) as pilot:
+            await pilot.pause()
+            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            assert any("╪" in line for line in lines)
+            assert any("Samurai AI" in line for line in lines)
+            assert any("authorised operations" in line for line in lines)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
