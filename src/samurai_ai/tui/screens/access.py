@@ -65,3 +65,8 @@ class AccessPromptScreen(ModalScreen[bool]):
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.key == "escape":
             self.dismiss(False)
+        elif event.key == "enter":
+            # Enter is handled here, not by OptionList: its highlight is not set
+            # yet on the first frame, which made the very first Enter a no-op.
+            options = self.query_one("#access-options", OptionList)
+            self.dismiss(options.highlighted in (None, 0))

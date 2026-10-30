@@ -18,6 +18,7 @@ from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.domain.operations import Operation, OperationMode
 from samurai_ai.domain.permission import classify_command
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
@@ -72,6 +73,7 @@ class ChatController:
         def set_interval(self, *args: Any, **kwargs: Any) -> Any: ...
         def _directory_trusted(self) -> bool: ...
         def _tool_is_read_only(self, tool_id: str) -> bool: ...
+        def spawn_subagent(self, instruction: str, **kwargs: Any) -> Any: ...
         def _reusable_approval(self, tool_id: str) -> bool: ...
         def _drain_steering(self) -> None: ...
         def _count_goal_step(self) -> None: ...
@@ -120,8 +122,37 @@ class ChatController:
                 "additionalProperties": False,
             },
         ),
+        ToolSpec(
+            name="agent_spawn",
+            description=(
+                "Hand one plan task to a subagent child session that works in "
+                "the background. Prefer it for a self-contained chunk (a scan, "
+                "a set of checks) while you keep going. One child runs at a "
+                "time; the operator can watch and stop it."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192,
+                    },
+                    "specialization": {
+                        "type": "string",
+                        "enum": ["general", "recon", "testing", "analysis"],
+                    },
+                },
+                "required": ["instruction"],
+                "additionalProperties": False,
+            },
+        ),
     )
     _CHAT_TOOL_IDS = {"shell_exec": "shell.exec"}
+    _CHAT_TOOL_HANDLERS = {
+        "shell_exec": "_run_shell_tool",
+        "agent_spawn": "_run_spawn_tool",
+    }
 
     _THINKING_FRAMES = "⠋⠙⠹⠸⠼⴦⦧⡇⠏"
     _THINKING_COLORS = ("#5bc0be", "#4fa8ff", "#b197fc", "#74c0fc")
@@ -438,19 +469,75 @@ class ChatController:
         if final.text.strip():
             self._write_ai_message(final)
 
+    def _chat_tool_read_only(self, name: str) -> bool:
+        tool_id = self._CHAT_TOOL_IDS.get(name)
+        return tool_id is not None and self._tool_is_read_only(tool_id)
+
     async def _run_chat_tool(self, call: ToolCall) -> Message:
+        handler = self._CHAT_TOOL_HANDLERS.get(call.name)
+        if handler is None:
+            return Message(
+                role="user",
+                content=f"[tool error] unknown tool: {call.name!r}",
+            )
+        if not self._directory_trusted():
+            self._write_dim(
+                self.translator.t("chat.tool-denied", command=call.name)
+            )
+            return Message(
+                role="user",
+                content=f"[tool {call.name}] the operator has not trusted this directory",
+            )
+        result: Message = await getattr(self, handler)(call)
+        return result
+
+    async def _run_spawn_tool(self, call: ToolCall) -> Message:
+        instruction = str(call.arguments.get("instruction", "")).strip()
+        if not instruction:
+            return Message(
+                role="user", content="[tool agent_spawn] empty instruction"
+            )
+        if self._plan_mode:
+            self._write_dim(
+                self.translator.t("plan.blocked", command=f"agent_spawn {instruction}")
+            )
+            return Message(
+                role="user",
+                content=(
+                    "[tool agent_spawn] blocked: plan mode allows read-only calls only"
+                ),
+            )
+        raw = str(call.arguments.get("specialization", "") or "general")
+        try:
+            specialization = AgentSpecialization(raw)
+        except ValueError:
+            specialization = AgentSpecialization.GENERAL
+        run_id = await self.spawn_subagent(
+            instruction, specialization=specialization
+        )
+        if run_id is None:
+            return Message(
+                role="user",
+                content="[tool agent_spawn] the child did not start (see the journal)",
+            )
+        self._write_dim(
+            self.translator.t("subagent.tool-started", run=run_id)
+        )
+        return Message(
+            role="user",
+            content=(
+                f"[tool agent_spawn] run={run_id} task=<plan task> started in the "
+                "background; its steps and output are in the sessions screen (Ctrl-G)"
+            ),
+        )
+
+    async def _run_shell_tool(self, call: ToolCall) -> Message:
         tool_id = self._CHAT_TOOL_IDS.get(call.name)
         command = str(call.arguments.get("command", "")).strip()
         if tool_id is None or not command:
             return Message(
                 role="user",
                 content=f"[tool error] unknown tool or empty command: {call.name!r}",
-            )
-        if not self._directory_trusted():
-            self._write_dim(self.translator.t("chat.tool-denied", command=command))
-            return Message(
-                role="user",
-                content=f"[tool {call.name}] the operator has not trusted this directory",
             )
         if self._plan_mode and not self._tool_is_read_only(tool_id):
             self._write_dim(self.translator.t("plan.blocked", command=command))

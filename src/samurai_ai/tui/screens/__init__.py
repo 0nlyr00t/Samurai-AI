@@ -12,9 +12,12 @@ from samurai_ai.tui.screens.model_picker import (
     ModelPickerScreen,
 )
 from samurai_ai.tui.screens.new_operation import NewOperationScreen
+from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
 from samurai_ai.tui.screens.trust import TrustDirectoryScreen
 
 __all__ = [
+    "SessionDetailScreen",
+    "SessionsScreen",
     "ADD_CUSTOM_ID",
     "REASONING_LEVELS",
     "AccessPromptScreen",

@@ -28,7 +28,7 @@ from textual.widgets.option_list import Option
 from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
-from samurai_ai.domain.agents import AgentRunStatus
+from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.execution import ToolDefinition, ToolRun
 from samurai_ai.domain.goal import Goal, GoalError
 from samurai_ai.domain.kernel import (
@@ -78,6 +78,8 @@ from samurai_ai.tui.screens import (
     NewOperationScreen,
     TrustDirectoryScreen,
 )
+from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
+from samurai_ai.tui.sessions import SessionController
 from samurai_ai.tui.widgets import (
     HistoryInput,
     PlusButton,
@@ -89,7 +91,7 @@ _PERMISSION_MODE_KEY = "tui.permission_mode"
 _YOLO_LEGACY_KEY = "tui.yolo"
 
 
-class SamuraiApp(ChatController, App[None]):
+class SamuraiApp(ChatController, SessionController, App[None]):
     COMMANDS = {CommandProvider}
 
     CSS = """
@@ -248,6 +250,7 @@ class SamuraiApp(ChatController, App[None]):
         Binding("ctrl+p", "command_palette", "Commands", show=False, priority=True),
         Binding("f1", "show_help", "Keys", show=False),
         Binding("ctrl+i", "inspect_last_run", "Inspect run", show=False, priority=True),
+        Binding("ctrl+g", "open_sessions", "Child sessions", show=False, priority=True),
         Binding("ctrl+s", "steer", "Steer the running turn", show=False, priority=True),
         Binding("ctrl+b", "shell_background", "Background the shell job", show=False),
         Binding("ctrl+e", "expand_output", "Expand collapsed output", show=False, priority=True),
@@ -1198,6 +1201,134 @@ class SamuraiApp(ChatController, App[None]):
             )
         )
 
+    # -- child sessions ---------------------------------------------------
+    def _cmd_subagent(self, argument: str) -> None:
+        self.run_worker(self.spawn_subagent(argument), exclusive=False)
+
+    def action_open_sessions(self) -> None:
+        self._show_sessions()
+
+    def _session_rows(self) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = []
+        for run in self.child_runs():
+            rows.append(
+                (
+                    run.id,
+                    self.translator.t(
+                        "sessions.row",
+                        run=run.id,
+                        status=run.status.value,
+                        task=run.task_id,
+                        depth=run.depth,
+                    ),
+                )
+            )
+        return rows
+
+    def _show_sessions(self) -> None:
+        if self.operation is None:
+            self._write_line("[sessions] " + self.translator.t("status.no-operation"))
+            return
+        self.push_screen(
+            SessionsScreen(self.translator, self._session_rows(), self._stop_session),
+            lambda outcome: (
+                self._show_session_detail(outcome) if outcome else None
+            ),
+        )
+
+    def _stop_session(self, run_id: str) -> None:
+        if not self.stop_subagent(run_id):
+            self._write_line(self.translator.t("sessions.not-running", run=run_id))
+            return
+        self._write_dim(self.translator.t("sessions.stopping", run=run_id))
+
+    def _show_session_detail(self, run_id: str) -> None:
+        run = next((item for item in self.child_runs() if item.id == run_id), None)
+        if run is None:
+            self._write_line(self.translator.t("sessions.unknown", run=run_id))
+            return
+        self.push_screen(
+            SessionDetailScreen(
+                self.translator,
+                self.translator.t("sessions.detail-title", run=run.id, task=run.task_id),
+                self._session_sections(run),
+            ),
+            lambda outcome: self._on_session_detail(outcome, run.id, run.task_id),
+        )
+
+    def _on_session_detail(
+        self, outcome: str | None, run_id: str, task_id: str
+    ) -> None:
+        if outcome == "stop":
+            self._stop_session(run_id)
+        elif outcome == "replay":
+            self._replay_task(task_id)
+        elif outcome == "inspect":
+            self._inspect_last_child_run(run_id)
+
+    def _inspect_last_child_run(self, run_id: str) -> None:
+        run = next((item for item in self.child_runs() if item.id == run_id), None)
+        if run is None:
+            self._write_line(self.translator.t("sessions.unknown", run=run_id))
+            return
+        history = self._child_tool_runs(run)
+        if not history:
+            self._write_line(self.translator.t("sessions.no-tool-runs"))
+            return
+        self._show_inspector(history[-1].id)
+
+    def _replay_task(self, task_id: str) -> None:
+        self.release_task(task_id)
+        self._write_dim(self.translator.t("sessions.replayed", task=task_id))
+
+    def _child_tool_runs(self, run: AgentRun) -> list[ToolRun]:
+        """Tool runs caused by this child, oldest first.
+
+        Tool runs carry the plan task, not the agent run, so the task plus the
+        child's start time is the attribution we have.
+        """
+        if self.operation is None:
+            return []
+        return [
+            item
+            for item in self.execution.list_runs(self.operation.id)
+            if item.task_id == run.task_id and item.created_at >= run.created_at
+        ]
+
+    def _session_sections(self, run: AgentRun) -> list[tuple[str, list[str]]]:
+        t = self.translator
+        steps: list[str] = []
+        notes: list[str] = []
+        findings: list[str] = []
+        if self.operation is not None:
+            for event in self.service.events(self.operation.id):
+                payload = event.payload
+                if payload.get("run_id") != run.id:
+                    continue
+                if event.event_type == "agent.note":
+                    notes.append(
+                        f"{payload.get('key')} = {str(payload.get('value'))[:200]}"
+                    )
+                elif event.event_type == "agent.step":
+                    if payload.get("finding_id"):
+                        findings.append(str(payload.get("title")))
+                        continue
+                    steps.append(str(payload.get("title") or payload.get("step")))
+        calls = [item.id for item in self._child_tool_runs(run)]
+        return [
+            (
+                t.t("sessions.section.summary"),
+                [
+                    t.t("sessions.status", status=run.status.value, depth=run.depth),
+                    t.t("sessions.instruction", task=run.task_id),
+                ],
+            ),
+            (t.t("sessions.section.steps"), steps),
+            (t.t("sessions.section.calls"), calls),
+            (t.t("sessions.section.notes"), notes),
+            (t.t("sessions.section.findings"), findings),
+        ]
+
     def _copy_text(self, text: str, note: str) -> None:
         self.copy_to_clipboard(text)
         self._write_dim(note)
@@ -1962,13 +2093,26 @@ class SamuraiApp(ChatController, App[None]):
         operation_id = self.operation.id
         runs = self.agents.list_runs(operation_id)
         if runs:
+            active = self._active_spawn(operation_id)
             running = sum(1 for run in runs if run.status == AgentRunStatus.RUNNING)
-            agents_item.update(
-                Text(
-                    self.translator.t("strip.agents", running=running, total=len(runs)),
-                    style="#5bc0be",
+            if active is not None:
+                agents_item.update(
+                    Text(
+                        self.translator.t(
+                            "strip.subagent", run=active.run_id, task=active.task_id
+                        ),
+                        style="#5bc0be",
+                    )
                 )
-            )
+            else:
+                agents_item.update(
+                    Text(
+                        self.translator.t(
+                            "strip.agents", running=running, total=len(runs)
+                        ),
+                        style="#5bc0be",
+                    )
+                )
             agents_item.tooltip = "\n".join(
                 f"{run.id} | {run.task_id} | {run.status.value}" for run in runs[-8:]
             )
