@@ -156,6 +156,14 @@ class ToolRegistry:
             raise ToolValidationError(
                 f"{definition.kind.value} tool {definition.id} cannot declare network access"
             )
+        if definition.read_only and definition.risk_class in (RiskClass.R3, RiskClass.R4):
+            raise ToolValidationError(
+                f"tool {definition.id} is {definition.risk_class.value} and cannot be read-only"
+            )
+        if definition.risk_class is RiskClass.R0 and not definition.read_only:
+            raise ToolValidationError(
+                f"r0 tool {definition.id} must be declared read-only"
+            )
         if definition.kind == ToolKind.SANDBOX and definition.network is NetworkAccess.DIRECT:
             raise ToolValidationError(
                 f"sandbox tool {definition.id} reaches the network only via the proxy"
@@ -210,6 +218,7 @@ class LocalEchoTool:
             kind=ToolKind.LOCAL,
             description="Echo a short text back to the operator",
             risk_class=RiskClass.R0,
+            read_only=True,
             network=NetworkAccess.NONE,
             timeout_seconds=5,
             output_limit_bytes=4096,
@@ -241,6 +250,7 @@ class ProcessExecTool:
             kind=ToolKind.PROCESS,
             description="Run an allowlisted executable with an argv vector (no shell)",
             risk_class=RiskClass.R1,
+            read_only=True,
             network=NetworkAccess.NONE,
             timeout_seconds=30,
             output_limit_bytes=65536,
@@ -356,6 +366,7 @@ class HttpFetchTool:
             kind=ToolKind.HTTP,
             description="Fetch an in-scope URL over HTTP(S) with bounded output",
             risk_class=RiskClass.R2,
+            read_only=True,
             network=NetworkAccess.DIRECT,
             timeout_seconds=15,
             output_limit_bytes=65536,

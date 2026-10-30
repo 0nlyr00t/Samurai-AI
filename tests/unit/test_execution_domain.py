@@ -24,6 +24,7 @@ def make_definition(**overrides: object) -> ToolDefinition:
         "version": 1,
         "kind": ToolKind.LOCAL,
         "risk_class": RiskClass.R0,
+        "read_only": True,
     }
     payload.update(overrides)
     return ToolDefinition.model_validate(payload)
@@ -218,6 +219,33 @@ def test_registry_requires_http_tools_to_declare_direct_network() -> None:
     definition = make_definition(id="local.http", kind=ToolKind.HTTP)
     with pytest.raises(ToolValidationError, match="network=direct"):
         registry.register(_StubAdapter(definition))
+
+
+def test_r0_tools_must_be_read_only() -> None:
+    registry = default_registry()
+    definition = make_definition(id="local.writer", read_only=False)
+    with pytest.raises(ToolValidationError, match="must be declared read-only"):
+        registry.register(_StubAdapter(definition))
+
+
+@pytest.mark.parametrize("risk", [RiskClass.R3, RiskClass.R4])
+def test_state_changing_tools_cannot_be_read_only(risk: RiskClass) -> None:
+    registry = default_registry()
+    definition = make_definition(id="local.state", risk_class=risk, read_only=True)
+    with pytest.raises(ToolValidationError, match="cannot be read-only"):
+        registry.register(_StubAdapter(definition))
+
+
+def test_default_registry_read_only_flags() -> None:
+    definitions = {d.id: d for d in default_registry().definitions()}
+    assert definitions["local.echo"].read_only
+    assert definitions["process.exec"].read_only
+    assert definitions["http.fetch"].read_only
+    assert definitions["recon.httpx-probe"].read_only
+    # state changing or arbitrary: not read-only
+    assert not definitions["shell.exec"].read_only
+    assert not definitions["sandbox.exec"].read_only
+    assert not definitions["scan.nuclei"].read_only
 
 
 def test_network_access_reaches_network_property() -> None:
