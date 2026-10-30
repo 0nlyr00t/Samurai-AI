@@ -3568,3 +3568,46 @@ def test_welcome_shows_the_tagline_without_the_mark(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
+
+
+def test_legacy_directory_hint_is_shown_once(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("SAMURAI_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("SAMURAI_HOME", raising=False)
+    workdir = tmp_path / "work"
+    (workdir / ".samurai").mkdir(parents=True)
+    (workdir / ".samurai" / "samurai.db").write_text("")
+    monkeypatch.chdir(workdir)
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(110, 26)) as pilot:
+            await pilot.pause()
+            text = " ".join(line.text for line in app.query_one("#journal", RichLog).lines)
+            assert ".samurai" in text
+            assert "--db" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_no_legacy_hint_when_the_path_is_overridden(tmp_path: Path, monkeypatch) -> None:
+    workdir = tmp_path / "work"
+    (workdir / ".samurai").mkdir(parents=True)
+    (workdir / ".samurai" / "samurai.db").write_text("")
+    monkeypatch.chdir(workdir)
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(110, 26)) as pilot:
+            await pilot.pause()
+            text = " ".join(line.text for line in app.query_one("#journal", RichLog).lines)
+            assert "--db" not in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
