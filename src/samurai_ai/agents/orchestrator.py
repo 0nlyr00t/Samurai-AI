@@ -133,6 +133,7 @@ class AgentOrchestrator:
         stop_event: threading.Event | None = None,
         read_only_only: bool = False,
         approval_resolver: Callable[[str], bool] | None = None,
+        on_start: Callable[[AgentRun], None] | None = None,
         specialization: AgentSpecialization = AgentSpecialization.GENERAL,
         swarm_id: str | None = None,
         workspace: str | None = None,
@@ -207,8 +208,20 @@ class AgentOrchestrator:
             },
         )
         del operation
+        model_approvals: dict[str, str] = {}
+        if on_start is not None:
+            on_start(run)
         try:
-            steps = self._plan(operation_id, run, task.title, approval_id, extra_context)
+            steps = self._plan(
+                operation_id,
+                run,
+                task.title,
+                approval_id,
+                extra_context,
+                approval_resolver=approval_resolver,
+                model_approvals=model_approvals,
+                stop_event=stop_event,
+            )
             self._execute_steps(
                 operation_id,
                 run,
@@ -218,6 +231,7 @@ class AgentOrchestrator:
                 stop_event=stop_event,
                 read_only_only=read_only_only,
                 approval_resolver=approval_resolver,
+                model_approvals=model_approvals,
             )
             succeeded = run.status is AgentRunStatus.RUNNING
             if succeeded:
@@ -284,6 +298,10 @@ class AgentOrchestrator:
         task_title: str,
         approval_id: str | None,
         extra_context: str,
+        *,
+        approval_resolver: Callable[[str], bool] | None = None,
+        model_approvals: dict[str, str] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> tuple[str, ...]:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         context = self._blackboard_excerpt(blackboard, run.id)
@@ -295,7 +313,14 @@ class AgentOrchestrator:
         if extra_context:
             prompt += f"\n\n{extra_context}"
         output = self._call_model(
-            operation_id, run, prompt, parse_planner_output, approval_id
+            operation_id,
+            run,
+            prompt,
+            parse_planner_output,
+            approval_id,
+            approval_resolver=approval_resolver,
+            model_approvals=model_approvals,
+            stop_event=stop_event,
         )
         self._append(
             operation_id,
@@ -324,6 +349,7 @@ class AgentOrchestrator:
         stop_event: threading.Event | None = None,
         read_only_only: bool = False,
         approval_resolver: Callable[[str], bool] | None = None,
+        model_approvals: dict[str, str] | None = None,
     ) -> None:
         consecutive_rejects = 0
         for index, step in enumerate(steps):
@@ -332,7 +358,15 @@ class AgentOrchestrator:
             if self._stop_requested(run, stop_event):
                 return
             commands = self._execute_step_prompt(
-                operation_id, run, step, index, approval_id, extra_context
+                operation_id,
+                run,
+                step,
+                index,
+                approval_id,
+                extra_context,
+                approval_resolver=approval_resolver,
+                model_approvals=model_approvals,
+                stop_event=stop_event,
             )
             for command in commands:
                 if self._stop_requested(run, stop_event):
@@ -364,6 +398,10 @@ class AgentOrchestrator:
         index: int,
         approval_id: str | None,
         extra_context: str,
+        *,
+        approval_resolver: Callable[[str], bool] | None = None,
+        model_approvals: dict[str, str] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> tuple[AgentCommand, ...]:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         prompt = (
@@ -375,7 +413,14 @@ class AgentOrchestrator:
         if extra_context:
             prompt += f"\n\n{extra_context}"
         commands = self._call_model(
-            operation_id, run, prompt, parse_executor_output, approval_id
+            operation_id,
+            run,
+            prompt,
+            parse_executor_output,
+            approval_id,
+            approval_resolver=approval_resolver,
+            model_approvals=model_approvals,
+            stop_event=stop_event,
         )
         self._append(
             operation_id,
@@ -396,16 +441,21 @@ class AgentOrchestrator:
         prompt: str,
         parse: Callable[[str], _T],
         approval_id: str | None,
+        *,
+        approval_resolver: Callable[[str], bool] | None = None,
+        model_approvals: dict[str, str] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> _T:
         current = prompt
         for attempt in range(MAX_PARSE_RETRIES + 1):
-            response = self.models.complete(
+            response = self._complete(
                 operation_id,
-                run.model_route[0],
+                run,
                 current,
-                fallbacks=tuple(run.model_route[1:]),
-                approval_id=approval_id,
-                extra_payload={"agent_run_id": run.id},
+                approval_id,
+                approval_resolver=approval_resolver,
+                model_approvals=model_approvals,
+                stop_event=stop_event,
             )
             try:
                 return parse(response.text)
@@ -414,6 +464,41 @@ class AgentOrchestrator:
                     raise
                 current = corrective_prompt(prompt, exc)
         raise AgentOutputError("unreachable parser retry state")
+
+    def _complete(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        prompt: str,
+        approval_id: str | None,
+        *,
+        approval_resolver: Callable[[str], bool] | None = None,
+        model_approvals: dict[str, str] | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> Any:
+        while True:
+            if approval_id is None and model_approvals:
+                approval_id = model_approvals.get("id")
+            try:
+                return self.models.complete(
+                    operation_id,
+                    run.model_route[0],
+                    prompt,
+                    fallbacks=tuple(run.model_route[1:]),
+                    approval_id=approval_id,
+                    extra_payload={"agent_run_id": run.id},
+                )
+            except ApprovalRequiredError as exc:
+                if approval_resolver is None:
+                    raise
+                if not approval_resolver(exc.approval_id):
+                    if stop_event is not None and stop_event.is_set():
+                        raise AgentError("cancelled by the operator") from exc
+                    raise
+                self.kernel.approve(exc.approval_id, decided_by="subagent")
+                approval_id = exc.approval_id
+                if model_approvals is not None:
+                    model_approvals["id"] = approval_id
 
     def _apply_command(
         self,

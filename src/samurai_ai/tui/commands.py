@@ -94,6 +94,15 @@ COMMANDS: tuple[CommandSpec, ...] = (
         operation=True,
     ),
     _spec("/agents", GROUP_TOOLS, "_show_agents", operation=True),
+    _spec("/sessions", GROUP_TOOLS, "_show_sessions", operation=True),
+    _spec(
+        "/subagent",
+        GROUP_TOOLS,
+        "_cmd_subagent",
+        argument=True,
+        prompt_key="palette.prompt.subagent",
+        operation=True,
+    ),
     _spec("/swarm", GROUP_TOOLS, "_show_swarms", operation=True),
     # playbooks and data
     _spec("/secrets", GROUP_PLAYBOOKS, "_show_secrets", operation=True),
