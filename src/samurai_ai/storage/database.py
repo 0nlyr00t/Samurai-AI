@@ -681,6 +681,17 @@ class Database:
                 target_connection.close()
         return target
 
+    def pre_migration_backup(self, target_version: int) -> Path:
+        """Keep a copy of the current database before migrating it forward.
+
+        The copy is written beside the database (not into the data directory)
+        so a restore is a plain file rename by the operator.
+        """
+        destination = self.path.with_name(
+            f"{self.path.name}.pre-v{target_version}.bak"
+        )
+        return self.backup(destination)
+
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
@@ -697,13 +708,40 @@ class Database:
                 row["version"]
                 for row in connection.execute("SELECT version FROM schema_migrations")
             }
-            for version, script in _MIGRATIONS:
-                if version not in applied:
-                    connection.executescript(script)
-                    connection.execute(
-                        "INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)",
-                        (version,),
-                    )
+            pending = [
+                (version, script)
+                for version, script in _MIGRATIONS
+                if version not in applied
+            ]
+            if not pending:
+                return
+            if applied and self.path.exists():
+                self.pre_migration_backup(pending[0][0])
+            for version, script in pending:
+                self._apply_migration(connection, version, script)
+
+    @staticmethod
+    def _apply_migration(
+        connection: sqlite3.Connection, version: int, script: str
+    ) -> None:
+        """Run one migration and record it in the same transaction.
+
+        ``executescript`` implicitly commits a pending transaction, so the
+        BEGIN/COMMIT and the version row travel inside the script text: a
+        failure halfway leaves neither schema changes nor a version row.
+        """
+        statement = (
+            "BEGIN IMMEDIATE;\n"
+            f"{script}\n"
+            f"INSERT INTO schema_migrations(version) VALUES ({version});\n"
+            "COMMIT;"
+        )
+        try:
+            connection.executescript(statement)
+        except BaseException:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
