@@ -28,6 +28,7 @@ from textual.widgets.option_list import Option
 from samurai_ai import __version__
 from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentRunStatus
+from samurai_ai.domain.execution import ToolDefinition, ToolRun
 from samurai_ai.domain.goal import Goal, GoalError
 from samurai_ai.domain.kernel import (
     ApprovalStatus,
@@ -69,6 +70,8 @@ from samurai_ai.tui.screens import (
     AccessPromptScreen,
     ArgumentScreen,
     CustomEndpointScreen,
+    HelpScreen,
+    InspectorScreen,
     LanguagePromptScreen,
     ModelPickerScreen,
     NewOperationScreen,
@@ -166,6 +169,10 @@ class SamuraiApp(ChatController, App[None]):
         padding: 0 1;
         display: none;
     }
+    #welcome {
+        padding: 1 2;
+        height: auto;
+    }
     #thinking {
         height: 1;
         padding: 0 1;
@@ -238,6 +245,8 @@ class SamuraiApp(ChatController, App[None]):
         Binding("ctrl+c", "quit_requested", "Quit", show=False),
         Binding("ctrl+o", "toggle_journal", "Toggle journal", show=False),
         Binding("ctrl+p", "command_palette", "Commands", show=False, priority=True),
+        Binding("f1", "show_help", "Keys", show=False),
+        Binding("ctrl+i", "inspect_last_run", "Inspect run", show=False, priority=True),
         Binding("ctrl+s", "steer", "Steer the running turn", show=False, priority=True),
         Binding("ctrl+b", "shell_background", "Background the shell job", show=False),
         Binding("ctrl+e", "expand_output", "Expand collapsed output", show=False, priority=True),
@@ -370,6 +379,7 @@ class SamuraiApp(ChatController, App[None]):
             yield PlusButton("+", id="new-tab")
             yield Static(id="opname")
             yield Static(id="brand")
+        yield Static(id="welcome")
         with Horizontal(id="body"):
             with ContentSwitcher(initial="journal", id="views"):
                 yield SelectableRichLog(
@@ -573,6 +583,12 @@ class SamuraiApp(ChatController, App[None]):
         if pane != "journal":
             self._render_view(pane)
         self.query_one("#command-input", Input).focus()
+
+    def _cmd_new_operation(self) -> None:
+        self._show_new_operation()
+
+    def action_new_operation(self) -> None:
+        self._show_new_operation()
 
     def _show_new_operation(self) -> None:
         self.push_screen(
@@ -1138,9 +1154,239 @@ class SamuraiApp(ChatController, App[None]):
         handler = getattr(self, spec.handler)
         handler(argument) if spec.takes_argument else handler()
 
+    def action_inspect_last_run(self) -> None:
+        if self.operation is None:
+            self._write_line("[error] " + self.translator.t("palette.no-operation"))
+            return
+        runs = self.execution.list_runs(self.operation.id)
+        if not runs:
+            self._write_line(self.translator.t("inspector.no-runs"))
+            return
+        self._show_inspector(runs[-1].id)
+
+    def _show_inspector(self, run_id: str) -> None:
+        """Open the run inspector, or say which run is missing."""
+        try:
+            run = self.execution.get_run(run_id.strip())
+        except Exception:  # noqa: BLE001 - unknown id is a message, not a crash
+            self._write_line(self.translator.t("inspector.unknown-run", run=run_id))
+            return
+        adapter = self.execution.registry.get(run.tool_id, run.tool_version)
+        definition = adapter.definition
+        sections = self._inspector_sections(run, definition)
+        command = self._run_command_text(run)
+        actions: dict[str, object] = {}
+        if command:
+            actions["c"] = lambda: self._copy_text(
+                command, self.translator.t("inspector.copy-command")
+            )
+            actions["r"] = lambda: self._start_shell_mode(command)
+        self.push_screen(
+            InspectorScreen(
+                self.translator,
+                self.translator.t(
+                    "inspector.title",
+                    run=run.id,
+                    tool=definition.id,
+                    version=definition.version,
+                ),
+                sections,
+                actions,  # type: ignore[arg-type]
+            )
+        )
+
+    def _copy_text(self, text: str, note: str) -> None:
+        self.copy_to_clipboard(text)
+        self._write_dim(note)
+
+    @staticmethod
+    def _run_command_text(run: ToolRun) -> str:
+        parameters = getattr(run, "parameters", {}) or {}
+        if "command" in parameters:
+            return str(parameters["command"])
+        if "argv" in parameters:
+            return " ".join(str(part) for part in parameters["argv"])
+        if "url" in parameters:
+            return str(parameters["url"])
+        return ""
+
+    def _start_shell_mode(self, command: str) -> None:
+        self._shell_mode(command)
+
+    def _inspector_sections(
+        self, run: ToolRun, definition: ToolDefinition
+    ) -> list[tuple[str, list[str]]]:
+        t = self.translator
+        lines: list[tuple[str, list[str]]] = []
+        lines.append(
+            (
+                t.t("inspector.section.definition"),
+                [
+                    t.t(
+                        "inspector.risk",
+                        risk=definition.risk_class.value,
+                        network=definition.network.value,
+                        read_only=str(definition.read_only).lower(),
+                    ),
+                    t.t(
+                        "inspector.status",
+                        status=run.status.value,
+                        code=run.exit_code,
+                    ),
+                    getattr(definition, "description", ""),
+                ],
+            )
+        )
+        parameters = getattr(run, "parameters", {}) or {}
+        lines.append(
+            (
+                t.t("inspector.section.parameters"),
+                [f"{key} = {value}" for key, value in parameters.items()],
+            )
+        )
+        lines.append(
+            (
+                t.t("inspector.section.scope"),
+                self._scope_lines(parameters),
+            )
+        )
+        lines.append((t.t("inspector.section.approval"), self._run_approval_lines(run)))
+        lines.append((t.t("inspector.section.egress"), self._run_egress_lines(run)))
+        lines.append((t.t("inspector.section.artifacts"), self._run_artifact_lines(run)))
+        output = self._run_output_lines(run)
+        lines.append((t.t("inspector.section.output"), output))
+        warnings = len(getattr(run, "injection_warnings", ()))
+        lines.append(
+            (
+                t.t("inspector.section.trust"),
+                [
+                    t.t(
+                        "inspector.trust-line",
+                        trust=run.trust.value,
+                        warnings=t.t("inspector.warnings", count=warnings)
+                        if warnings
+                        else "",
+                    )
+                ],
+            )
+        )
+        return lines
+
+    def _scope_lines(self, parameters: dict[str, object]) -> list[str]:
+        targets: list[str] = []
+        for key in ("targets", "url", "target"):
+            value = parameters.get(key)
+            if isinstance(value, list):
+                targets.extend(str(item) for item in value)
+            elif value:
+                targets.append(str(value))
+        if self.operation is None:
+            return []
+        lines: list[str] = []
+        for target in targets:
+            decision = self.operation.scope.evaluate(target)
+            verdict = "allow" if decision.allowed else "deny"
+            lines.append(f"{verdict} {target} — {decision.detail}")
+        return lines
+
+    def _run_approval_lines(self, run: ToolRun) -> list[str]:
+        approval_id = getattr(run, "approval_id", None)
+        if approval_id is None:
+            return []
+        approval = self.kernel.kernel.get_approval(approval_id)
+        if approval is None:
+            return [approval_id]
+        return [
+            self.translator.t(
+                "inspector.approval-line",
+                action=approval.action,
+                status=approval.status.value,
+                who=approval.decided_by or "-",
+            )
+        ]
+
+    def _run_egress_lines(self, run: ToolRun) -> list[str]:
+        operation = self.operation
+        if operation is None:
+            return []
+        run_id = run.id
+        lines: list[str] = []
+        for event in self.service.repository.events(operation.id):
+            if not event.event_type.startswith("tool.run."):
+                continue
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if payload.get("run_id") != run_id:
+                continue
+            host = payload.get("host")
+            if host is None:
+                continue
+            lines.append(
+                self.translator.t(
+                    "inspector.egress-line",
+                    verdict=payload.get("verdict", "?"),
+                    host=host,
+                    port=payload.get("port", "?"),
+                    bytes=payload.get("bytes", 0),
+                )
+            )
+        return lines
+
+    def _run_artifact_lines(self, run: ToolRun) -> list[str]:
+        operation = self.operation
+        if operation is None:
+            return []
+        wanted = {
+            getattr(run, "stdout_artifact_id", None),
+            getattr(run, "stderr_artifact_id", None),
+        }
+        wanted.discard(None)
+        lines: list[str] = []
+        for artifact in self.kernel.kernel.list_artifacts(operation.id):
+            if artifact.id not in wanted:
+                continue
+            lines.append(
+                self.translator.t(
+                    "inspector.artifact-line",
+                    kind=artifact.kind.value,
+                    id=artifact.id,
+                    sha256=artifact.sha256,
+                    size=artifact.size_bytes,
+                )
+            )
+        return lines
+
+    def _run_output_lines(self, run: ToolRun) -> list[str]:
+        lines: list[str] = []
+        for attr in ("stdout_artifact_id", "stderr_artifact_id"):
+            artifact_id = getattr(run, attr, None)
+            if artifact_id is None or self.operation is None:
+                continue
+            artifact = next(
+                (
+                    item
+                    for item in self.kernel.kernel.list_artifacts(self.operation.id)
+                    if item.id == artifact_id
+                ),
+                None,
+            )
+            if artifact is None:
+                continue
+            for line in self._read_artifact(artifact):
+                lines.append(line)
+        return lines
+
+    def _read_artifact(self, artifact: Artifact) -> list[str]:
+        try:
+            text = Path(artifact.path).read_text(errors="replace")
+        except OSError:
+            return []
+        return text.rstrip().splitlines()[-40:]
+
+    def action_show_help(self) -> None:
+        self._show_help()
+
     def _show_help(self) -> None:
-        for line in self.translator.help_lines():
-            self._write_line(line)
+        self.push_screen(HelpScreen(self.translator))
 
     def _cmd_exit(self) -> None:
         # ``_exit`` is already Textual's own hook, so the command differs
@@ -1607,7 +1853,38 @@ class SamuraiApp(ChatController, App[None]):
             text = "~" + text[len(home):]
         return text
 
+    def _refresh_welcome(self) -> None:
+        welcome = self.query_one("#welcome", Static)
+        if self.operation is not None:
+            welcome.display = False
+            return
+        welcome.display = True
+        latest = self.service.latest()
+        lines = Text()
+        lines.append(self.translator.t("welcome.title"), style="bold #4fa8ff")
+        lines.append("\n\n")
+        lines.append(self.translator.t("welcome.palette"), style="#e6edf3")
+        lines.append("\n")
+        lines.append(self.translator.t("welcome.new"), style="#e6edf3")
+        if latest is not None:
+            lines.append("\n")
+            lines.append(
+                self.translator.t("welcome.last", name=latest.name), style="#e6edf3"
+            )
+        lines.append("\n\n")
+        lines.append(self.translator.t("welcome.hint"), style="#7d8590")
+        welcome.update(lines)
+
+    def _open_latest_operation(self) -> None:
+        latest = self.service.latest()
+        if latest is None:
+            self._write_line(self.translator.t("welcome.no-last"))
+            return
+        self.operation = latest
+        self._refresh_chrome()
+
     def _refresh_chrome(self) -> None:
+        self._refresh_welcome()
         self.query_one("#brand", Static).update(self._brand_text())
         title = self._auto_title or (self.operation.name if self.operation else "")
         self.query_one("#opname", Static).update(title)

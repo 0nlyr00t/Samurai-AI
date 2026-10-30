@@ -1,6 +1,7 @@
 """Reusable widgets: selection-aware journal log, tabs, history input."""
 
 from rich.segment import Segment
+from textual import events
 from textual.binding import Binding
 from textual.events import Mount
 from textual.selection import Selection
@@ -87,6 +88,16 @@ class HistoryInput(Input):
         Binding("tab", "accept_suggestion", show=False),
         Binding("escape", "close_suggestions", show=False),
     ]
+
+    def on_key(self, event: events.Key) -> None:
+        """`?` on an empty field opens the key reference instead of typing."""
+        if getattr(event, "key", "") != "question_mark" or self.value:
+            return
+        event.stop()
+        event.prevent_default()
+        show_help = getattr(self.app, "action_show_help", None)
+        if show_help is not None:
+            show_help()
 
     def action_history_previous(self) -> None:
         if self._suggestions_step(-1):
