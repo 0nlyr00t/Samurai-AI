@@ -11,8 +11,11 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from samurai_ai.domain.operations import Operation, OperationMode
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.storage import database as database_module
 from samurai_ai.storage.database import _MIGRATIONS, Database
 from samurai_ai.storage.operations import OperationRepository
 
@@ -157,3 +160,86 @@ def test_backup_after_writes_captures_latest_state(tmp_path: Path) -> None:
     backup_repo = OperationRepository(Database(backup_path))
     assert backup_repo.get(first.id) is not None
     assert backup_repo.get(second.id) is not None
+
+
+def test_failed_migration_leaves_no_partial_schema(tmp_path: Path) -> None:
+    database_path = tmp_path / "partial.db"
+    operation = _operation()
+    _build_v1_database(database_path, operation)
+    broken = (
+        len(CURRENT_VERSIONS) + 1,
+        """
+CREATE TABLE broken_probe (id INTEGER PRIMARY KEY);
+ALTER TABLE table_that_does_not_exist ADD COLUMN nope INTEGER NOT NULL;
+""",
+    )
+    original = database_module._MIGRATIONS
+    database_module._MIGRATIONS = (*original, broken)
+    try:
+        database = Database(database_path)
+        with pytest.raises(sqlite3.OperationalError):
+            database.initialize()
+
+        with database.connect() as connection:
+            versions = {
+                row["version"]
+                for row in connection.execute("SELECT version FROM schema_migrations")
+            }
+            probe = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='broken_probe'"
+            ).fetchone()
+        # the version is not recorded and the partial DDL rolled back
+        assert versions == CURRENT_VERSIONS
+        assert probe is None
+
+        # a corrected retry applies only the pending version
+        database_module._MIGRATIONS = (
+            *original,
+            (broken[0], "CREATE TABLE broken_probe (id INTEGER PRIMARY KEY);"),
+        )
+        Database(database_path).initialize()
+        with database.connect() as connection:
+            versions = {
+                row["version"]
+                for row in connection.execute("SELECT version FROM schema_migrations")
+            }
+            probe = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='broken_probe'"
+            ).fetchone()
+        assert versions == CURRENT_VERSIONS | {broken[0]}
+        assert probe is not None
+    finally:
+        database_module._MIGRATIONS = original
+
+
+def test_migration_keeps_a_pre_migration_backup(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy.db"
+    operation = _operation()
+    _build_v1_database(database_path, operation)
+
+    Database(database_path).initialize()
+
+    backup_path = database_path.with_name(
+        f"{database_path.name}.pre-v{_MIGRATIONS[1][0]}.bak"
+    )
+    assert backup_path.exists()
+    backup = Database(backup_path)
+    with backup.connect() as connection:
+        versions = {
+            row["version"]
+            for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+    # the copy is the pre-migration state, not a post-migration one
+    assert versions == {1}
+    assert OperationRepository(backup).get(operation.id) is not None
+
+
+def test_initialize_is_idempotent_without_pending_migrations(tmp_path: Path) -> None:
+    database_path = tmp_path / "settled.db"
+    _build_v1_database(database_path, _operation())
+    Database(database_path).initialize()
+    backups = list(tmp_path.glob("*.bak"))
+    assert len(backups) == 1
+
+    Database(database_path).initialize()
+    assert list(tmp_path.glob("*.bak")) == backups
