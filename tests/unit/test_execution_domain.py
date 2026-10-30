@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from samurai_ai.domain.execution import (
+    NetworkAccess,
     OutputTrust,
     PromptInjectionScanner,
     SecretRedactor,
@@ -36,7 +37,7 @@ def test_tool_definition_is_frozen_and_versioned() -> None:
     definition = make_definition(description="Probe")
     assert definition.id == "local.probe"
     assert definition.version == 1
-    assert definition.network_access is False
+    assert definition.network is NetworkAccess.NONE
     assert definition.output_limit_bytes == 65536
     with pytest.raises(ValidationError):
         definition.description = "mutated"  # type: ignore[misc]
@@ -173,10 +174,56 @@ def test_default_registry_contains_stage2_tools() -> None:
     assert definitions["sandbox.exec"].risk_class == RiskClass.R2
     assert definitions["recon.httpx-probe"].risk_class == RiskClass.R2
     assert definitions["scan.nuclei"].risk_class == RiskClass.R3
-    assert definitions["http.fetch"].network_access is True
-    assert definitions["process.exec"].network_access is False
-    assert definitions["sandbox.exec"].network_access is False
+    assert definitions["http.fetch"].network is NetworkAccess.DIRECT
+    assert definitions["process.exec"].network is NetworkAccess.NONE
+    # sandbox scanners reach the network — but only through the scoped proxy
+    assert definitions["sandbox.exec"].network is NetworkAccess.PROXIED
+    assert definitions["recon.httpx-probe"].network is NetworkAccess.PROXIED
+    assert definitions["scan.nuclei"].network is NetworkAccess.PROXIED
     assert definitions["sandbox.exec"].kind == ToolKind.SANDBOX
+
+
+class _StubAdapter:
+    def __init__(self, definition: ToolDefinition) -> None:
+        self._definition = definition
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def invoke(self, params: dict[str, object], scope: object) -> object:
+        raise NotImplementedError
+
+
+@pytest.mark.parametrize(
+    ("kind", "network"),
+    [
+        (ToolKind.SANDBOX, NetworkAccess.DIRECT),
+        (ToolKind.PROCESS, NetworkAccess.PROXIED),
+        (ToolKind.LOCAL, NetworkAccess.DIRECT),
+        (ToolKind.MCP, NetworkAccess.PROXIED),
+    ],
+)
+def test_registry_rejects_impossible_network_declarations(
+    kind: ToolKind, network: NetworkAccess
+) -> None:
+    registry = default_registry()
+    definition = make_definition(id="local.impossible", kind=kind, network=network)
+    with pytest.raises(ToolValidationError, match="network"):
+        registry.register(_StubAdapter(definition))
+
+
+def test_registry_requires_http_tools_to_declare_direct_network() -> None:
+    registry = default_registry()
+    definition = make_definition(id="local.http", kind=ToolKind.HTTP)
+    with pytest.raises(ToolValidationError, match="network=direct"):
+        registry.register(_StubAdapter(definition))
+
+
+def test_network_access_reaches_network_property() -> None:
+    assert NetworkAccess.NONE.reaches_network is False
+    assert NetworkAccess.PROXIED.reaches_network is True
+    assert NetworkAccess.DIRECT.reaches_network is True
 
 
 def test_registry_is_fail_closed_for_unknown_tools() -> None:

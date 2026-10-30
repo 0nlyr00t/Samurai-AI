@@ -65,7 +65,8 @@ def test_cli_tool_list(tmp_path: Path, capsys) -> None:
     assert main(["--db", database, "--json", "tool", "list"]) == 0
     tools = json.loads(capsys.readouterr().out)
     by_id = {tool["id"]: tool for tool in tools}
-    assert by_id["http.fetch"]["network_access"] is True
+    assert by_id["http.fetch"]["network"] == "direct"
+    assert by_id["local.echo"]["network"] == "none"
     assert by_id["local.echo"]["risk_class"] == "r0"
 
 

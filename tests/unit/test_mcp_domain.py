@@ -4,7 +4,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from samurai_ai.domain.execution import ToolNotFoundError, ToolValidationError
+from samurai_ai.domain.execution import (
+    NetworkAccess,
+    ToolNotFoundError,
+    ToolValidationError,
+)
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.mcp import (
     MCP_PROTOCOL_VERSION,
@@ -218,11 +222,11 @@ def test_adapter_definition_is_r2_and_schema_validated() -> None:
     definition = adapter.definition
     assert definition.id == "mcp.fake.echo"
     assert definition.risk_class == RiskClass.R2
-    assert definition.network_access is True
+    assert definition.network is NetworkAccess.DIRECT
     assert definition.kind.value == "mcp"
 
     stdio_adapter = McpToolAdapter(make_server(), tool)
-    assert stdio_adapter.definition.network_access is False
+    assert stdio_adapter.definition.network is NetworkAccess.NONE
 
     registry = ToolRegistry()
     with pytest.raises(ToolValidationError, match="missing required"):

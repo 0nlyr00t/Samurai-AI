@@ -52,7 +52,7 @@ def handle_execution_command(
             _print_json([definition.model_dump(mode="json") for definition in definitions])
         else:
             for definition in definitions:
-                network = "network" if definition.network_access else "no-network"
+                network = f"network={definition.network.value}"
                 print(
                     f"{definition.id}\tv{definition.version}\t{definition.kind.value}\t"
                     f"{definition.risk_class.value}\t{network}\t{definition.description}"
