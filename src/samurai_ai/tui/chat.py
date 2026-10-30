@@ -19,10 +19,11 @@ from samurai_ai.domain.operations import Operation, OperationMode
 from samurai_ai.domain.permission import classify_command
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
+from samurai_ai.i18n import Translator
+from samurai_ai.tui import brand
 from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
-    from samurai_ai.i18n import Translator
     from samurai_ai.services.execution import ToolExecutionService
     from samurai_ai.services.goals import GoalService
     from samurai_ai.services.kernel import KernelService
@@ -47,6 +48,7 @@ class ChatController:
         _cwd: Any
 
         def paint(self, style: str) -> str: ...
+        def brand_painter(self) -> Any: ...
         _chat_history: list[Message]
         _steer_queue: list[str]
         _chat_busy: bool
@@ -155,8 +157,7 @@ class ChatController:
         "agent_spawn": "_run_spawn_tool",
     }
 
-    _THINKING_FRAMES = "⠋⠙⠹⠸⠼⴦⦧⡇⠏"
-    _THINKING_COLORS = ("accent-alt", "accent", "accent", "accent")
+    _THINKING_DOTS = (0, 1, 2, 3, 2, 1)
 
     def _chat_system_prompt(self) -> str:
         autonomy = self.translator.t(
@@ -187,16 +188,18 @@ class ChatController:
             self._thinking_timer = self.set_interval(0.12, self._thinking_tick)
 
     def _thinking_tick(self) -> None:
+        """A breathing katana, then the word: the mark carries the motion."""
         widget = self.query_one("#thinking", Static)
-        frame = self._THINKING_FRAMES[self._thinking_frame % len(self._THINKING_FRAMES)]
-        dots = "·" * (1 + (self._thinking_frame // 4) % 3)
-        color = self._THINKING_COLORS[(self._thinking_frame // 8) % len(self._THINKING_COLORS)]
-        widget.update(
-            Text(
-                f"{frame} {self.translator.t('chat.thinking')}{dots}",
-                style=self.paint(f"bold {color}"),
-            )
+        mark = brand.frame(self._thinking_frame, self.brand_painter())
+        dots = "·" * self._THINKING_DOTS[self._thinking_frame % len(self._THINKING_DOTS)]
+        line = Text()
+        line.append_text(mark)
+        line.append(" ")
+        line.append(
+            self.translator.t("chat.thinking") + dots,
+            style=self.paint("bold accent"),
         )
+        widget.update(line)
         self._thinking_frame += 1
 
     def _thinking_stop(self) -> None:
