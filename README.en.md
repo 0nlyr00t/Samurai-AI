@@ -66,7 +66,7 @@ Implemented:
 - custom playbooks (JSON templates with structural validation, immutable
   storage, `playbook install/use/list-custom`) and trusted versioned skills
   (`--trusted` required, sha256 recorded, bounded injection into executor
-  prompts), TUI `/playbooks` and `/skills`, SQLite v14;
+  prompts), TUI `/playbooks` and `/skills`, SQLite v16;
 - a stable exit code contract (0/1/2, pinned by tests), NDJSON journal
   export (`events export`), a headless mode for CI (`headless run` with a
   JSON summary), and GitHub Actions CI (ruff, strict mypy, pytest, build);
@@ -81,15 +81,17 @@ Implemented:
   event journal, and baseline comparison for regression gating (`eval run`,
   `eval compare`), with the `evals/smoke.json` smoke suite in CI;
 - RU/EN first-run language selection and `/lang` switching;
-- SQLite migrations v1–v14, append-only events, and optimistic concurrency;
+- SQLite migrations v1–v16, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 609 unit/integration/CLI/TUI tests.
+- 621 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), wave-2 security tools (subfinder/nmap/ffuf —
 technical blockers documented in `md/threat-review-security-tools.md`),
-LLM streaming, full egress enforcement on Docker Desktop
-for Mac, and OS package installers (a bare standalone binary is available).
+LLM streaming, per-argument permission rules with a doom-loop guard,
+extension seams/plugins, an operation web surface, full egress enforcement on
+Docker Desktop for Mac, and OS package installers (a bare standalone binary is
+available).
 
 ## Installation
 

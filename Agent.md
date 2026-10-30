@@ -55,7 +55,7 @@ uv run samurai tui
 - findings workflow `candidate → validating → validated / false-positive / duplicate → reported`;
 - snapshots/restore/fork, recovery actions reconcile и plan/scope diff;
 - versioned fail-closed tool registry;
-- `local.echo`, `process.exec` без shell/network и `http.fetch` GET/HEAD через scope broker;
+- `local.echo`, `process.exec` без shell/network и `http.fetch` GET/HEAD через scope broker; сетевой доступ инструмента объявляется тристейтом `NetworkAccess` (`none` / `proxied` — только через scope-прокси / `direct` — host-сокет с проверкой scope), инварианты проверяет реестр;
 - async ProcessManager с timeout, cancel, output limits и circuit breaker;
 - DNS/redirect scope revalidation для HTTP tool;
 - recovery action и SQLite v4 `tool_runs` для каждого execution;
@@ -86,7 +86,7 @@ uv run samurai tui
 - `src/samurai_ai/agents/` — versioned model registry (static + persisted), capability negotiation, OpenAI-compatible/Anthropic/Gemini клиенты, Ollama provider, ModelRouter (retry/fallback), budgets, blackboard, parser и AgentOrchestrator.
 - `src/samurai_ai/execution/` — static registry (с dynamic resolver hook), ProcessManager, HTTP egress broker (GET/HEAD/POST, DNS pinning), Docker sandbox runner, scoped egress proxy и minimal MCP client (stdio/HTTP transports).
 - `src/samurai_ai/i18n.py` — RU/EN Translator и TUI resources.
-- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v8.
+- `src/samurai_ai/storage/database.py` — SQLite connection, transactions и migrations v1–v16.
 - `src/samurai_ai/storage/operations.py` — OperationRepository и append-only events.
 - `src/samurai_ai/storage/kernel.py` — KernelRepository для plans/approvals/artifacts/findings.
 - `src/samurai_ai/storage/recovery.py` — snapshots, recovery actions и app settings.
