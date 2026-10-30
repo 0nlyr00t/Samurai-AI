@@ -89,7 +89,7 @@ Implemented:
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v17, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 753 unit/integration/CLI/TUI tests.
+- 763 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), wave-2 security tools (subfinder/nmap/ffuf —
@@ -115,6 +115,10 @@ Update to the latest release:
 samurai update          # check and update
 samurai update --check  # only check for a newer version
 ```
+
+State — database, vault key, themes and bindings — lives in `~/.config/samurai`
+(`$XDG_CONFIG_HOME`, overridden by `SAMURAI_HOME`). A leftover `.samurai/` is
+reported with a `--db` hint.
 
 ## Development quick start
 

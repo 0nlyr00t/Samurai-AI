@@ -85,7 +85,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v17, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 753 unit/integration/CLI/TUI tests.
+- 763 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), security tools волны 2 (subfinder/nmap/ffuf —
@@ -110,6 +110,10 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh
 samurai update          # проверить и обновить
 samurai update --check  # только проверить наличие новой версии
 ```
+
+Состояние — база, ключ vault, темы и биндинги — лежит в `~/.config/samurai`
+(`$XDG_CONFIG_HOME`, переопределяется `SAMURAI_HOME`). Если рядом осталась старая
+`.samurai/`, приложение скажет об этом и подскажет `--db`.
 
 ## Быстрый старт для разработки
 
