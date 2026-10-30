@@ -2734,3 +2734,217 @@ def test_open_without_history_reports(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
+
+
+def _session_stack(tmp_path: Path, responses: list[str] | None = None):
+    """A stack whose subagent can run unattended (yolo, English)."""
+    stack, provider, operation = _sequence_stack(tmp_path, responses or [])
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    return stack, provider, operation
+
+
+def test_subagent_command_starts_a_child(tmp_path: Path) -> None:
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._handle_command("/subagent look around")
+            for _ in range(20):
+                await pilot.pause()
+            children = app.child_runs()
+            assert len(children) == 1
+            assert children[0].created_by == "subagent"
+            strip = str(app.query_one("#strip-agents", Static).render())
+            # the child may already be done, so the strip shows either label
+            assert "child" in strip or "/1" in strip
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_second_subagent_reports_the_running_child(tmp_path: Path) -> None:
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            first = await app.spawn_subagent("first job")
+            assert first is not None
+            assert await app.spawn_subagent("second job") is None
+            assert [run.id for run in app.child_runs()] == [first]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_subagent_bootstraps_a_plan_task(tmp_path: Path) -> None:
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await app.spawn_subagent("scan the host")
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            assert plan.tasks[0].title == "scan the host"
+            assert plan.tasks[0].status is TaskStatus.IN_PROGRESS
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_sessions_screen_lists_and_opens_a_child(tmp_path: Path) -> None:
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import SessionDetailScreen, SessionsScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            run_id = await app.spawn_subagent("look around")
+            app._show_sessions()
+            await pilot.pause()
+            assert isinstance(app.screen, SessionsScreen)
+            assert app.screen.query_one("#sessions-list", OptionList).option_count == 1
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, SessionDetailScreen)
+            assert run_id is not None
+            assert run_id in str(app.screen.query_one("#session-title", Static).render())
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_sessions_screen_empty_state(tmp_path: Path) -> None:
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import SessionsScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._show_sessions()
+            await pilot.pause()
+            assert isinstance(app.screen, SessionsScreen)
+            empty = app.screen.query_one("#sessions-empty", Static)
+            assert "subagent" in str(empty.render())
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_stopping_a_child_fails_the_run_and_frees_the_task(tmp_path: Path) -> None:
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            run_id = await app.spawn_subagent("look around")
+            assert run_id is not None
+            app._stop_session(run_id)
+            for _ in range(40):
+                await pilot.pause()
+                await asyncio.sleep(0.02)
+            run = stack[6].get(run_id)
+            assert run is not None
+            assert run.status is AgentRunStatus.FAILED
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            assert plan.tasks[0].status is TaskStatus.PENDING
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_agent_spawn_tool_starts_a_child(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="agent_spawn", arguments={"instruction": "look"})
+            )
+            assert "started in the background" in message.content
+            assert len(app.child_runs()) == 1
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_agent_spawn_tool_is_blocked_in_plan_mode(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._set_plan_mode(True)
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="agent_spawn", arguments={"instruction": "look"})
+            )
+            assert "blocked" in message.content
+            assert app.child_runs() == []
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_subagent_asks_for_approvals_in_ask_mode(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens import AccessPromptScreen
+
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            job = asyncio.create_task(app.spawn_subagent("look around"))
+            for _ in range(40):
+                await pilot.pause()
+                if isinstance(app.screen, AccessPromptScreen):
+                    break
+            assert isinstance(app.screen, AccessPromptScreen)
+            subtitle = str(app.screen.query_one("#access-action", Static).render())
+            assert "agent_" in subtitle
+            app.screen.dismiss(True)
+            await asyncio.wait_for(job, 20)
+            for _ in range(20):
+                await pilot.pause()
+            approvals = [
+                item
+                for item in stack[1].kernel.list_approvals(operation.id)
+                if item.action.startswith("model.call")
+            ]
+            assert any(item.decided_by == "subagent" for item in approvals)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
