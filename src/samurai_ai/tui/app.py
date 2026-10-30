@@ -26,6 +26,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from samurai_ai import __version__
+from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentRunStatus
 from samurai_ai.domain.execution import ToolDefinition, ToolRun
@@ -265,6 +266,7 @@ class SamuraiApp(ChatController, App[None]):
         execution: ToolExecutionService,
         vault: VaultService,
         agents: AgentRunRepository,
+        orchestrator: AgentOrchestrator,
         playbooks: PlaybookService,
         reports: ReportService,
         ctf: CtfService,
@@ -285,6 +287,7 @@ class SamuraiApp(ChatController, App[None]):
         self.execution = execution
         self.vault = vault
         self.agents = agents
+        self.orchestrator = orchestrator
         self.playbooks = playbooks
         self.reports = reports
         self.ctf = ctf

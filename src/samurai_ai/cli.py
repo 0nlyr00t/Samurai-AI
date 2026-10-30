@@ -318,6 +318,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             execution_service,
             vault_service,
             agent_orchestrator.runs,
+            agent_orchestrator,
             playbook_service,
             report_service,
             ctf_service,
