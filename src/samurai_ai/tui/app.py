@@ -68,6 +68,7 @@ from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.models import CustomModelConflictError
 from samurai_ai.storage.swarm import SwarmRunRepository
+from samurai_ai.tui.commands import CommandSpec, find_command
 
 
 class LanguagePromptScreen(ModalScreen[str]):
@@ -1817,139 +1818,47 @@ class SamuraiApp(App[None]):
         )
 
     def _handle_command(self, command: str) -> None:
-        name, _, argument = command.partition(" ")
-
-        if name in ("/exit", "/quit"):
-            self.exit()
-            return
-        if name == "/help":
-            for line in self.translator.help_lines():
-                self._write_line(line)
-            return
-        if name == "/status":
-            self._show_status()
-            return
-        if name == "/scope":
-            self._show_scope(argument.strip())
-            return
-        if name == "/plan":
-            self._show_plan()
-            return
-        if name == "/tasks":
-            self._show_tasks()
-            return
-        if name == "/gates":
-            self._show_gates()
-            return
-        if name == "/findings":
-            self._show_findings()
-            return
-        if name == "/evidence":
-            self._show_evidence()
-            return
-        if name == "/approvals":
-            self._show_approvals()
-            return
-        if name == "/snapshots":
-            self._show_snapshots()
-            return
-        if name == "/tools":
-            self._show_tools()
-            return
-        if name == "/runs":
-            self._show_runs()
-            return
-        if name == "/agents":
-            self._show_agents()
-            return
-        if name == "/swarm":
-            self._show_swarms()
-            return
-        if name == "/memory":
-            self._show_memory(argument.strip())
-            return
-        if name == "/skills":
-            self._show_skills()
-            return
-        if name == "/playbooks":
-            self._show_custom_playbooks()
-            return
-        if name == "/secrets":
-            self._show_secrets()
-            return
-        if name == "/assets":
-            self._show_assets()
-            return
-        if name == "/report":
-            self._show_reports()
-            return
-        if name == "/hypotheses":
-            self._show_hypotheses()
-            return
-        if name == "/flags":
-            self._show_flags()
-            return
-        if name == "/attack-path":
-            self._show_attack_path()
-            return
-        if name == "/debrief":
-            self._show_debriefs()
-            return
-        if name == "/test-cases":
-            self._show_test_cases()
-            return
-        if name == "/runbook":
-            self._show_runbooks()
-            return
-        if name == "/reconcile":
-            self._show_reconcile()
-            return
-        if name == "/lang":
-            self._show_lang(argument.strip())
-            return
-        if name == "/model":
-            self._show_model_picker()
-            return
-        if name == "/yolo":
-            self._toggle_yolo()
-            return
-        if name == "/goal":
-            self._handle_goal_command(argument.strip())
-            return
-        if name == "/ask":
-            self._set_permission_mode(PermissionMode.ASK)
-            return
-        if name == "/never":
-            self._set_permission_mode(PermissionMode.NEVER)
-            return
-        if name == "/mouse":
-            self._toggle_mouse()
-            return
-        if name == "/trust":
-            self._maybe_prompt_trust(force=True)
-            return
-        if name == "/copy":
-            self._copy_last(argument.strip())
-            return
-        if name == "/undo":
-            self._undo_last_turn()
-            return
-        if name == "/compact":
-            self.run_worker(self._compact_history(), exclusive=False)
-            return
-        if name == "/expand":
-            self._expand_outputs()
-            return
-
         if command.startswith("!"):
             self._shell_mode(command[1:].strip())
             return
-        if name.startswith("/"):
-            self._write_line(
-                "[error] " + self.translator.t("error.unknown-command", name=name)
-            )
-        else:
-            self._start_chat(command)
+        name, _, argument = command.partition(" ")
+        spec = find_command(name)
+        if spec is None:
+            if name.startswith("/"):
+                self._write_line(
+                    "[error] " + self.translator.t("error.unknown-command", name=name)
+                )
+            else:
+                self._start_chat(command)
+            return
+        self._run_command(spec, argument.strip())
+
+    def _run_command(self, spec: CommandSpec, argument: str) -> None:
+        if spec.needs_operation and self.operation is None:
+            self._write_line("[error] " + self.translator.t("palette.no-operation"))
+            return
+        handler = getattr(self, spec.handler)
+        handler(argument) if spec.takes_argument else handler()
+
+    def _show_help(self) -> None:
+        for line in self.translator.help_lines():
+            self._write_line(line)
+
+    def _cmd_exit(self) -> None:
+        # ``_exit`` is already Textual's own hook, so the command differs
+        self.exit()
+
+    def _prompt_trust(self) -> None:
+        self._maybe_prompt_trust(force=True)
+
+    def _set_mode_ask(self) -> None:
+        self._set_permission_mode(PermissionMode.ASK)
+
+    def _set_mode_never(self) -> None:
+        self._set_permission_mode(PermissionMode.NEVER)
+
+    def _compact_now(self) -> None:
+        self.run_worker(self._compact_history(), exclusive=False)
 
     # --- AI chat ---------------------------------------------------------
 
