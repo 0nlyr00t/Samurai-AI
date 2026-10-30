@@ -39,24 +39,24 @@ class SessionsScreen(ModalScreen[str]):
         height: auto;
         max-height: 80%;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #sessions-title {
         text-style: bold;
-        color: #5bc0be;
+        color: $accent-alt;
     }
     #sessions-hint {
-        color: #7d8590;
+        color: $text-dim;
         padding-bottom: 1;
     }
     #sessions-list {
         height: auto;
         max-height: 20;
-        background: #0a0a0a;
+        background: $panel;
     }
     #sessions-empty {
-        color: #7d8590;
+        color: $text-dim;
         height: auto;
     }
     """
@@ -132,15 +132,15 @@ class SessionDetailScreen(ModalScreen[str]):
         height: auto;
         max-height: 85%;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #session-title {
         text-style: bold;
-        color: #5bc0be;
+        color: $accent-alt;
     }
     #session-hint {
-        color: #7d8590;
+        color: $text-dim;
         padding-bottom: 1;
     }
     #session-body {
@@ -149,11 +149,11 @@ class SessionDetailScreen(ModalScreen[str]):
     }
     .session-heading {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
         padding-top: 1;
     }
     .session-line {
-        color: #e6edf3;
+        color: $text;
     }
     """
 

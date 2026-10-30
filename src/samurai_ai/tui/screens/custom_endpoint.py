@@ -29,32 +29,32 @@ class CustomEndpointScreen(ModalScreen[str | None]):
         width: 78;
         height: auto;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #ce-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
         padding-bottom: 1;
     }
     .ce-label {
-        color: #888888;
+        color: $text-dim;
         padding-top: 1;
     }
     #ce-tls {
         height: auto;
-        background: #0a0a0a;
+        background: $panel;
     }
     #ce-fetch {
         margin-top: 1;
     }
     #ce-status {
-        color: #ffd43b;
+        color: $warning;
         padding-top: 1;
     }
     #ce-models {
         height: 8;
-        background: #0a0a0a;
+        background: $panel;
         display: none;
     }
     #ce-manual {
@@ -96,9 +96,7 @@ class CustomEndpointScreen(ModalScreen[str | None]):
             yield Button(self.translator.t("model.custom-fetch"), id="ce-fetch")
             yield Static("", id="ce-status")
             yield OptionList(id="ce-models")
-            yield Input(
-                placeholder=self.translator.t("model.custom-manual"), id="ce-manual"
-            )
+            yield Input(placeholder=self.translator.t("model.custom-manual"), id="ce-manual")
 
     def on_mount(self) -> None:
         self.query_one("#ce-tls", OptionList).highlighted = 0
@@ -135,14 +133,9 @@ class CustomEndpointScreen(ModalScreen[str | None]):
                 )
             )
             return
-        if any(
-            provider.id == endpoint_id
-            for provider in self.models.registry.static_providers
-        ):
+        if any(provider.id == endpoint_id for provider in self.models.registry.static_providers):
             status.update(
-                self.translator.t(
-                    "model.custom-failed", error=f"id {endpoint_id!r} is reserved"
-                )
+                self.translator.t("model.custom-failed", error=f"id {endpoint_id!r} is reserved")
             )
             return
         try:
@@ -155,9 +148,7 @@ class CustomEndpointScreen(ModalScreen[str | None]):
                 if secret_name in existing:
                     self.vault.remove(secret_name)
                 self.vault.add(secret_name, api_key)
-            self.models.register_endpoint(
-                endpoint_id, base_url, secret_name, verify_tls=verify_tls
-            )
+            self.models.register_endpoint(endpoint_id, base_url, secret_name, verify_tls=verify_tls)
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             status.update(self.translator.t("model.custom-failed", error=str(exc)))
             return
@@ -171,9 +162,7 @@ class CustomEndpointScreen(ModalScreen[str | None]):
         button.disabled = True
         status.update(self.translator.t("model.custom-fetching"))
         try:
-            discovered = await asyncio.to_thread(
-                self.models.discover_models, endpoint_id
-            )
+            discovered = await asyncio.to_thread(self.models.discover_models, endpoint_id)
             self._model_names = [entry.model_name for entry in discovered]
         except Exception as exc:  # noqa: BLE001 - discovery is best-effort
             self._model_names = []
@@ -184,8 +173,7 @@ class CustomEndpointScreen(ModalScreen[str | None]):
         options.clear_options()
         if self._model_names:
             options.add_options(
-                Option(name, id=f"c{index}")
-                for index, name in enumerate(self._model_names)
+                Option(name, id=f"c{index}") for index, name in enumerate(self._model_names)
             )
             options.display = True
             options.highlighted = 0
@@ -196,9 +184,7 @@ class CustomEndpointScreen(ModalScreen[str | None]):
             if self._endpoint_id is not None:
                 status.update(self.translator.t("model.custom-no-models"))
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id != "ce-models" or event.option is None:
             return
         index = int(str(event.option.id or "c0")[1:])
@@ -212,9 +198,7 @@ class CustomEndpointScreen(ModalScreen[str | None]):
         try:
             model = self.models.add_model(f"{self._endpoint_id}/{model_name}")
         except CustomModelConflictError:
-            model, _ = self.models.resolve_model(
-                f"{self._endpoint_id}/{model_name}@v1"
-            )
+            model, _ = self.models.resolve_model(f"{self._endpoint_id}/{model_name}@v1")
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             status.update(self.translator.t("model.custom-failed", error=str(exc)))
             return

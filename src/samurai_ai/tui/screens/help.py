@@ -37,12 +37,12 @@ class HelpScreen(ModalScreen[None]):
         max-width: 96%;
         height: 80%;
         padding: 1 2;
-        border: solid #4fa8ff;
-        background: #0a0a0a;
+        border: solid $accent;
+        background: $panel;
     }
     #help-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
         padding-bottom: 1;
     }
     #help-body {
@@ -50,15 +50,15 @@ class HelpScreen(ModalScreen[None]):
         scrollbar-size-vertical: 1;
     }
     .help-section {
-        color: #b197fc;
+        color: $accent;
         padding-top: 1;
     }
     .help-line {
-        color: #c9d1d9;
+        color: $text;
     }
     #help-hint {
         padding-top: 1;
-        color: #7d8590;
+        color: $text-dim;
     }
     """
 
@@ -79,9 +79,7 @@ class HelpScreen(ModalScreen[None]):
             yield Static(self.translator.t("help.title"), id="help-title")
             with VerticalScroll(id="help-body"):
                 for section_key, lines in _SECTIONS:
-                    yield Static(
-                        self.translator.t(section_key), classes="help-section"
-                    )
+                    yield Static(self.translator.t(section_key), classes="help-section")
                     for line in lines:
                         yield Static(
                             self.translator.t(f"help.line.{line}"),
