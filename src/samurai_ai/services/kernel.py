@@ -179,6 +179,22 @@ class KernelService:
 
         return self._apply_plan_mutation(operation_id, mutate)
 
+    def reset_task(self, operation_id: str, task_id: str) -> OperationPlan:
+        """Return an in-progress task to pending, e.g. after a stopped subagent."""
+
+        def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
+            task = plan.task_by_id(task_id)
+            if task is None:
+                raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
+            if task.status != TaskStatus.IN_PROGRESS:
+                raise TaskStateError(
+                    f"task {task_id} cannot reset from {task.status.value}"
+                )
+            task.status = TaskStatus.PENDING
+            return "task.reset", {"plan_id": plan.id, "task_id": task_id}
+
+        return self._apply_plan_mutation(operation_id, mutate)
+
     def pass_gate(self, operation_id: str, gate_id: str) -> OperationPlan:
         def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
             gate = plan.gate_by_id(gate_id)
