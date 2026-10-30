@@ -628,10 +628,15 @@ def test_brand_shows_name_and_version(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_yolo_toggles_access_mode(tmp_path: Path) -> None:
+def test_permission_modes_cycle_through_commands(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     settings = stack[2]
     settings.set_locale("en")
+    operation = stack[0].create(
+        "Mode lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
 
     def dot_style(status_bar: Static) -> str:
         content = status_bar.render()
@@ -641,23 +646,48 @@ def test_yolo_toggles_access_mode(tmp_path: Path) -> None:
         return ""
 
     async def exercise() -> None:
-        app = SamuraiApp(*stack)
+        app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             status_bar = app.query_one("#status-bar", Static)
-            assert "●" in str(status_bar.render())
             assert "81,207,102" in dot_style(status_bar)  # green: ask
+            assert "ask" in str(status_bar.render())
+
             command_input = app.query_one("#command-input", Input)
             command_input.value = "/yolo"
             await pilot.press("enter")
             await pilot.pause()
-            assert settings.get_value("tui.yolo") == "1"
-            assert "255,107,107" in dot_style(status_bar)  # red: yolo
+            assert settings.get_value("tui.permission_mode") == "yolo"
+            assert settings.get_value("tui.yolo") == "1"  # legacy mirror
+            assert "255,169,77" in dot_style(status_bar)  # amber: yolo
+
+            command_input.value = "/never"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.permission_mode") == "never"
+            assert "255,107,107" in dot_style(status_bar)  # red: never
+
             command_input.value = "/yolo"
             await pilot.press("enter")
             await pilot.pause()
-            assert settings.get_value("tui.yolo") == "0"
+            assert settings.get_value("tui.permission_mode") == "yolo"
+
+            command_input.value = "/ask"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.permission_mode") == "ask"
             assert "81,207,102" in dot_style(status_bar)
+            events = [
+                event
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "operator.permission_mode"
+            ]
+            assert [event.payload["to"] for event in events] == [
+                "yolo",
+                "never",
+                "yolo",
+                "ask",
+            ]
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -1513,5 +1543,165 @@ def test_mouse_drag_selects_and_ctrl_c_copies(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
             await pilot.pause()
             assert not app.is_running
+
+    asyncio.run(exercise())
+
+
+class _SequenceToolProvider:
+    """Emits one shell command per user turn, then answers in text."""
+
+    def __init__(self, commands: list[str]) -> None:
+        self.commands = list(commands)
+        self.calls = 0
+        self.requests: list[object] = []
+        self._owed = False
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+        self.calls += 1
+        self.requests.append(request)
+        usage = Usage(prompt_tokens=3, completion_tokens=2)
+        if self._owed or not self.commands:
+            self._owed = False
+            return ChatResponse(
+                text="ran it",
+                usage=usage,
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=5,
+            )
+        self._owed = True
+        return ChatResponse(
+            text="",
+            tool_calls=(
+                ToolCall(
+                    id=f"call-{self.calls}",
+                    name="shell_exec",
+                    arguments={"command": self.commands.pop(0)},
+                ),
+            ),
+            usage=usage,
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def _sequence_stack(tmp_path: Path, commands: list[str]):  # type: ignore[no-untyped-def]
+    provider = _SequenceToolProvider(commands)
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Gate lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+    return stack, provider, operation
+
+
+async def _answer_access(app, pilot, allow: bool) -> None:  # type: ignore[no-untyped-def]
+    from samurai_ai.tui.app import AccessPromptScreen
+
+    for _ in range(100):
+        await pilot.pause()
+        if isinstance(app.screen, AccessPromptScreen):
+            break
+    assert isinstance(app.screen, AccessPromptScreen)
+    app.screen.dismiss(allow)
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+def test_chat_ask_mode_reuses_an_approval_for_the_same_tool(tmp_path: Path) -> None:
+    stack, provider, operation = _sequence_stack(
+        tmp_path, ["echo one", "echo two"]
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "first"
+            await pilot.press("enter")
+            await _answer_access(app, pilot, allow=True)
+            assert len(stack[4].list_runs(operation.id)) == 1
+
+            # same tool, ordinary command: the stored approval covers it
+            command_input.value = "second"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not isinstance(app.screen, AccessPromptScreen)
+            assert len(stack[4].list_runs(operation.id)) == 2
+            assert provider.calls == 4
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_chat_ask_mode_still_prompts_for_sensitive_commands(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, ["echo one", "cat .env"])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "first"
+            await pilot.press("enter")
+            await _answer_access(app, pilot, allow=True)
+
+            # sensitive path: the reusable approval is not enough
+            command_input.value = "second"
+            await pilot.press("enter")
+            await _answer_access(app, pilot, allow=True)
+            assert len(stack[4].list_runs(operation.id)) == 2
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_chat_never_mode_never_prompts(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, ["cat .env"])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "go"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not isinstance(app.screen, AccessPromptScreen)
+            run = stack[4].list_runs(operation.id)[0]
+            assert run.tool_id == "shell.exec"
+            approval = stack[1].kernel.get_approval(run.approval_id)
+            assert approval is not None
+            assert approval.decided_by == "never"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
 
     asyncio.run(exercise())

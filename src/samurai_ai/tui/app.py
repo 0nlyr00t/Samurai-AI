@@ -34,8 +34,19 @@ from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, Message, ToolCall, ToolSpec
 from samurai_ai.domain.agents import AgentRunStatus
 from samurai_ai.domain.execution import ApprovalRequiredError
-from samurai_ai.domain.kernel import Artifact, GateStatus, TaskStatus
-from samurai_ai.domain.operations import Operation, OperationMode
+from samurai_ai.domain.kernel import (
+    ApprovalStatus,
+    Artifact,
+    GateStatus,
+    TaskStatus,
+)
+from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
+from samurai_ai.domain.permission import (
+    PermissionMode,
+    classify_command,
+    next_mode,
+    parse_mode,
+)
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.i18n import Translator
 from samurai_ai.services.ctf import CtfService
@@ -105,6 +116,9 @@ class LanguagePromptScreen(ModalScreen[str]):
 REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 
 ADD_CUSTOM_ID = "__add_custom__"
+
+_PERMISSION_MODE_KEY = "tui.permission_mode"
+_YOLO_LEGACY_KEY = "tui.yolo"
 
 
 class SelectableRichLog(RichLog, can_focus=False):
@@ -1421,8 +1435,66 @@ class SamuraiApp(App[None]):
         return [str(item) for item in value] if isinstance(value, list) else []
 
     @property
+    def _permission_mode(self) -> PermissionMode:
+        stored = self.settings.get_value(_PERMISSION_MODE_KEY)
+        if stored is None:
+            # Older sessions only recorded the yolo flag.
+            legacy = PermissionMode.YOLO if self._legacy_yolo else PermissionMode.ASK
+            return legacy
+        return parse_mode(stored, PermissionMode.ASK)
+
+    @property
+    def _legacy_yolo(self) -> bool:
+        return self.settings.get_value(_YOLO_LEGACY_KEY) == "1"
+
+    @property
     def _yolo(self) -> bool:
-        return self.settings.get_value("tui.yolo") == "1"
+        """True when OS commands run without a prompt (yolo or never)."""
+        return not self._permission_mode.prompts_for_tools
+
+    def _set_permission_mode(self, mode: PermissionMode) -> None:
+        previous = self._permission_mode
+        self.settings.set_value(_PERMISSION_MODE_KEY, mode.value)
+        # keep the legacy flag in step so older readers stay truthful
+        self.settings.set_value(
+            _YOLO_LEGACY_KEY, "0" if mode is PermissionMode.ASK else "1"
+        )
+        self._write_line(
+            "[status] " + self.translator.t(f"permission.mode.{mode.value}")
+        )
+        self._record_permission_mode(previous, mode)
+        self._refresh_chrome()
+
+    def _record_permission_mode(
+        self, previous: PermissionMode, mode: PermissionMode
+    ) -> None:
+        """The mode change is operator state, so it belongs in the journal."""
+        operation = self.operation
+        if operation is None or previous is mode:
+            return
+        self.service.repository.append_event(
+            OperationEvent(
+                operation_id=operation.id,
+                event_type="operator.permission_mode",
+                payload={"from": previous.value, "to": mode.value},
+            )
+        )
+
+    def _cycle_permission_mode(self) -> None:
+        self._set_permission_mode(next_mode(self._permission_mode))
+
+    def _reusable_approval(self, tool_id: str) -> bool:
+        """A tool already approved for this operation needs no second prompt."""
+        operation = self.operation
+        if operation is None:
+            return False
+        action = f"tool.run {tool_id}"
+        return any(
+            approval.action == action and approval.task_id is None
+            for approval in self.kernel.kernel.list_approvals(
+                operation.id, status=ApprovalStatus.APPROVED
+            )
+        )
 
     def _directory_trusted(self) -> bool:
         if self._yolo:
@@ -1462,13 +1534,12 @@ class SamuraiApp(App[None]):
         self.query_one("#command-input", Input).focus()
 
     def _toggle_yolo(self) -> None:
-        enabled = not self._yolo
-        self.settings.set_value("tui.yolo", "1" if enabled else "0")
-        self._write_line(
-            "[status] "
-            + self.translator.t("yolo.enabled" if enabled else "yolo.disabled")
+        target = (
+            PermissionMode.ASK
+            if self._permission_mode is PermissionMode.YOLO
+            else PermissionMode.YOLO
         )
-        self._refresh_chrome()
+        self._set_permission_mode(target)
 
     def _apply_mouse(self) -> None:
         driver = self._driver
@@ -1587,6 +1658,12 @@ class SamuraiApp(App[None]):
             return
         if name == "/yolo":
             self._toggle_yolo()
+            return
+        if name == "/ask":
+            self._set_permission_mode(PermissionMode.ASK)
+            return
+        if name == "/never":
+            self._set_permission_mode(PermissionMode.NEVER)
             return
         if name == "/mouse":
             self._toggle_mouse()
@@ -1748,10 +1825,12 @@ class SamuraiApp(App[None]):
                 if self._yolo or action.startswith("model.call"):
                     # Model calls are covered by the directory trust granted at
                     # startup; only OS-level command execution still prompts.
-                    self.kernel.approve(
-                        exc.approval_id,
-                        decided_by="yolo" if self._yolo else "auto",
+                    decided_by = (
+                        "auto"
+                        if action.startswith("model.call")
+                        else self._permission_mode.value
                     )
+                    self.kernel.approve(exc.approval_id, decided_by=decided_by)
                     approval_id = exc.approval_id
                     continue
                 allowed = await self.push_screen_wait(
@@ -1847,10 +1926,22 @@ class SamuraiApp(App[None]):
                 role="user",
                 content=f"[tool {call.name}] the operator has not trusted this directory",
             )
-        self._write_dim(f"⚙ {command}")
-        if not self._yolo:
+        risk = classify_command(command, str(self._cwd))
+        badge = f"  [{risk.label()}]" if not risk.empty else ""
+        self._write_dim(f"⚙ {command}{badge}")
+        # A tool already approved for this operation is not asked again, except
+        # for a sensitive path or a destructive shape, which stay worth a look.
+        mode = self._permission_mode
+        ask = mode.prompts_for_tools and (
+            not self._reusable_approval(tool_id) or not risk.empty
+        )
+        if ask:
             allowed = await self.push_screen_wait(
-                AccessPromptScreen(self.translator, f"{tool_id}: {command}", "r3")
+                AccessPromptScreen(
+                    self.translator,
+                    f"{tool_id}: {command}",
+                    f"r3{badge}" if risk.empty else f"r3 · {risk.label()}",
+                )
             )
             if not allowed:
                 self._write_dim(
@@ -1870,7 +1961,10 @@ class SamuraiApp(App[None]):
             )
         except ApprovalRequiredError as exc:
             self.kernel.approve(
-                exc.approval_id, decided_by="yolo" if self._yolo else "operator"
+                exc.approval_id,
+                decided_by=(
+                    "operator" if mode.prompts_for_tools and ask else mode.value
+                ),
             )
             approval_id = exc.approval_id
             try:
@@ -2396,8 +2490,17 @@ class SamuraiApp(App[None]):
         if not self._directory_trusted():
             directory += self.translator.t("trust.untrusted-marker")
         bar = Text(f"{directory} | ")
-        # Green dot: ask before running OS commands; red dot: yolo (no prompts).
-        bar.append("●", style="#ff6b6b" if self._yolo else "#51cf66")
+        # Green dot: ask before running OS commands; red dot: never ask.
+        mode = self._permission_mode
+        bar.append(
+            "●",
+            style={
+                PermissionMode.ASK: "#51cf66",
+                PermissionMode.YOLO: "#ffa94d",
+                PermissionMode.NEVER: "#ff6b6b",
+            }[mode],
+        )
+        bar.append(f" {mode.value}")
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
