@@ -14,6 +14,7 @@ from samurai_ai.domain.kernel import (
     RiskClass,
     StageGate,
     TaskStateError,
+    TaskStatus,
 )
 from samurai_ai.domain.operations import Operation, OperationMode, OperationStatus
 from samurai_ai.domain.scope import ScopeContract
@@ -361,3 +362,53 @@ def test_v1_database_migrates_to_v2(tmp_path: Path) -> None:
     restored = repository.get(legacy.id)
     assert restored is not None
     assert restored.name == "Legacy operation"
+
+
+def test_task_can_be_skipped_and_blocked(tmp_path: Path) -> None:
+    service = make_service(tmp_path / "samurai.db")
+    operation = make_operation(service)
+    service.transition_operation(operation.id, OperationStatus.PLANNING)
+    plan = service.create_plan(
+        operation.id,
+        "Board plan",
+        tasks=(
+            PlanTask(id="recon", title="Recon"),
+            PlanTask(id="exploit", title="Exploit", depends_on=("recon",)),
+        ),
+        gates=(),
+    )
+    assert plan.task_by_id("recon") is not None
+
+    service.skip_task(operation.id, "recon")
+    updated = service.get_current_plan(operation.id)
+    assert updated is not None
+    assert updated.task_by_id("recon").status is TaskStatus.SKIPPED  # type: ignore[union-attr]
+
+    service.block_task(operation.id, "exploit")
+    updated = service.get_current_plan(operation.id)
+    assert updated is not None
+    assert updated.task_by_id("exploit").status is TaskStatus.BLOCKED  # type: ignore[union-attr]
+
+    with pytest.raises(TaskStateError):
+        service.skip_task(operation.id, "recon")
+
+
+def test_reset_task_returns_finished_and_blocked_tasks_to_pending(
+    tmp_path: Path,
+) -> None:
+    service = make_service(tmp_path / "samurai.db")
+    operation = make_operation(service)
+    service.transition_operation(operation.id, OperationStatus.PLANNING)
+    service.create_plan(
+        operation.id,
+        "Reset plan",
+        tasks=(PlanTask(id="recon", title="Recon"),),
+        gates=(),
+    )
+    service.block_task(operation.id, "recon")
+    service.reset_task(operation.id, "recon")
+    plan = service.get_current_plan(operation.id)
+    assert plan is not None
+    assert plan.task_by_id("recon").status is TaskStatus.PENDING  # type: ignore[union-attr]
+    # resetting a pending task is a no-op, not an error
+    service.reset_task(operation.id, "recon")

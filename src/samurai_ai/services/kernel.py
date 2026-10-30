@@ -180,18 +180,44 @@ class KernelService:
         return self._apply_plan_mutation(operation_id, mutate)
 
     def reset_task(self, operation_id: str, task_id: str) -> OperationPlan:
-        """Return an in-progress task to pending, e.g. after a stopped subagent."""
+        """Return a task to pending: after a stopped child, or to redo it."""
 
         def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
             task = plan.task_by_id(task_id)
             if task is None:
                 raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
-            if task.status != TaskStatus.IN_PROGRESS:
-                raise TaskStateError(
-                    f"task {task_id} cannot reset from {task.status.value}"
-                )
+            if task.status is TaskStatus.PENDING:
+                return "", {}
             task.status = TaskStatus.PENDING
             return "task.reset", {"plan_id": plan.id, "task_id": task_id}
+
+        return self._apply_plan_mutation(operation_id, mutate)
+
+    def skip_task(self, operation_id: str, task_id: str) -> OperationPlan:
+        def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
+            task = plan.task_by_id(task_id)
+            if task is None:
+                raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
+            if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED):
+                raise TaskStateError(
+                    f"task {task_id} cannot skip from {task.status.value}"
+                )
+            task.status = TaskStatus.SKIPPED
+            return "task.skipped", {"plan_id": plan.id, "task_id": task_id}
+
+        return self._apply_plan_mutation(operation_id, mutate)
+
+    def block_task(self, operation_id: str, task_id: str) -> OperationPlan:
+        def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
+            task = plan.task_by_id(task_id)
+            if task is None:
+                raise TaskStateError(f"unknown task {task_id} in plan {plan.id}")
+            if task.status in (TaskStatus.DONE, TaskStatus.BLOCKED):
+                raise TaskStateError(
+                    f"task {task_id} cannot block from {task.status.value}"
+                )
+            task.status = TaskStatus.BLOCKED
+            return "task.blocked", {"plan_id": plan.id, "task_id": task_id}
 
         return self._apply_plan_mutation(operation_id, mutate)
 
