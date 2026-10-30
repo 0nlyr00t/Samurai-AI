@@ -650,7 +650,7 @@ def test_brand_shows_name_and_version(tmp_path: Path) -> None:
             await pilot.pause()
             strip = app.query_one("#brand", Static).render()
             assert "Samurai AI" in strip.plain
-            assert "╪" in strip.plain  # the mark rides the strip
+            assert "╪" not in strip.plain  # the mark stays out of the shell
             banner = "\n".join(line.text for line in app.query_one("#journal", RichLog).lines)
             assert "Samurai AI" in banner
             assert __version__ in banner
@@ -3529,7 +3529,7 @@ def test_help_sheet_shows_the_current_board_keys(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_thinking_indicator_breathes_the_mark(tmp_path: Path) -> None:
+def test_thinking_indicator_turns_without_words(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
 
@@ -3543,9 +3543,8 @@ def test_thinking_indicator_breathes_the_mark(tmp_path: Path) -> None:
                 await asyncio.sleep(0.14)
                 seen.append(app.query_one("#thinking").render().plain)
             app._thinking_stop()
-            assert all(line.startswith("╰") for line in seen)
-            assert all("╪" in line for line in seen)
-            assert len({line.split(" ")[0] for line in seen}) > 1
+            assert all(line in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" for line in seen)
+            assert len(set(seen)) > 1
             assert not app.query_one("#thinking").display
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
@@ -3553,7 +3552,7 @@ def test_thinking_indicator_breathes_the_mark(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_welcome_shows_the_mark_and_the_tagline(tmp_path: Path) -> None:
+def test_welcome_shows_the_tagline_without_the_mark(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
 
@@ -3562,9 +3561,9 @@ def test_welcome_shows_the_mark_and_the_tagline(tmp_path: Path) -> None:
         async with app.run_test(size=(90, 26)) as pilot:
             await pilot.pause()
             lines = [line.text for line in app.query_one("#journal", RichLog).lines]
-            assert any("╪" in line for line in lines)
             assert any("Samurai AI" in line for line in lines)
             assert any("authorised operations" in line for line in lines)
+            assert not any("╪" in line for line in lines)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
