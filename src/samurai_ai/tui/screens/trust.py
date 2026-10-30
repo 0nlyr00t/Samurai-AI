@@ -18,21 +18,21 @@ class TrustDirectoryScreen(ModalScreen[str | None]):
         width: 72;
         height: auto;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #trust-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
         padding-bottom: 1;
     }
     #trust-path {
-        color: #ffd43b;
+        color: $warning;
         padding-bottom: 1;
     }
     #trust-options {
         height: auto;
-        background: #0a0a0a;
+        background: $panel;
     }
     """
 
@@ -57,9 +57,7 @@ class TrustDirectoryScreen(ModalScreen[str | None]):
         options.highlighted = 0
         options.focus()
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(str(event.option.id or "t-deny")[2:])
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]

@@ -10,6 +10,7 @@ REASONING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 
 ADD_CUSTOM_ID = "__add_custom__"
 
+
 class ModelPickerScreen(ModalScreen[tuple[str, str]]):
     """Arrow-key model and reasoning picker, in the spirit of opencode."""
 
@@ -21,12 +22,12 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         width: 84;
         height: auto;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #model-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
         padding-bottom: 1;
     }
     #model-columns {
@@ -37,11 +38,11 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         height: 100%;
     }
     .picker-label {
-        color: #888888;
+        color: $text-dim;
         padding-bottom: 1;
     }
     #model-hint {
-        color: #888888;
+        color: $text-dim;
         padding-top: 1;
     }
     """
@@ -64,9 +65,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         self.reasoning_by_model = reasoning_by_model or {}
         self.current_model = current_model
         self.current_reasoning = current_reasoning
-        self.selected_model = current_model or (
-            model_ids[0] if model_ids else ADD_CUSTOM_ID
-        )
+        self.selected_model = current_model or (model_ids[0] if model_ids else ADD_CUSTOM_ID)
         self.selected_reasoning = current_reasoning
 
     def compose(self) -> ComposeResult:
@@ -82,9 +81,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
             yield Static(self.translator.t("model.picker-title"), id="model-title")
             with Horizontal(id="model-columns"):
                 with Vertical(classes="picker-column"):
-                    yield Static(
-                        self.translator.t("model.picker-models"), classes="picker-label"
-                    )
+                    yield Static(self.translator.t("model.picker-models"), classes="picker-label")
                     yield OptionList(*model_options, id="model-options")
                 with Vertical(classes="picker-column"):
                     yield Static(
@@ -92,10 +89,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
                         classes="picker-label",
                     )
                     yield OptionList(
-                        *[
-                            Option(level, id=f"r-{level}")
-                            for level in REASONING_LEVELS
-                        ],
+                        *[Option(level, id=f"r-{level}") for level in REASONING_LEVELS],
                         id="reasoning-options",
                     )
             yield Static(self.translator.t("model.picker-hint"), id="model-hint")
@@ -109,9 +103,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         reasoning.highlighted = REASONING_LEVELS.index(self.current_reasoning)
         models.focus()
 
-    def on_option_list_option_highlighted(
-        self, event: OptionList.OptionHighlighted
-    ) -> None:
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "model-options" and event.option is not None:
             index = event.option_list.highlighted
             if index is None:
@@ -129,11 +121,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
                 # operator is actively choosing reasoning right now.
                 reasoning_list = self.query_one("#reasoning-options", OptionList)
                 stored = self.reasoning_by_model.get(model_id)
-                if (
-                    changed
-                    and stored in REASONING_LEVELS
-                    and not reasoning_list.has_focus
-                ):
+                if changed and stored in REASONING_LEVELS and not reasoning_list.has_focus:
                     self.selected_reasoning = stored
                     reasoning_list.highlighted = REASONING_LEVELS.index(stored)
         elif event.option_list.id == "reasoning-options" and event.option is not None:
@@ -141,9 +129,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
             if index is not None:
                 self.selected_reasoning = REASONING_LEVELS[index]
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if (
             event.option_list.id == "model-options"
             and event.option is not None

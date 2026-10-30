@@ -18,17 +18,17 @@ class NewOperationScreen(ModalScreen[tuple[str, str, str] | None]):
         width: 56;
         height: auto;
         padding: 1 2;
-        border: solid #5bc0be;
-        background: #0a0a0a;
+        border: solid $accent-alt;
+        background: $panel;
     }
     #newop-title {
         text-style: bold;
-        color: #4fa8ff;
+        color: $accent;
         padding-bottom: 1;
     }
     #newop-modes {
         height: auto;
-        background: #0a0a0a;
+        background: $panel;
         margin-top: 1;
     }
     """
@@ -40,12 +40,8 @@ class NewOperationScreen(ModalScreen[tuple[str, str, str] | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="newop-dialog"):
             yield Static(self.translator.t("newop.title"), id="newop-title")
-            yield Input(
-                placeholder=self.translator.t("newop.name"), id="newop-name"
-            )
-            yield Input(
-                placeholder=self.translator.t("newop.scope"), id="newop-scope"
-            )
+            yield Input(placeholder=self.translator.t("newop.name"), id="newop-name")
+            yield Input(placeholder=self.translator.t("newop.scope"), id="newop-scope")
             yield OptionList(
                 Option("bug-bounty", id="bug-bounty"),
                 Option("red-team", id="red-team"),
@@ -73,9 +69,7 @@ class NewOperationScreen(ModalScreen[tuple[str, str, str] | None]):
         elif event.input.id == "newop-scope":
             self.query_one("#newop-modes", OptionList).focus()
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id == "newop-modes" and event.option is not None:
             self._submit(str(event.option.id or "bug-bounty"))
 

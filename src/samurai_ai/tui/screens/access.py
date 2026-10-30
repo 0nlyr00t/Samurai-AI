@@ -18,21 +18,21 @@ class AccessPromptScreen(ModalScreen[bool]):
         width: 72;
         height: auto;
         padding: 1 2;
-        border: solid #ffd43b;
-        background: #0a0a0a;
+        border: solid $warning;
+        background: $panel;
     }
     #access-title {
         text-style: bold;
-        color: #ffd43b;
+        color: $warning;
         padding-bottom: 1;
     }
     #access-action {
-        color: #e0e0e0;
+        color: $text;
         padding-bottom: 1;
     }
     #access-options {
         height: auto;
-        background: #0a0a0a;
+        background: $panel;
     }
     """
 
@@ -57,9 +57,7 @@ class AccessPromptScreen(ModalScreen[bool]):
         options.highlighted = 0
         options.focus()
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option is not None and event.option.id == "a-allow")
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
