@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from textual.widgets import Input, OptionList, RichLog
 
+from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
@@ -103,6 +104,7 @@ def make_stack(
         execution,
         vault,
         agents,
+        AgentOrchestrator(models, kernel, execution, service, agents),
         playbooks,
         reports,
         ctf,

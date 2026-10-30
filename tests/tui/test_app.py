@@ -7,6 +7,7 @@ from unittest.mock import patch
 from rich.text import Text
 from textual.widgets import Button, Input, OptionList, RichLog, Static
 
+from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
@@ -238,6 +239,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         )
         app = SamuraiApp(
             service, kernel, settings, recovery, execution, vault, agents,
+            AgentOrchestrator(models, kernel, execution, service, AgentRunRepository(database)),
             playbooks, reports, ctf, redteam, planning, swarms,
             GoalService(service, GoalRepository(database)),
             memory, skills, models, operation.id,
@@ -343,6 +345,7 @@ def _minimal_stack(tmp_path: Path, provider_factory=None, trust_cwd: bool = True
     return (
         service, kernel, settings, recovery, execution, vault,
         AgentRunRepository(database),
+        AgentOrchestrator(models, kernel, execution, service, AgentRunRepository(database)),
         playbooks,
         ReportService(service, kernel, playbooks, ReportRepository(database)),
         CtfService(service, kernel, CtfRepository(database)),
