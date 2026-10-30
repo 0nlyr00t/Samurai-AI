@@ -62,10 +62,12 @@ from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
+from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.screens import (
     ADD_CUSTOM_ID,
     REASONING_LEVELS,
     AccessPromptScreen,
+    ArgumentScreen,
     CustomEndpointScreen,
     LanguagePromptScreen,
     ModelPickerScreen,
@@ -84,6 +86,8 @@ _YOLO_LEGACY_KEY = "tui.yolo"
 
 
 class SamuraiApp(ChatController, App[None]):
+    COMMANDS = {CommandProvider}
+
     CSS = """
     Screen {
         layout: vertical;
@@ -233,6 +237,7 @@ class SamuraiApp(ChatController, App[None]):
     BINDINGS = [
         Binding("ctrl+c", "quit_requested", "Quit", show=False),
         Binding("ctrl+o", "toggle_journal", "Toggle journal", show=False),
+        Binding("ctrl+p", "command_palette", "Commands", show=False, priority=True),
         Binding("ctrl+s", "steer", "Steer the running turn", show=False, priority=True),
         Binding("ctrl+b", "shell_background", "Background the shell job", show=False),
         Binding("ctrl+e", "expand_output", "Expand collapsed output", show=False, priority=True),
@@ -1113,6 +1118,18 @@ class SamuraiApp(ChatController, App[None]):
                 self._start_chat(command)
             return
         self._run_command(spec, argument.strip())
+
+    async def invoke_command(self, spec: CommandSpec) -> None:
+        """Run a registry action from the palette, asking for its argument."""
+        argument = ""
+        if spec.takes_argument and spec.prompt_key:
+            answer = await self.push_screen_wait(
+                ArgumentScreen(self.translator, self.translator.t(spec.prompt_key))
+            )
+            if answer is None:
+                return
+            argument = answer
+        self._run_command(spec, argument)
 
     def _run_command(self, spec: CommandSpec, argument: str) -> None:
         if spec.needs_operation and self.operation is None:
