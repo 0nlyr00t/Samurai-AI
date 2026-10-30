@@ -116,6 +116,16 @@ def make_stack(
     )
 
 
+
+def _help_is_russian(app) -> bool:  # type: ignore[no-untyped-def]
+    """The `/help` overlay exists and shows Russian section headers."""
+    from samurai_ai.tui.screens import HelpScreen
+
+    if not isinstance(app.screen, HelpScreen):
+        return False
+    labels = [str(node.render()) for node in app.screen.query(".help-section")]
+    return "Ввод" in labels
+
 def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SAMURAI_LANG", raising=False)
     stack = make_stack(tmp_path)
@@ -142,7 +152,9 @@ def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> N
                 command_input.value = "/help"
                 await pilot.press("enter")
                 await pilot.pause()
-                assert any("Показать доступные команды" in message for message in messages)
+                assert _help_is_russian(app)
+                await pilot.press("escape")
+                await pilot.pause()
 
                 command_input.value = "/status"
                 await pilot.press("enter")
@@ -193,7 +205,9 @@ def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
                 command_input.value = "/help"
                 await pilot.press("enter")
                 await pilot.pause()
-                assert any("Показать доступные команды" in message for message in messages)
+                assert _help_is_russian(app)
+                await pilot.press("escape")
+                await pilot.pause()
 
                 command_input.value = "/status"
                 await pilot.press("enter")
@@ -237,7 +251,9 @@ def test_lang_command_switches_language_without_losing_operation(tmp_path: Path)
                 command_input.value = "/help"
                 await pilot.press("enter")
                 await pilot.pause()
-                assert any("Показать доступные команды" in message for message in messages)
+                assert _help_is_russian(app)
+                await pilot.press("escape")
+                await pilot.pause()
 
                 command_input.value = "/status"
                 await pilot.press("enter")

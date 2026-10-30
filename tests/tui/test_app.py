@@ -2426,3 +2426,308 @@ def test_palette_cancelled_argument_runs_nothing(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
+
+
+def test_question_mark_opens_the_key_overlay(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import HelpScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            await pilot.press("question_mark")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+            # the field did not swallow the character
+            assert command_input.value == ""
+
+            await pilot.press("pagedown")
+            await pilot.pause()
+            assert app.screen.query_one("#help-body").scroll_offset.y >= 0
+            await pilot.press("q")
+            await pilot.pause()
+            assert not isinstance(app.screen, HelpScreen)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_question_mark_types_when_the_field_has_text(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import HelpScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "ready"
+            await pilot.press("question_mark")
+            await pilot.pause()
+            assert not isinstance(app.screen, HelpScreen)
+            assert command_input.value == "ready?"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_help_command_opens_the_overlay_with_russian_sections(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("ru")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import HelpScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app._handle_command("/help")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+            labels = [
+                str(node.render())
+                for node in app.screen.query(".help-section")
+            ]
+            assert "Ввод" in labels
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, HelpScreen)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def _seed_run(stack, operation_id: str, command: str = "echo inspector"):  # type: ignore[no-untyped-def]
+    """Run a shell command through the governed service, approving it."""
+    from samurai_ai.domain.execution import ApprovalRequiredError
+
+    try:
+        return stack[4].run_tool(operation_id, "shell.exec", {"command": command}).run
+    except ApprovalRequiredError as exc:
+        stack[1].approve(exc.approval_id, decided_by="test")
+        result = stack[4].run_tool(
+            operation_id, "shell.exec", {"command": command}, approval_id=exc.approval_id
+        )
+        return result.run
+
+
+def test_inspector_shows_every_section(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+    run = _seed_run(stack, operation.id)
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import InspectorScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app._handle_command(f"/inspect {run.id}")
+            await pilot.pause()
+            assert isinstance(app.screen, InspectorScreen)
+            headings = [
+                str(node.render()) for node in app.screen.query(".inspector-section")
+            ]
+            assert "TOOL" in headings
+            assert "PARAMETERS (redacted)" in headings
+            assert "SCOPE DECISION (re-checked now)" in headings
+            assert "APPROVAL" in headings
+            assert "EGRESS" in headings
+            assert "ARTIFACTS" in headings
+            assert "OUTPUT" in headings
+            assert "TRUST" in headings
+            body = "\n".join(
+                str(node.render()) for node in app.screen.query(".inspector-line")
+            )
+            assert "echo inspector" in body
+            assert "tool.run shell.exec" in body
+            assert "decided by test" in body
+            # empty groups say so instead of staying blank
+            assert "none" in body
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_inspector_ctrl_i_opens_the_newest_run(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+    _seed_run(stack, operation.id, "echo first")
+    newest = _seed_run(stack, operation.id, "echo second")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens import InspectorScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+i")
+            await pilot.pause()
+            assert isinstance(app.screen, InspectorScreen)
+            assert newest.id in str(app.screen.query_one("#inspector-title", Static).render())
+            await pilot.press("q")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_inspector_unknown_run_reports(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app._handle_command("/inspect run_missing")
+                await pilot.pause()
+                assert any("run_missing" in str(message) for message in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_inspector_with_no_runs_reports(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                await pilot.press("ctrl+i")
+                await pilot.pause()
+                assert any("no runs" in str(message) for message in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_inspector_copy_action_copies_the_command(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+    run = _seed_run(stack, operation.id, "echo copy-me")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        copied: list[str] = []
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            with patch.object(app, "copy_to_clipboard", side_effect=copied.append):
+                app._handle_command(f"/inspect {run.id}")
+                await pilot.pause()
+                await pilot.press("c")
+                await pilot.pause()
+            assert copied == ["echo copy-me"]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_welcome_pane_lists_the_ways_to_start(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            welcome = app.query_one("#welcome", Static)
+            assert welcome.display
+            text = str(welcome.render())
+            assert "No operation open" in text
+            assert "Ctrl-P" in text
+            assert "/new" in text
+            assert "/open" not in text  # nothing to continue yet
+            assert "?" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_welcome_hides_once_an_operation_is_open(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            assert not app.query_one("#welcome", Static).display
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_open_command_loads_the_latest_operation(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            # close the auto-opened operation the way the operator would
+            app.operation = None
+            app._refresh_chrome()
+            assert app.query_one("#welcome", Static).display
+            assert "/open" in str(app.query_one("#welcome", Static).render())
+            app._handle_command("/open")
+            await pilot.pause()
+            assert app.operation is not None
+            assert app.operation.id == operation.id
+            assert not app.query_one("#welcome", Static).display
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_open_without_history_reports(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app._handle_command("/open")
+                await pilot.pause()
+                assert any("no earlier operation" in str(message) for message in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())

@@ -3,6 +3,8 @@
 from samurai_ai.tui.screens.access import AccessPromptScreen
 from samurai_ai.tui.screens.argument import ArgumentScreen
 from samurai_ai.tui.screens.custom_endpoint import CustomEndpointScreen
+from samurai_ai.tui.screens.help import HelpScreen
+from samurai_ai.tui.screens.inspector import InspectorScreen
 from samurai_ai.tui.screens.language import LanguagePromptScreen
 from samurai_ai.tui.screens.model_picker import (
     ADD_CUSTOM_ID,
@@ -18,6 +20,8 @@ __all__ = [
     "AccessPromptScreen",
     "ArgumentScreen",
     "CustomEndpointScreen",
+    "HelpScreen",
+    "InspectorScreen",
     "LanguagePromptScreen",
     "ModelPickerScreen",
     "NewOperationScreen",
