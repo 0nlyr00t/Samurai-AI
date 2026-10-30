@@ -34,6 +34,7 @@ from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, Message, ToolCall, ToolSpec
 from samurai_ai.domain.agents import AgentRunStatus
 from samurai_ai.domain.execution import ApprovalRequiredError
+from samurai_ai.domain.goal import Goal, GoalError
 from samurai_ai.domain.kernel import (
     ApprovalStatus,
     Artifact,
@@ -51,6 +52,7 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.i18n import Translator
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
+from samurai_ai.services.goals import GoalService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -936,6 +938,11 @@ class SamuraiApp(App[None]):
     BINDINGS = [
         Binding("ctrl+c", "quit_requested", "Quit", show=False),
         Binding("ctrl+o", "toggle_journal", "Toggle journal", show=False),
+        Binding("ctrl+s", "steer", "Steer the running turn", show=False, priority=True),
+        Binding("ctrl+b", "shell_background", "Background the shell job", show=False),
+        Binding("ctrl+e", "expand_output", "Expand collapsed output", show=False, priority=True),
+        # priority: the focused input would otherwise keep the key
+        Binding("shift+tab", "toggle_plan", "Plan mode", show=False, priority=True),
     ]
 
     _QUIT_CONFIRM_SECONDS = 2.0
@@ -955,6 +962,7 @@ class SamuraiApp(App[None]):
         redteam: RedTeamService,
         planning: PlanningService,
         swarms: SwarmRunRepository,
+        goals: GoalService,
         memory: CampaignMemoryService,
         skills: SkillService,
         models: ModelService,
@@ -974,6 +982,7 @@ class SamuraiApp(App[None]):
         self.redteam = redteam
         self.planning = planning
         self.swarms = swarms
+        self.goals = goals
         self.memory = memory
         self.skills = skills
         self.models = models
@@ -994,6 +1003,14 @@ class SamuraiApp(App[None]):
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
         self._chat_history: list[Message] = []
+        # Plan mode is session state on purpose: it is never persisted and only
+        # the operator can enter it.
+        self._plan_mode = False
+        # Messages injected into the running turn instead of waiting for it.
+        self._steer_queue: list[str] = []
+        self._chat_busy = False
+        self._shell_running = ""
+        self._shell_background = False
         self._expandable: list[tuple[str, int | None, str, str]] = []
         self._thinking_timer: Timer | None = None
         self._thinking_depth: int = 0
@@ -1066,6 +1083,7 @@ class SamuraiApp(App[None]):
             yield Static(id="strip-agents", classes="strip-item")
             yield Static(id="strip-todo", classes="strip-item")
             yield Static(id="strip-task", classes="strip-item")
+            yield Static(id="strip-goal", classes="strip-item")
         yield Static(id="thinking")
         yield OptionList(id="command-suggestions")
         yield HistoryInput(
@@ -1175,6 +1193,53 @@ class SamuraiApp(App[None]):
             return
         self._last_quit_request = now
         self._write_line("[info] " + self.translator.t("app.quit-hint"))
+
+    def action_steer(self) -> None:
+        """Ctrl-S: inject into the running turn, or send when nothing runs."""
+        command_input = self.query_one("#command-input", Input)
+        text = command_input.value.strip()
+        if not text or not self._chat_busy:
+            if text:
+                command_input.value = ""
+                command_input.post_message(Input.Submitted(command_input, text))
+            return
+        self._steer_queue.append(text)
+        command_input.value = ""
+        self._write_dim("↳ " + self.translator.t("chat.steer", text=text))
+
+    def action_toggle_plan(self) -> None:
+        self.run_worker(self._toggle_plan(), exclusive=False)
+
+    async def _toggle_plan(self) -> None:
+        if self._plan_mode:
+            # Leaving plan mode always costs a confirmation, in every mode.
+            allowed = await self.push_screen_wait(
+                AccessPromptScreen(
+                    self.translator,
+                    self.translator.t("plan.leave-action"),
+                    "r2",
+                )
+            )
+            if not allowed:
+                return
+        self._set_plan_mode(not self._plan_mode)
+
+    def _set_plan_mode(self, enabled: bool) -> None:
+        self._plan_mode = enabled
+        self._write_line(
+            "[status] " + self.translator.t("plan.on" if enabled else "plan.off")
+        )
+        operation = self.operation
+        if operation is not None:
+            self.service.repository.append_event(
+                OperationEvent(
+                    operation_id=operation.id,
+                    event_type="operator.plan_mode",
+                    payload={"enabled": enabled},
+                )
+            )
+        self._refresh_chrome()
+        self.query_one("#command-input", Input).focus()
 
     def action_toggle_journal(self) -> None:
         views = self.query_one("#views", ContentSwitcher)
@@ -1463,6 +1528,13 @@ class SamuraiApp(App[None]):
             "[status] " + self.translator.t(f"permission.mode.{mode.value}")
         )
         self._record_permission_mode(previous, mode)
+        if self._chat_history and (
+            previous.allows_operator_questions != mode.allows_operator_questions
+        ):
+            # the prompt carries the autonomy hint, so it has to keep up
+            self._chat_history[0] = Message(
+                role="system", content=self._chat_system_prompt()
+            )
         self._refresh_chrome()
 
     def _record_permission_mode(
@@ -1482,6 +1554,188 @@ class SamuraiApp(App[None]):
 
     def _cycle_permission_mode(self) -> None:
         self._set_permission_mode(next_mode(self._permission_mode))
+
+    def _handle_goal_command(self, argument: str) -> None:
+        operation = self.operation
+        if operation is None:
+            self._write_line("[goal] " + self.translator.t("goal.no-operation"))
+            return
+        head, _, rest = argument.partition(" ")
+        rest = rest.strip()
+        try:
+            match head:
+                case "" | "status":
+                    self._show_goal()
+                case "pause":
+                    self.goals.pause(self._current_goal_id())
+                    self._show_goal()
+                case "resume":
+                    self.goals.resume(self._current_goal_id())
+                    self._show_goal()
+                case "cancel":
+                    self.goals.cancel(self._current_goal_id())
+                    self._show_goal()
+                case "complete":
+                    self.goals.complete(self._current_goal_id())
+                    self._show_goal()
+                case "next":
+                    if not rest:
+                        self._write_line("[goal] " + self.translator.t("goal.need-text"))
+                        return
+                    self.goals.create(operation.id, rest, queue=True)
+                    self._show_goal()
+                case _:
+                    self.goals.create(operation.id, argument)
+                    self._show_goal()
+        except (GoalError, LookupError) as exc:
+            self._write_line(f"[goal] {exc}")
+        self._refresh_chrome()
+
+    def _current_goal_id(self) -> str:
+        goal = self._current_goal()
+        if goal is None:
+            raise LookupError(self.translator.t("goal.none"))
+        return goal.id
+
+    def _show_goal(self) -> None:
+        goal = self._current_goal()
+        if goal is None:
+            self._write_line("[goal] " + self.translator.t("goal.none"))
+        else:
+            self._write_line(
+                f"[goal] {goal.state.value} | {goal.objective} | "
+                f"steps {goal.spent_steps}/{goal.budget_steps} "
+                f"time {goal.spent_seconds}/{goal.budget_seconds}s"
+                + (f" | {goal.block_reason}" if goal.block_reason else "")
+            )
+        if self.operation is None:
+            return
+        for queued in self.goals.list(self.operation.id):
+            if queued.state.value == "queued":
+                self._write_line(f"[goal] queued: {queued.objective}")
+
+    _COMPACT_KEEP = 8
+    _COMPACT_MAX_CHARS = 2000
+
+    @staticmethod
+    def _is_turn_payload(message: Message) -> bool:
+        """True for messages the agent loop appended around an operator turn."""
+        if message.role != "user":
+            return True
+        content = str(message.content)
+        return content.startswith("[tool ") or content.startswith("[shell ")
+
+    def _undo_last_turn(self) -> None:
+        """Drop the last operator turn and everything the loop appended to it."""
+        if len(self._chat_history) <= 1 or self._chat_busy:
+            self._write_dim(self.translator.t("chat.undo-empty"))
+            return
+        while len(self._chat_history) > 1 and self._is_turn_payload(
+            self._chat_history[-1]
+        ):
+            self._chat_history.pop()
+        if len(self._chat_history) > 1:
+            self._chat_history.pop()
+        self._expandable.clear()
+        self._write_dim(self.translator.t("chat.undone"))
+        if self.operation is not None:
+            self.service.repository.append_event(
+                OperationEvent(
+                    operation_id=self.operation.id,
+                    event_type="chat.undo",
+                    payload={"remaining": len(self._chat_history)},
+                )
+            )
+
+    async def _compact_history(self) -> None:
+        """Fold the oldest part of the conversation into one bounded digest."""
+        if self._chat_busy:
+            self._write_dim(self.translator.t("chat.compact-busy"))
+            return
+        kept = self._chat_history[-self._COMPACT_KEEP :]
+        system = self._chat_history[:1]
+        older = self._chat_history[1 : len(self._chat_history) - len(kept)]
+        if not older:
+            self._write_dim(self.translator.t("chat.compact-skip"))
+            return
+        model_id = self.models.default_model()
+        if model_id is None:
+            self._write_line("[error] " + self.translator.t("chat.no-model"))
+            return
+        digest = await self._summarize(older)
+        if digest is None:
+            return
+        self._chat_history = [
+            *system,
+            Message(role="user", content=f"[compacted]\n{digest}"),
+            *kept,
+        ]
+        self._write_dim(
+            self.translator.t("chat.compacted", count=len(older), kept=len(kept))
+        )
+        if self.operation is not None:
+            self.service.repository.append_event(
+                OperationEvent(
+                    operation_id=self.operation.id,
+                    event_type="chat.compact",
+                    payload={"compacted": len(older), "kept": len(kept)},
+                )
+            )
+
+    async def _summarize(self, messages: list[Message]) -> str | None:
+        model_id = self.models.default_model()
+        if model_id is None:
+            self._write_line("[error] " + self.translator.t("chat.no-model"))
+            return None
+        prompt = Message(
+            role="user",
+            content=self.translator.t("chat.compact-prompt"),
+        )
+        # the request helper sends whatever sits in the history, so point it at
+        # the slice being folded while the summary call runs
+        saved = self._chat_history
+        self._chat_history = [*messages, prompt]
+        reasoning = (
+            self.settings.get_value(f"model.reasoning_effort.{model_id}")
+            or self.models.default_reasoning_effort()
+        )
+        try:
+            response = await self._request_chat_completion(
+                self.operation.id if self.operation else "", model_id, reasoning, ()
+            )
+        finally:
+            self._chat_history = saved
+        if response is None:
+            return None
+        digest = response.text.strip()
+        if not digest:
+            self._write_dim(self.translator.t("chat.compact-skip"))
+            return None
+        return digest[: self._COMPACT_MAX_CHARS]
+
+    def _drain_steering(self) -> None:
+        """Fold injected messages into the turn before the next model request."""
+        while self._steer_queue:
+            steered = self._steer_queue.pop(0)
+            self._chat_history.append(Message(role="user", content=steered))
+
+    def _count_goal_step(self) -> None:
+        """One model request against the active goal, enforcing the budget."""
+        goal = self._current_goal()
+        if goal is None or goal.state.value != "active":
+            return
+        blocked = self.goals.record_step(goal.id)
+        if blocked.state.value == "blocked":
+            self._write_line(
+                "[goal] " + self.translator.t("goal.blocked", reason=blocked.block_reason)
+            )
+            self._refresh_chrome()
+
+    def _tool_is_read_only(self, tool_id: str) -> bool:
+        try:
+            return self.execution.registry.get(tool_id).definition.read_only
+        except Exception:  # noqa: BLE001 - unknown tool is not read-only
+            return False
 
     def _reusable_approval(self, tool_id: str) -> bool:
         """A tool already approved for this operation needs no second prompt."""
@@ -1659,6 +1913,9 @@ class SamuraiApp(App[None]):
         if name == "/yolo":
             self._toggle_yolo()
             return
+        if name == "/goal":
+            self._handle_goal_command(argument.strip())
+            return
         if name == "/ask":
             self._set_permission_mode(PermissionMode.ASK)
             return
@@ -1674,10 +1931,19 @@ class SamuraiApp(App[None]):
         if name == "/copy":
             self._copy_last(argument.strip())
             return
+        if name == "/undo":
+            self._undo_last_turn()
+            return
+        if name == "/compact":
+            self.run_worker(self._compact_history(), exclusive=False)
+            return
         if name == "/expand":
             self._expand_outputs()
             return
 
+        if command.startswith("!"):
+            self._shell_mode(command[1:].strip())
+            return
         if name.startswith("/"):
             self._write_line(
                 "[error] " + self.translator.t("error.unknown-command", name=name)
@@ -1720,10 +1986,16 @@ class SamuraiApp(App[None]):
     _THINKING_COLORS = ("#5bc0be", "#4fa8ff", "#b197fc", "#74c0fc")
 
     def _chat_system_prompt(self) -> str:
+        autonomy = self.translator.t(
+            "chat.autonomy.never"
+            if not self._permission_mode.allows_operator_questions
+            else "chat.autonomy.ask"
+        )
         return self.translator.t(
             "chat.system",
             cwd=str(self._cwd),
             version=__version__,
+            autonomy=autonomy,
         )
 
     def _trim_chat_history(self) -> None:
@@ -1788,12 +2060,120 @@ class SamuraiApp(App[None]):
         self._thinking_start()
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
 
+    def _shell_mode(self, command: str) -> None:
+        """`!cmd`: run on the host without spending a model round."""
+        if not command:
+            self._write_dim(self.translator.t("shell.empty"))
+            return
+        self.run_worker(self._run_shell_mode(command), exclusive=False)
+
+    def action_shell_background(self) -> None:
+        if not self._shell_running:
+            return
+        self._shell_background = True
+        self._write_dim(self.translator.t("shell.background", command=self._shell_running))
+
+    def action_expand_output(self) -> None:
+        self._expand_outputs()
+
+    async def _run_shell_mode(self, command: str) -> None:
+        operation = self.operation
+        if operation is None:
+            self.operation = self.service.create(
+                "shell",
+                OperationMode.BUG_BOUNTY,
+                ScopeContract(includes=("127.0.0.1/32",)),
+            )
+            operation = self.operation
+        self._shell_running = command
+        self._shell_background = False
+        # Shell-mode output lands in the conversation context, so it is marked
+        # as untrusted-external exactly like a tool result.
+        self._chat_history.append(
+            Message(role="user", content=f"[shell !{command}] (operator command)")
+        )
+        risk = classify_command(command, str(self._cwd))
+        badge = f"  [{risk.label()}]" if not risk.empty else ""
+        self._write_dim(f"⚙ !{command}{badge}")
+        mode = self._permission_mode
+        ask = mode.prompts_for_tools and (
+            not self._reusable_approval("shell.exec") or not risk.empty
+        )
+        if ask:
+            allowed = await self.push_screen_wait(
+                AccessPromptScreen(
+                    self.translator,
+                    f"shell.exec: {command}",
+                    f"r3 · {risk.label()}" if not risk.empty else "r3",
+                )
+            )
+            if not allowed:
+                self._write_dim(self.translator.t("chat.tool-denied", command=command))
+                self._chat_history.append(
+                    Message(role="user", content=f"[shell !{command}] denied by the operator")
+                )
+                self._shell_running = ""
+                return
+        approval_id: str | None = None
+        try:
+            try:
+                result = await asyncio.to_thread(
+                    self.execution.run_tool, operation.id, "shell.exec", {"command": command}
+                )
+            except ApprovalRequiredError as exc:
+                self.kernel.approve(
+                    exc.approval_id,
+                    decided_by="operator" if ask else mode.value,
+                )
+                approval_id = exc.approval_id
+                result = await asyncio.to_thread(
+                    self.execution.run_tool,
+                    operation.id,
+                    "shell.exec",
+                    {"command": command},
+                    approval_id=approval_id,
+                )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            self._write_line(f"[error] {exc}")
+            self._chat_history.append(
+                Message(role="user", content=f"[shell !{command}] error: {exc}")
+            )
+            self._shell_running = ""
+            return
+        prefix = "[bg] " if self._shell_background else ""
+        self._expandable.append((f"!{command}", result.run.exit_code, result.stdout, result.stderr))
+        self._write_dim(
+            prefix
+            + self.translator.t(
+                "chat.tool-collapsed",
+                command=f"!{command}",
+                code=result.run.exit_code,
+                lines=len(result.stdout.strip().splitlines()),
+            )
+        )
+        body = (result.stdout if result.stdout.strip() else result.stderr).rstrip()
+        self._chat_history.append(
+            Message(
+                role="user",
+                content=(
+                    f"[shell !{command}] exit={result.run.exit_code}\n"
+                    f"{body[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]}"
+                ),
+            )
+        )
+        self._trim_chat_history()
+        self._shell_running = ""
+
     async def _chat(
         self, text: str, model_id: str, approval_id: str | None
     ) -> None:
+        self._chat_busy = True
         try:
             await self._chat_loop(text, model_id, approval_id)
         finally:
+            self._chat_busy = False
+            self._shell_running = ""
+            self._shell_background = False
             self._thinking_stop()
             self._refresh_chrome()
             self.query_one("#command-input", Input).focus()
@@ -1864,6 +2244,8 @@ class SamuraiApp(App[None]):
             )
         self._chat_history.append(Message(role="user", content=text))
         for _round in range(self._CHAT_MAX_TOOL_ROUNDS):
+            self._drain_steering()
+            self._count_goal_step()
             try:
                 response = await self._request_chat_completion(
                     operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
@@ -1885,6 +2267,9 @@ class SamuraiApp(App[None]):
                     self._write_ai_message(response)
                 else:
                     self._write_dim(self.translator.t("chat.empty-reply"))
+                if self._steer_queue:
+                    # the operator steered while this answer was in flight
+                    continue
                 return
             if response.text.strip():
                 self._chat_history.append(
@@ -1925,6 +2310,15 @@ class SamuraiApp(App[None]):
             return Message(
                 role="user",
                 content=f"[tool {call.name}] the operator has not trusted this directory",
+            )
+        if self._plan_mode and not self._tool_is_read_only(tool_id):
+            self._write_dim(self.translator.t("plan.blocked", command=command))
+            return Message(
+                role="user",
+                content=(
+                    f"[tool {call.name}] blocked: plan mode allows read-only "
+                    f"calls only (command: {command})"
+                ),
             )
         risk = classify_command(command, str(self._cwd))
         badge = f"  [{risk.label()}]" if not risk.empty else ""
@@ -2501,6 +2895,8 @@ class SamuraiApp(App[None]):
             }[mode],
         )
         bar.append(f" {mode.value}")
+        if self._plan_mode:
+            bar.append(" | plan", style="#b197fc")
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
@@ -2513,14 +2909,39 @@ class SamuraiApp(App[None]):
         if current != "journal":
             self._render_view(current)
 
+    def _refresh_goal_strip(self, item: Static) -> None:
+        goal = self._current_goal()
+        if goal is None:
+            item.display = False
+            return
+        item.update(
+            Text(
+                self.translator.t(
+                    f"goal.strip.{goal.state.value}",
+                    steps=f"{goal.spent_steps}/{goal.budget_steps}",
+                    seconds=f"{goal.spent_seconds}/{goal.budget_seconds}",
+                ),
+                style="#b197fc",
+            )
+        )
+        item.tooltip = goal.objective
+        item.display = True
+
+    def _current_goal(self) -> Goal | None:
+        if self.operation is None:
+            return None
+        return self.goals.current(self.operation.id)
+
     def _refresh_ops_strip(self) -> None:
         agents_item = self.query_one("#strip-agents", Static)
         todo_item = self.query_one("#strip-todo", Static)
         task_item = self.query_one("#strip-task", Static)
+        goal_item = self.query_one("#strip-goal", Static)
         if not self.operation:
-            for item in (agents_item, todo_item, task_item):
+            for item in (agents_item, todo_item, task_item, goal_item):
                 item.display = False
             return
+        self._refresh_goal_strip(goal_item)
         operation_id = self.operation.id
         runs = self.agents.list_runs(operation_id)
         if runs:

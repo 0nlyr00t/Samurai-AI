@@ -39,6 +39,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.ask": "/ask              Ask before every command (default mode)",
         "help.yolo": "/yolo             Toggle YOLO mode (no permission prompts)",
         "help.never": "/never            Never ask; the agent also stops asking questions",
+        "help.plan-mode": "Shift-Tab          Plan mode: read-only calls until you confirm leaving",
+        "help.goal": "/goal [obj|status|pause|resume|cancel|next <obj>]  Goal with a budget",
+        "help.shell": "!command          Run on the host without a model round",
+        "help.undo": "/undo             Undo the last prompt and its tool output",
+        "help.compact": "/compact          Compress the conversation context",
         "help.mouse": "/mouse            Toggle mouse capture (off = native selection)",
         "help.trust": "/trust           Manage directory access trust",
         "help.exit": "/exit             Close Samurai AI",
@@ -48,7 +53,27 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "error.unknown-command": "Unknown command: {name}. Use /help.",
         "chat.no-model": "No default model configured — pick one with /model.",
+        "chat.autonomy.never": (
+            "Permission mode is 'never': the operator is not watching every "
+            "call and will not answer questions, so decide yourself, note the "
+            "assumptions you made in the reply, and keep going until the task "
+            "is done."
+        ),
+        "chat.autonomy.ask": "",
         "chat.thinking": "Thinking",
+        "chat.steer": "steering: {text}",
+        "shell.empty": "shell mode: type a command after !",
+        "chat.undone": "last prompt undone",
+        "chat.undo-empty": "nothing to undo",
+        "chat.compact-busy": "wait for the running turn to finish",
+        "chat.compact-skip": "nothing to compact yet",
+        "chat.compacted": "compacted {count} earlier messages, kept {kept}",
+        "chat.compact-prompt": (
+            "Compress the conversation so far into a short factual brief for "
+            "yourself: what was tried, what worked, what is known about the "
+            "target, open questions. Keep facts, drop chatter."
+        ),
+        "shell.background": "moved to background: !{command}",
         "chat.system": (
             "You are Samurai, an AI agent embedded in the operator's terminal "
             "(Samurai AI v{version}) on macOS. Working directory: {cwd}. "
@@ -58,7 +83,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "(id, uname, ls, ps, curl for in-scope targets). Commands may "
             "require operator approval before they run; their bounded output "
             "comes back to you as a tool result. Answer in the operator's "
-            "language, keep replies concise, format code as Markdown."
+            "language, keep replies concise, format code as Markdown. "
+            "{autonomy}"
         ),
         "chat.tool-denied": "denied by operator: {command}",
         "chat.tool-limit": "tool round limit reached — summarizing without tools",
@@ -145,6 +171,20 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "permission.mode.ask": "permission mode: ask before every command",
         "permission.mode.yolo": "permission mode: yolo - no prompts, agent may still ask",
         "permission.mode.never": "permission mode: never ask, agent decides alone",
+        "plan.on": "plan mode on: only read-only tool calls run",
+        "plan.off": "plan mode off: tool calls run again",
+        "plan.leave-action": "leave plan mode",
+        "plan.blocked": "plan mode: {command}",
+        "goal.none": "no current goal — start one with /goal <objective>",
+        "goal.no-operation": "create or open an operation first",
+        "goal.need-text": "give an objective: /goal next <objective>",
+        "goal.blocked": "goal blocked: {reason}",
+        "goal.strip.active": "goal · {steps} steps · {seconds}s",
+        "goal.strip.paused": "goal paused · {steps} steps · {seconds}s",
+        "goal.strip.blocked": "goal blocked · {steps} steps · {seconds}s",
+        "goal.strip.queued": "goal queued · {steps} steps",
+        "goal.strip.complete": "goal complete · {steps} steps",
+        "goal.strip.cancelled": "goal cancelled · {steps} steps",
         "lang.current": "Current language: {locale} (available: ru, en)",
         "lang.changed": "Language changed to {locale}",
         "lang.invalid": "Unsupported language: {locale}. Use ru or en.",
@@ -220,6 +260,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.ask": "/ask              Спрашивать перед каждой командой (режим по умолчанию)",
         "help.yolo": "/yolo             Режим YOLO (без запросов разрешений)",
         "help.never": "/never            Не спрашивать; агент тоже перестаёт задавать вопросы",
+        "help.plan-mode": "Shift-Tab          Режим плана: только read-only вызовы",
+        "help.goal": "/goal [цель|status|pause|resume|cancel|next <цель>]  Цель с бюджетом",
+        "help.shell": "!команда          Выполнить на хосте без раунда модели",
+        "help.undo": "/undo             Отменить последний промпт и его вывод",
+        "help.compact": "/compact          Сжать контекст разговора",
         "help.mouse": "/mouse            Захват мыши (выкл = обычное выделение терминала)",
         "help.trust": "/trust           Управление доверием к директории",
         "help.exit": "/exit             Закрыть Samurai AI",
@@ -229,7 +274,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "error.unknown-command": "Неизвестная команда: {name}. Используйте /help.",
         "chat.no-model": "Модель по умолчанию не настроена — выберите её через /model.",
+        "chat.autonomy.never": (
+            "Режим разрешений — never: оператор не смотрит каждый вызов и не "
+            "будет отвечать на вопросы, поэтому решай сам, отмечай сделанные "
+            "допущения в ответе и доводи задачу до конца."
+        ),
+        "chat.autonomy.ask": "",
         "chat.thinking": "Думает",
+        "chat.steer": "вброс в текущий ход: {text}",
+        "shell.empty": "shell-режим: наберите команду после !",
+        "chat.undone": "последний промпт отменён",
+        "chat.undo-empty": "отменять нечего",
+        "chat.compact-busy": "дождитесь конца текущего хода",
+        "chat.compact-skip": "сжимать пока нечего",
+        "chat.compacted": "сжато {count} ранних сообщений, оставлено {kept}",
+        "chat.compact-prompt": (
+            "Сожми разговор до короткой фактической сводки для себя: что "
+            "пробовали, что сработало, что известно о цели, какие вопросы "
+            "открыты. Факты сохраняй, болтовню выбрасывай."
+        ),
+        "shell.background": "убрано в фон: !{command}",
         "chat.system": (
             "Ты — Samurai, AI-агент, встроенный в терминал оператора "
             "(Samurai AI v{version}) на macOS. Рабочая директория: {cwd}. "
@@ -240,7 +304,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "в скоупе). Перед выполнением команда может требовать одобрения "
             "оператора; ограниченный вывод вернётся тебе как результат "
             "инструмента. Отвечай на языке оператора, кратко, код "
-            "оформляй в Markdown."
+            "оформляй в Markdown. "
+            "{autonomy}"
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
         "chat.tool-limit": "лимит раундов команд — подвожу итог без инструментов",
@@ -327,6 +392,20 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "permission.mode.ask": "режим разрешений: спрашивать перед каждой командой",
         "permission.mode.yolo": "режим разрешений: yolo — без запросов, агент может уточнять",
         "permission.mode.never": "режим разрешений: не спрашивать, агент решает сам",
+        "plan.on": "режим плана включён: выполняются только read-only вызовы",
+        "plan.off": "режим плана выключен: вызовы снова разрешены",
+        "plan.leave-action": "выход из режима плана",
+        "plan.blocked": "режим плана: {command}",
+        "goal.none": "текущей цели нет — начните с /goal <формулировка>",
+        "goal.no-operation": "сначала создайте или откройте операцию",
+        "goal.need-text": "нужна формулировка: /goal next <цель>",
+        "goal.blocked": "цель заблокирована: {reason}",
+        "goal.strip.active": "цель · {steps} шагов · {seconds}с",
+        "goal.strip.paused": "цель на паузе · {steps} шагов · {seconds}с",
+        "goal.strip.blocked": "цель заблокирована · {steps} шагов · {seconds}с",
+        "goal.strip.queued": "цель в очереди · {steps} шагов",
+        "goal.strip.complete": "цель закрыта · {steps} шагов",
+        "goal.strip.cancelled": "цель отменена · {steps} шагов",
         "lang.current": "Текущий язык: {locale} (доступно: ru, en)",
         "lang.changed": "Язык изменён на {locale}",
         "lang.invalid": "Неподдерживаемый язык: {locale}. Используйте ru или en.",
@@ -407,6 +486,11 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.ask",
     "help.yolo",
     "help.never",
+    "help.plan-mode",
+    "help.goal",
+    "help.shell",
+    "help.undo",
+    "help.compact",
     "help.mouse",
     "help.trust",
     "help.exit",
