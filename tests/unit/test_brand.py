@@ -72,4 +72,4 @@ def test_version_flag_prints_the_banner(capsys: pytest.CaptureFixture[str]) -> N
         build_parser().parse_args(["--version"])
     out = capsys.readouterr().out
     assert "╪" in out
-    assert "authorised operations" in out
+    assert "one shot. many kills." in out

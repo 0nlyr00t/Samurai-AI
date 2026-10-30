@@ -8,7 +8,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "legacy {legacy} no longer read; state is kept in {current} "
             "(go back with --db or SAMURAI_HOME)"
         ),
-        "brand.tagline": "authorised operations, the operator in charge",
+        "brand.tagline": "one shot. many kills.",
         "welcome.help-hint": "Use /help to list available commands.",
         "help.help": "/help             Show available commands",
         "help.status": "/status           Show the current operation and kernel summary",
@@ -411,7 +411,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "старый {legacy} больше не читается; состояние лежит в {current} "
             "(вернуться — через --db или SAMURAI_HOME)"
         ),
-        "brand.tagline": "авторизованные операции, оператор решает",
+        "brand.tagline": "one shot. many kills.",
         "welcome.help-hint": "Введите /help для списка команд.",
         "help.help": "/help             Показать доступные команды",
         "help.status": "/status           Показать текущую операцию и сводку ядра",

@@ -3562,7 +3562,7 @@ def test_welcome_shows_the_tagline_without_the_mark(tmp_path: Path) -> None:
             await pilot.pause()
             lines = [line.text for line in app.query_one("#journal", RichLog).lines]
             assert any("Samurai AI" in line for line in lines)
-            assert any("authorised operations" in line for line in lines)
+            assert any("one shot. many kills." in line for line in lines)
             assert not any("╪" in line for line in lines)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
