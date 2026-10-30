@@ -13,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from samurai_ai.i18n import Translator
+from samurai_ai.tui.keys import display_key
 
 _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -70,9 +71,20 @@ class HelpScreen(ModalScreen[None]):
         Binding("pageup", "page_up", show=False, priority=True),
     ]
 
-    def __init__(self, translator: Translator) -> None:
+    def __init__(self, translator: Translator, keymap: dict[str, str]) -> None:
         super().__init__()
         self.translator = translator
+        self.keymap = keymap
+
+    def _label(self, line: str) -> str:
+        """Board keys come from the live map, so the sheet never lies."""
+        if line != "board-open":
+            return self.translator.t(f"help.line.{line}")
+        return self.translator.t(
+            f"help.line.{line}",
+            tasks=display_key(self.keymap.get("open_task_board", "ctrl+t")),
+            findings=display_key(self.keymap.get("open_finding_board", "ctrl+f")),
+        )
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help-dialog"):
@@ -81,10 +93,7 @@ class HelpScreen(ModalScreen[None]):
                 for section_key, lines in _SECTIONS:
                     yield Static(self.translator.t(section_key), classes="help-section")
                     for line in lines:
-                        yield Static(
-                            self.translator.t(f"help.line.{line}"),
-                            classes="help-line",
-                        )
+                        yield Static(self._label(line), classes="help-line")
                 yield Static(self.translator.t("help.section.commands"), classes="help-section")
                 for line in self.translator.help_lines():
                     yield Static(line, classes="help-line")

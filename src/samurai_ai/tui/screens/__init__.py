@@ -6,6 +6,7 @@ from samurai_ai.tui.screens.board import BoardScreen, ItemDetailScreen
 from samurai_ai.tui.screens.custom_endpoint import CustomEndpointScreen
 from samurai_ai.tui.screens.help import HelpScreen
 from samurai_ai.tui.screens.inspector import InspectorScreen
+from samurai_ai.tui.screens.key_capture import KeyCaptureScreen
 from samurai_ai.tui.screens.language import LanguagePromptScreen
 from samurai_ai.tui.screens.model_picker import (
     ADD_CUSTOM_ID,
@@ -13,11 +14,13 @@ from samurai_ai.tui.screens.model_picker import (
     ModelPickerScreen,
 )
 from samurai_ai.tui.screens.new_operation import NewOperationScreen
+from samurai_ai.tui.screens.picker import PickerScreen
 from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
 from samurai_ai.tui.screens.trust import TrustDirectoryScreen
 
 __all__ = [
     "BoardScreen",
+    "PickerScreen",
     "ItemDetailScreen",
     "SessionDetailScreen",
     "SessionsScreen",
@@ -28,6 +31,7 @@ __all__ = [
     "CustomEndpointScreen",
     "HelpScreen",
     "InspectorScreen",
+    "KeyCaptureScreen",
     "LanguagePromptScreen",
     "ModelPickerScreen",
     "NewOperationScreen",

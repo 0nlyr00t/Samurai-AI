@@ -11,7 +11,7 @@ from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
 from textual.timer import Timer
 from textual.widgets import (
@@ -62,10 +62,11 @@ from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
-from samurai_ai.tui import preferences
+from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
+from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.screens import (
     ADD_CUSTOM_ID,
@@ -91,6 +92,7 @@ from samurai_ai.tui.theme import (
     load_theme_files,
     themes_directory,
 )
+from samurai_ai.tui.themes import ThemeController
 from samurai_ai.tui.widgets import (
     HistoryInput,
     PlusButton,
@@ -107,7 +109,14 @@ _BARE_TOKEN = re.compile(
 _YOLO_LEGACY_KEY = "tui.yolo"
 
 
-class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
+class SamuraiApp(
+    ChatController,
+    SessionController,
+    BoardController,
+    ThemeController,
+    KeyMapController,
+    App[None],
+):
     COMMANDS = {CommandProvider}
 
     CSS = """
@@ -302,8 +311,8 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         operation_id: str | None = None,
     ) -> None:
         super().__init__()
-        self._theme_problems: list[str] = []
-        self._theme_files = self._register_themes()
+        self._theme_files: list[str] = []
+        self._theme_problems = self._register_themes()
         self.service = service
         self.kernel = kernel
         self.settings = settings
@@ -325,6 +334,9 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
+        self._key_problems: list[str] = []
+        self.keymap = self._apply_keymap()
+        self._key_capture = False
         self._locale_known = settings.get_locale() is not None
         self._last_quit_request = 0.0
         self._history: list[str] = json.loads(settings.get_value("tui.history") or "[]")
@@ -365,11 +377,27 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             self.register_theme(builtin_theme(name))
         loaded, problems = load_theme_files(themes_directory())
         for theme in loaded:
-            self.register_theme(build_theme(theme.name, theme.palette, dark=True))
+            self.register_theme(build_theme(theme.name, theme.palette, dark=theme.dark))
         wanted = preferences.load_theme()
         self.theme = wanted if wanted in self.available_themes else DEFAULT_THEME
         self._theme_files = [theme.name for theme in loaded]
         return problems
+
+    def _apply_keymap(self) -> dict[str, str]:
+        """Load the operator's bindings and install them on this instance.
+
+        Textual builds ``BINDINGS`` once per class, so the merged map is replaced
+        on the instance instead of mutating the class attribute.
+        """
+        mapping, problems = keys.load(preferences.keys_path())
+        self._key_problems = problems
+        labels = {action.name: self.translator.t(action.label_key) for action in keys.ACTIONS}
+        self._bindings = BindingsMap(keys.to_bindings(mapping, labels))
+        return mapping
+
+    def _refresh_keymap(self) -> None:
+        labels = {action.name: self.translator.t(action.label_key) for action in keys.ACTIONS}
+        self._bindings = BindingsMap(keys.to_bindings(self.keymap, labels))
 
     def get_css_variables(self) -> dict[str, str]:
         """Fill tokens Textual's own themes do not define.
@@ -487,6 +515,10 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
             self.operation = None
 
         self._refresh_chrome()
+        for problem in self._theme_problems:
+            self._write_dim(self.translator.t("theme.problem", problem=problem))
+        for problem in self._key_problems:
+            self._write_dim(self.translator.t("keys.problem", problem=problem))
         if self._locale_known:
             self._after_locale()
         else:
@@ -1566,7 +1598,7 @@ class SamuraiApp(ChatController, SessionController, BoardController, App[None]):
         self._show_help()
 
     def _show_help(self) -> None:
-        self.push_screen(HelpScreen(self.translator))
+        self.push_screen(HelpScreen(self.translator, self.keymap))
 
     def _cmd_exit(self) -> None:
         # ``_exit`` is already Textual's own hook, so the command differs

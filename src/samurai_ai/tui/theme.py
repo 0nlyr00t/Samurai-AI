@@ -129,6 +129,7 @@ class LoadedTheme:
     name: str
     palette: dict[str, str]
     warnings: tuple[str, ...]
+    dark: bool = True
 
     @property
     def ok(self) -> bool:
@@ -235,7 +236,13 @@ def parse_palette(name: str, payload: str) -> LoadedTheme:
     if missing:
         raise ThemeFileError(f"{name}: нет обязательных токенов {', '.join(missing)}")
     palette.update(supplied)
-    return LoadedTheme(name=name, palette=palette, warnings=contrast_warnings(palette))
+    dark = data.get("dark", True)
+    return LoadedTheme(
+        name=name,
+        palette=palette,
+        warnings=contrast_warnings(palette),
+        dark=dark if isinstance(dark, bool) else True,
+    )
 
 
 def load_theme_file(path: Path) -> LoadedTheme:
