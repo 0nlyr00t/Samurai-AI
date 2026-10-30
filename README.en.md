@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh
 
 The script installs uv (if missing) and installs `samurai` via
 `uv tool install` from this repository — the Python 3.12+ toolchain is
-provided automatically. A specific release: `... | bash -s -- --ref v0.2.0`.
+provided automatically. A specific release: `... | bash -s -- --ref v0.3.0`.
 
 Update to the latest release:
 
