@@ -160,6 +160,7 @@ class HttpxProbeTool(_ScopedSandboxTool):
             description="Probe in-scope web targets with httpx in the scoped "
             "sandbox (status, title, tech fingerprint)",
             risk_class=RiskClass.R2,
+            read_only=True,
             network=NetworkAccess.PROXIED,
             timeout_seconds=300,
             output_limit_bytes=262144,

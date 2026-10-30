@@ -92,6 +92,10 @@ class ToolDefinition(BaseModel):
     kind: ToolKind
     description: str = ""
     risk_class: RiskClass
+    #: Parameters only read: no state change on the host or on the target.
+    #: Plan mode admits read-only calls only, so this flag is the gate — and it
+    #: must stay honest, hence the risk-class coupling checked by the registry.
+    read_only: bool = False
     network: NetworkAccess = NetworkAccess.NONE
     timeout_seconds: int = Field(default=30, ge=1)
     output_limit_bytes: int = Field(default=65536, ge=1)
