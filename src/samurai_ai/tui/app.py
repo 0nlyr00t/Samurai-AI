@@ -25,7 +25,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from samurai_ai import __version__
+from samurai_ai import __version__, config
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
@@ -526,10 +526,26 @@ class SamuraiApp(
             self._write_dim(self.translator.t("theme.problem", problem=problem))
         for problem in self._key_problems:
             self._write_dim(self.translator.t("keys.problem", problem=problem))
+        self._hint_legacy_directory()
         if self._locale_known:
             self._after_locale()
         else:
             self.push_screen(LanguagePromptScreen(self.translator), self._on_locale_chosen)
+
+    def _hint_legacy_directory(self) -> None:
+        """A leftover ``.samurai/`` is not read any more; say where state went."""
+        if config.is_overridden():
+            return
+        legacy = config.legacy_directory(self._cwd)
+        if legacy is None:
+            return
+        self._write_dim(
+            self.translator.t(
+                "config.legacy",
+                legacy=str(legacy),
+                current=str(config.config_directory()),
+            )
+        )
 
     def _on_locale_chosen(self, locale: str | None) -> None:
         if locale:
