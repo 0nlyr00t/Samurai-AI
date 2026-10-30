@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами**, **Stage 6b — fault injection, prompt-injection containment, soak и migration/backup/restore suites** и **Stage 6c — standalone binary, воспроизводимые сборки, подписанные релизы и политика совместимости (`md/compatibility.md`)** и **Этап 7 (волна 1) — governed security tools adapters `recon.httpx-probe` и `scan.nuclei` по threat review** и **Этап 8 — TUI UX: стрелочная навигация (выбор языка, `/model` picker модели и reasoning), чёрная тема по умолчанию и цветной журнал** и **Stage 8+ — вкладки Журнал/План/Находки/Доступ, автодополнение slash-команд, выделение и копирование текста, режим `/yolo`, доверие к директории (`/trust`) и отображение cwd в статус-баре**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами**, **Stage 6b — fault injection, prompt-injection containment, soak и migration/backup/restore suites** и **Stage 6c — standalone binary, воспроизводимые сборки, подписанные релизы и политика совместимости (`md/compatibility.md`)** и **Этап 7 (волна 1) — governed security tools adapters `recon.httpx-probe` и `scan.nuclei` по threat review** и **Этап 8 — TUI UX: стрелочная навигация (выбор языка, `/model` picker модели и reasoning), чёрная тема по умолчанию и цветной журнал** , **Stage 8+ — вкладки Журнал/План/Находки/Доступ, автодополнение slash-команд, выделение и копирование текста, режим `/yolo`, доверие к директории (`/trust`) и отображение cwd в статус-баре** и **Этап 9 — harness UX: режимы разрешений, plan mode, goal mode, steering, shell-режим, `/undo` и `/compact`**.
 
 Уже реализовано:
 
@@ -62,7 +62,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - custom playbooks (JSON templates со структурной валидацией, immutable
   хранилище, `playbook install/use/list-custom`) и trusted versioned skills
   (`--trusted` обязателен, sha256, инжекция в executor prompt), TUI
-  `/playbooks` и `/skills`, SQLite v16;
+  `/playbooks` и `/skills`, SQLite v17;
 - стабильный контракт exit codes (0/1/2, зафиксирован тестами), экспорт
   журнала в NDJSON (`events export`), headless mode для CI (`headless run`
   с JSON summary), GitHub Actions CI (ruff, strict mypy, pytest, build);
@@ -75,15 +75,16 @@ Samurai AI — local-first TUI harness для авторизованных Red T
   wall time, interventions, invalid actions и false positives из журнала
   событий, сравнение с baseline для регрессий (`eval run`, `eval compare`),
   smoke-сьют `evals/smoke.json` в CI;
+- режимы разрешений `ask`/`yolo`/`never` с переиспользованием approval и бейджами чувствительных путей, plan mode (`Shift-Tab`) по признаку `read_only`, goal mode с бюджетом шагов и времени, steering `Ctrl-S`, shell-режим `!`, `/undo` и `/compact`;
 - RU/EN first-run выбор языка и переключение через `/lang`;
-- SQLite migrations v1–v16, append-only events и optimistic concurrency;
+- SQLite migrations v1–v17, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 621 unit/integration/CLI/TUI tests.
+- 681 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), security tools волны 2 (subfinder/nmap/ffuf —
 технические блокеры в `md/threat-review-security-tools.md`), LLM streaming,
-поаргументные permission-правила с doom-loop guard, extension seams/плагины,
+поаргументные permission-правила с doom-loop guard, shell-режим в фоне на уровне ОС, extension seams/плагины,
 web-поверхность операции, полный egress enforcement на
 Docker Desktop for Mac и OS-пакеты installers (есть bare standalone binary).
 

@@ -20,7 +20,7 @@ Samurai AI is a local-first TUI harness for authorized Red Team operations, Bug 
 
 ## Current status
 
-**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates**, **Stage 6b — fault injection, prompt-injection containment, soak, and migration/backup/restore suites**, and **Stage 6c — the standalone binary, reproducible builds, signed releases, and the compatibility policy (`md/compatibility.md`)**, and **Stage 7 (wave 1) — the governed `recon.httpx-probe` and `scan.nuclei` security tool adapters per the threat review**, and **Stage 8 — TUI UX: arrow-key navigation (language chooser, `/model` picker with reasoning effort), black theme by default, and a colorized journal**, and **Stage 8+ — Journal/Plan/Findings/Access tabs, slash-command autocomplete, text selection and copy, `/yolo` mode, directory trust (`/trust`), and cwd display in the status bar** are complete.
+**Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 in full — the Bug Bounty, CTF/HTB, Red Team, and Operation Planning playbooks**, **Stage 5 in full — parallel specialized agents, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI, and HTML reports**, and **Stage 6a — the evaluation harness with metrics and regression gates**, **Stage 6b — fault injection, prompt-injection containment, soak, and migration/backup/restore suites**, and **Stage 6c — the standalone binary, reproducible builds, signed releases, and the compatibility policy (`md/compatibility.md`)**, and **Stage 7 (wave 1) — the governed `recon.httpx-probe` and `scan.nuclei` security tool adapters per the threat review**, and **Stage 8 — TUI UX: arrow-key navigation (language chooser, `/model` picker with reasoning effort), black theme by default, and a colorized journal**, and **Stage 8+ — Journal/Plan/Findings/Access tabs, slash-command autocomplete, text selection and copy, `/yolo` mode, directory trust (`/trust`), and cwd display in the status bar** and **Stage 9 — harness UX: permission modes, plan mode, goal mode, steering, shell mode, `/undo` and `/compact`** are complete.
 
 Implemented:
 
@@ -66,7 +66,7 @@ Implemented:
 - custom playbooks (JSON templates with structural validation, immutable
   storage, `playbook install/use/list-custom`) and trusted versioned skills
   (`--trusted` required, sha256 recorded, bounded injection into executor
-  prompts), TUI `/playbooks` and `/skills`, SQLite v16;
+  prompts), TUI `/playbooks` and `/skills`, SQLite v17;
 - a stable exit code contract (0/1/2, pinned by tests), NDJSON journal
   export (`events export`), a headless mode for CI (`headless run` with a
   JSON summary), and GitHub Actions CI (ruff, strict mypy, pytest, build);
@@ -81,15 +81,15 @@ Implemented:
   event journal, and baseline comparison for regression gating (`eval run`,
   `eval compare`), with the `evals/smoke.json` smoke suite in CI;
 - RU/EN first-run language selection and `/lang` switching;
-- SQLite migrations v1–v16, append-only events, and optimistic concurrency;
+- SQLite migrations v1–v17, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 621 unit/integration/CLI/TUI tests.
+- 681 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), wave-2 security tools (subfinder/nmap/ffuf —
 technical blockers documented in `md/threat-review-security-tools.md`),
 LLM streaming, per-argument permission rules with a doom-loop guard,
-extension seams/plugins, an operation web surface, full egress enforcement on
+OS-level background shell jobs, extension seams/plugins, an operation web surface, full egress enforcement on
 Docker Desktop for Mac, and OS package installers (a bare standalone binary is
 available).
 
