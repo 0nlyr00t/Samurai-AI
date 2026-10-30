@@ -21,6 +21,7 @@ _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("help.section.streaming", ("stream-steer", "stream-stop")),
     ("help.section.panels", ("panel-keys", "panel-esc", "panel-expand")),
+    ("help.section.boards", ("board-open", "board-actions", "board-filter")),
 )
 
 
@@ -86,7 +87,7 @@ class HelpScreen(ModalScreen[None]):
                             self.translator.t(f"help.line.{line}"),
                             classes="help-line",
                         )
-                yield Static(self.translator.t("help.title"), classes="help-section")
+                yield Static(self.translator.t("help.section.commands"), classes="help-section")
                 for line in self.translator.help_lines():
                     yield Static(line, classes="help-line")
             yield Static(self.translator.t("help.hint"), id="help-hint")

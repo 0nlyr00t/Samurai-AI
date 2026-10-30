@@ -383,11 +383,19 @@ class BoardController:
                 t.t("board.section.text"),
                 [task.title, task.description] if task.description else [task.title],
             ),
-            (t.t("board.section.deps"), list(task.depends_on)),
+            (t.t("board.section.deps"), self._dep_lines(task)),
             (t.t("board.section.requires"), list(task.required_artifacts)),
             (t.t("board.section.runs"), runs),
             (t.t("board.section.children"), children),
         ]
+
+    def _dep_lines(self, task: PlanTask) -> list[str]:
+        plan = self._current_plan()
+        lines: list[str] = []
+        for dep_id in task.depends_on:
+            other = plan.task_by_id(dep_id) if plan is not None else None
+            lines.append(f"{dep_id} — {other.title}" if other is not None else dep_id)
+        return lines
 
     def _show_finding_detail(self, finding_id: str) -> None:
         from samurai_ai.tui.screens import ItemDetailScreen
