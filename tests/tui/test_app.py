@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rich.text import Text
-from textual.widgets import Button, Input, OptionList, RichLog, Static
+from textual.widgets import Button, ContentSwitcher, Input, OptionList, RichLog, Static, Tabs
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
@@ -324,7 +324,6 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
 
                 assert not any("tui-secret-plaintext" in message for message in messages)
 
-            from textual.widgets import ContentSwitcher
 
             views = app.query_one("#views", ContentSwitcher)
             assert views.display
@@ -766,8 +765,6 @@ def test_tabs_switch_views(tmp_path: Path) -> None:
     async def exercise() -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
-            from textual.widgets import ContentSwitcher, Tabs
-
             await pilot.pause()
             tabs = app.query_one("#view-tabs", Tabs)
             switcher = app.query_one("#views", ContentSwitcher)
@@ -1491,7 +1488,6 @@ def test_plus_button_creates_operation_tab(tmp_path: Path) -> None:
             assert app.operation.name == "Fresh recon op"
             assert app.operation.mode.value == "red-team"
             assert "Fresh recon op" in str(app.query_one("#opname", Static).render())
-            from textual.widgets import ContentSwitcher
 
             switcher = app.query_one("#views", ContentSwitcher)
             assert switcher.current == "journal"
@@ -3418,7 +3414,6 @@ def test_key_override_is_loaded_and_fires(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(90, 26)) as pilot:
             await pilot.pause()
-            from textual.widgets import ContentSwitcher
 
             views = app.query_one("#views", ContentSwitcher)
             assert views.display is True
@@ -3552,7 +3547,7 @@ def test_thinking_indicator_turns_without_words(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_welcome_shows_the_tagline_without_the_mark(tmp_path: Path) -> None:
+def test_greeting_is_the_name_and_version_only(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
 
@@ -3562,17 +3557,36 @@ def test_welcome_shows_the_tagline_without_the_mark(tmp_path: Path) -> None:
             await pilot.pause()
             lines = [line.text for line in app.query_one("#journal", RichLog).lines]
             assert any("Samurai AI" in line for line in lines)
-            assert any("one shot. many kills." in line for line in lines)
-            assert not any("╪" in line for line in lines)
+            assert not any("one shot" in line for line in lines)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
 
 
-def test_legacy_directory_hint_is_shown_once(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SAMURAI_CONFIG_HOME", raising=False)
-    monkeypatch.delenv("SAMURAI_HOME", raising=False)
+def test_clicking_a_tab_switches_the_view(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            switcher = app.query_one("#views", ContentSwitcher)
+            assert switcher.current == "journal"
+            await pilot.click("#tab-bounty")
+            await pilot.pause()
+            assert switcher.current == "view-bounty"
+            await pilot.click("#tab-ops")
+            await pilot.pause()
+            assert switcher.current == "view-ops"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_no_legacy_hint_even_with_an_old_state_directory(tmp_path: Path, monkeypatch) -> None:
     workdir = tmp_path / "work"
     (workdir / ".samurai").mkdir(parents=True)
     (workdir / ".samurai" / "samurai.db").write_text("")
@@ -3585,27 +3599,7 @@ def test_legacy_directory_hint_is_shown_once(tmp_path: Path, monkeypatch) -> Non
         async with app.run_test(size=(110, 26)) as pilot:
             await pilot.pause()
             text = " ".join(line.text for line in app.query_one("#journal", RichLog).lines)
-            assert ".samurai" in text
-            assert "--db" in text
-            await pilot.press("ctrl+c")
-            await pilot.press("ctrl+c")
-
-    asyncio.run(exercise())
-
-
-def test_no_legacy_hint_when_the_path_is_overridden(tmp_path: Path, monkeypatch) -> None:
-    workdir = tmp_path / "work"
-    (workdir / ".samurai").mkdir(parents=True)
-    (workdir / ".samurai" / "samurai.db").write_text("")
-    monkeypatch.chdir(workdir)
-    stack = _minimal_stack(tmp_path)
-    stack[2].set_locale("en")
-
-    async def exercise() -> None:
-        app = SamuraiApp(*stack)
-        async with app.run_test(size=(110, 26)) as pilot:
-            await pilot.pause()
-            text = " ".join(line.text for line in app.query_one("#journal", RichLog).lines)
+            assert ".samurai" not in text
             assert "--db" not in text
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
