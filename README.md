@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="assets/samurai-logo.svg" width="760" alt="Samurai AI — ниндзя в развороте, рассекающий красный круг">
+  <img src="assets/samurai-logo.jpg" width="880" alt="Samurai AI — самурай с катаной в красном росчерке-кольце, вордмарк и слоган по дуге">
 </p>
-
-<p align="center"><em>ONE SHOT. MANY KILLS.</em></p>
 
 <p align="center">
   <strong>Русский</strong> · <a href="README.en.md">English</a>
@@ -10,7 +8,7 @@
 
 # Samurai AI
 
-Samurai AI — local-first TUI harness для авторизованных Red Team-операций, Bug Bounty, CTF/HTB и Operation Planning. Продукт строится вокруг управляемой операции, а не вокруг неограниченного чата с инструментами. Знак — ниндзя в развороте, рассекающий красный круг: один заход, много целей. В интерфейсе знака нет, только спиннер ожидания.
+Samurai AI — local-first TUI harness для авторизованных Red Team-операций, Bug Bounty, CTF/HTB и Operation Planning. Продукт строится вокруг управляемой операции, а не вокруг неограниченного чата с инструментами. Знак — самурай с катаной в красном росчерке-кольце: один заход, много целей. Логотип живёт только здесь и в пакете — в терминале ни знака, ни слогана.
 
 ## Принципы
 
