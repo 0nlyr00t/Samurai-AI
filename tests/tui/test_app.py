@@ -1739,6 +1739,94 @@ def test_chat_ask_mode_still_prompts_for_sensitive_commands(tmp_path: Path) -> N
     asyncio.run(exercise())
 
 
+def test_restart_restores_the_transcript(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, ["echo one"])
+
+    async def turn() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "first question"
+            await pilot.press("enter")
+            await _answer_access(app, pilot, allow=True)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(turn())
+
+    async def restart() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            text = "\n".join(lines)
+            assert "first question" in text
+            assert "restored" in text
+            assert "end of the restored history" in text
+            # the model gets the turn back, behind the current system prompt
+            assert app._chat_history[0].role == "system"
+            assert any(m.content == "first question" for m in app._chat_history)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(restart())
+
+
+def test_clear_wipes_the_transcript_here_and_in_the_database(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, ["echo one"])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "first question"
+            await pilot.press("enter")
+            await _answer_access(app, pilot, allow=True)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.chat_history.tail(operation.id)[1] > 0
+
+            command_input.value = "/clear"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.chat_history.tail(operation.id) == ([], 0, False)
+            assert app._chat_history == []
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_undo_also_drops_the_persisted_turn(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "doomed turn"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.chat_history.tail(operation.id)[1] > 0
+
+            command_input.value = "/undo"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.chat_history.tail(operation.id)[1] == 0
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_chat_never_mode_never_prompts(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, ["cat .env"])
     stack[2].set_value("tui.permission_mode", "never")

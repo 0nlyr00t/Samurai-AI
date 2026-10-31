@@ -145,6 +145,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/never", GROUP_CONTROL, "_set_mode_never"),
     _spec("/undo", GROUP_CONTROL, "_undo_last_turn"),
     _spec("/compact", GROUP_CONTROL, "_compact_now"),
+    _spec("/clear", GROUP_CONTROL, "_clear_chat"),
 )
 
 _BY_NAME = {spec.name: spec for spec in COMMANDS}
