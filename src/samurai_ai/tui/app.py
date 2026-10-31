@@ -1199,13 +1199,13 @@ class SamuraiApp(
         disable = getattr(driver, "_disable_mouse_support", None)
         if enable is None or disable is None:
             return
-        if self.settings.get_value("tui.mouse") == "1":
-            enable()
-        else:
+        if self.settings.get_value("tui.mouse") == "0":
             disable()
+        else:
+            enable()
 
     def _toggle_mouse(self) -> None:
-        enabled = self.settings.get_value("tui.mouse") != "1"
+        enabled = self.settings.get_value("tui.mouse") == "0"
         self.settings.set_value("tui.mouse", "1" if enabled else "0")
         self._apply_mouse()
         self._write_dim(self.translator.t("mouse.enabled" if enabled else "mouse.disabled"))
