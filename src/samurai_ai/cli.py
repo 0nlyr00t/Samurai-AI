@@ -1,6 +1,5 @@
 import argparse
 import json
-import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -142,46 +141,9 @@ class _VersionAction(argparse.Action):
 def print_version_banner() -> None:
     from rich.console import Console
 
-    from samurai_ai.i18n import Translator
-    from samurai_ai.tui import brand
     from samurai_ai.tui.theme import BUILTIN, DEFAULT_THEME
 
-    palette = BUILTIN[DEFAULT_THEME]
-    painter = brand.Painter(
-        {
-            brand.BLADE: palette["text"],
-            brand.GUARD: palette["accent"],
-            brand.HILT: palette["text-dim"],
-            brand.ARC: palette["danger"],
-        }
-    )
-    console = Console()
-    console.print(brand.render(painter))
-    console.print(f"[bold {palette['accent']}]samurai[/] {__version__}")
-    locale = os.environ.get("SAMURAI_LANG", "").strip().lower()
-    console.print(
-        Translator(locale if locale in {"ru", "en"} else "en").t("brand.tagline"),
-        style=palette["text-dim"],
-    )
-
-
-def _warn_legacy_state() -> None:
-    """A stale ``.samurai/`` next to the caller is the top "where is my data?" cause."""
-    from samurai_ai import config
-    from samurai_ai.i18n import Translator
-
-    if config.is_overridden():
-        return
-    legacy = config.legacy_directory()
-    if legacy is None:
-        return
-    locale = os.environ.get("SAMURAI_LANG", "").strip().lower()
-    print(
-        Translator(locale if locale in {"ru", "en"} else "en").t(
-            "config.legacy", legacy=legacy, current=config.config_directory()
-        ),
-        file=sys.stderr,
-    )
+    Console().print(f"[bold {BUILTIN[DEFAULT_THEME]['accent']}]samurai[/] {__version__}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -542,10 +504,7 @@ def _make_services(
     SkillService,
     IntegrationExportService,
 ]:
-    path = database_path or default_database_path()
-    if database_path is None:
-        _warn_legacy_state()
-    database = Database(path)
+    database = Database(database_path or default_database_path())
     operation_repository = OperationRepository(database)
     operations = OperationService(operation_repository)
     kernel = KernelService(operations, KernelRepository(database))

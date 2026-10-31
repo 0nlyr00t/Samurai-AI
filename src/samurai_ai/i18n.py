@@ -4,11 +4,6 @@ DEFAULT_LOCALE = "en"
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
         "input.placeholder": "Enter a command; /help lists Operation Kernel capabilities",
-        "config.legacy": (
-            "legacy {legacy} no longer read; state is kept in {current} "
-            "(go back with --db or SAMURAI_HOME)"
-        ),
-        "brand.tagline": "one shot. many kills.",
         "welcome.help-hint": "Use /help to list available commands.",
         "help.help": "/help             Show available commands",
         "help.status": "/status           Show the current operation and kernel summary",
@@ -407,11 +402,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "ru": {
         "input.placeholder": "Введите команду; /help показывает возможности ядра операции",
-        "config.legacy": (
-            "старый {legacy} больше не читается; состояние лежит в {current} "
-            "(вернуться — через --db или SAMURAI_HOME)"
-        ),
-        "brand.tagline": "one shot. many kills.",
         "welcome.help-hint": "Введите /help для списка команд.",
         "help.help": "/help             Показать доступные команды",
         "help.status": "/status           Показать текущую операцию и сводку ядра",
