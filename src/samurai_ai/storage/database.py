@@ -661,6 +661,20 @@ CREATE INDEX IF NOT EXISTS goals_operation_state
 ON goals(operation_id, state, created_at);
 """
 
+_MIGRATION_18 = """
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS chat_messages_operation_id
+ON chat_messages(operation_id, id);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -679,6 +693,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (15, _MIGRATION_15),
     (16, _MIGRATION_16),
     (17, _MIGRATION_17),
+    (18, _MIGRATION_18),
 )
 
 

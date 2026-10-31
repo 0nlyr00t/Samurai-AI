@@ -10,7 +10,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
-from textual.widgets import Input, Static
+from textual.widgets import Input, RichLog, Static
 
 from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, Message, ToolCall, ToolSpec
@@ -20,6 +20,7 @@ from samurai_ai.domain.permission import classify_command
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.i18n import Translator
+from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
@@ -48,6 +49,7 @@ class ChatController:
 
         def paint(self, style: str) -> str: ...
         _chat_history: list[Message]
+        chat_history: ChatHistoryService
         _steer_queue: list[str]
         _chat_busy: bool
         _shell_running: str
@@ -69,6 +71,7 @@ class ChatController:
         def _write_dim(self, text: str) -> None: ...
         def _write_user_message(self, text: str) -> None: ...
         def _write_ai_message(self, response: Any) -> None: ...
+        def _write_welcome(self) -> None: ...
         def _refresh_chrome(self) -> None: ...
         def copy_to_clipboard(self, text: str) -> None: ...
         def query_one(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -180,6 +183,53 @@ class ChatController:
             autonomy=autonomy,
         )
 
+    def _restore_chat(self) -> None:
+        """Bring the operation's earlier turns back into the context and the journal."""
+        if self.operation is None:
+            return
+        messages, total, truncated = self.chat_history.tail(self.operation.id)
+        if not messages:
+            return
+        system = Message(role="system", content=self._chat_system_prompt())
+        self._chat_history = [system, *([marker()] if truncated else []), *messages]
+        self._trim_chat_history()
+        journal = self.query_one("#journal", RichLog)
+        journal.write(Text())
+        self._write_dim(self.translator.t("chat.restored", count=total))
+        if truncated:
+            self._write_dim(self.translator.t("chat.restored-cut"))
+        journal.write(Text())
+        for message in messages:
+            text = str(message.content)
+            if message.role == "assistant":
+                journal.write(Text(text))
+            elif text.startswith(("[tool ", "[shell ")):
+                self._write_dim(text)
+            else:
+                self._write_user_message(text)
+        self._write_dim(self.translator.t("chat.restored-end"))
+
+    def _clear_chat(self) -> None:
+        """Forget the operation's transcript in memory and in the database."""
+        if self.operation is None:
+            self._write_dim(self.translator.t("chat.clear-no-operation"))
+            return
+        if self._chat_busy:
+            self._write_dim(self.translator.t("chat.clear-busy"))
+            return
+        removed = self.chat_history.clear(self.operation.id)
+        self._chat_history.clear()
+        self._expandable.clear()
+        self.query_one("#journal", RichLog).clear()
+        self._write_welcome()
+        self._write_dim(self.translator.t("chat.cleared", count=removed))
+
+    def _remember(self, message: Message) -> None:
+        """Every message enters the context and the transcript together."""
+        self._chat_history.append(message)
+        if self.operation is not None:
+            self.chat_history.remember(self.operation.id, message)
+
     def _trim_chat_history(self) -> None:
         if len(self._chat_history) > self._CHAT_HISTORY_LIMIT + 1:
             self._chat_history = (
@@ -262,7 +312,7 @@ class ChatController:
         self._shell_background = False
         # Shell-mode output lands in the conversation context, so it is marked
         # as untrusted-external exactly like a tool result.
-        self._chat_history.append(
+        self._remember(
             Message(role="user", content=f"[shell !{command}] (operator command)")
         )
         risk = classify_command(command, str(self._cwd))
@@ -282,7 +332,7 @@ class ChatController:
             )
             if not allowed:
                 self._write_dim(self.translator.t("chat.tool-denied", command=command))
-                self._chat_history.append(
+                self._remember(
                     Message(role="user", content=f"[shell !{command}] denied by the operator")
                 )
                 self._shell_running = ""
@@ -308,7 +358,7 @@ class ChatController:
                 )
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self._write_line(f"[error] {exc}")
-            self._chat_history.append(
+            self._remember(
                 Message(role="user", content=f"[shell !{command}] error: {exc}")
             )
             self._shell_running = ""
@@ -325,7 +375,7 @@ class ChatController:
             )
         )
         body = (result.stdout if result.stdout.strip() else result.stderr).rstrip()
-        self._chat_history.append(
+        self._remember(
             Message(
                 role="user",
                 content=(
@@ -404,8 +454,9 @@ class ChatController:
         )
         operation_id = self.operation.id if self.operation else ""
         if not self._chat_history:
+            # rebuilt every launch, never persisted
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
-        self._chat_history.append(Message(role="user", content=text))
+        self._remember(Message(role="user", content=text))
         for _round in range(self._CHAT_MAX_TOOL_ROUNDS):
             self._drain_steering()
             self._count_goal_step()
@@ -420,7 +471,7 @@ class ChatController:
                 return
             self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
             if not response.tool_calls:
-                self._chat_history.append(Message(role="assistant", content=response.text))
+                self._remember(Message(role="assistant", content=response.text))
                 self._trim_chat_history()
                 if response.text.strip():
                     self._write_ai_message(response)
@@ -431,9 +482,9 @@ class ChatController:
                     continue
                 return
             if response.text.strip():
-                self._chat_history.append(Message(role="assistant", content=response.text))
+                self._remember(Message(role="assistant", content=response.text))
             for call in response.tool_calls:
-                self._chat_history.append(await self._run_chat_tool(call))
+                self._remember(await self._run_chat_tool(call))
             self._trim_chat_history()
         # The tool rounds are exhausted: force a final summary call without
         # tools so the operator always gets a closing answer instead of
@@ -447,7 +498,7 @@ class ChatController:
         if final is None:
             return
         self._ctx_tokens += final.usage.prompt_tokens + final.usage.completion_tokens
-        self._chat_history.append(Message(role="assistant", content=final.text))
+        self._remember(Message(role="assistant", content=final.text))
         self._trim_chat_history()
         if final.text.strip():
             self._write_ai_message(final)
