@@ -126,9 +126,9 @@ class ChatController:
         ToolSpec(
             name="agent_spawn",
             description=(
-                "Hand one plan task to a subagent child session that works in "
+                "Hand one plan task to a subagent session that works in "
                 "the background. Prefer it for a self-contained chunk (a scan, "
-                "a set of checks) while you keep going. One child runs at a "
+                "a set of checks) while you keep going. One subagent runs at a "
                 "time; the operator can watch and stop it."
             ),
             parameters={
@@ -491,7 +491,7 @@ class ChatController:
         if run_id is None:
             return Message(
                 role="user",
-                content="[tool agent_spawn] the child did not start (see the journal)",
+                content="[tool agent_spawn] the subagent did not start (see the journal)",
             )
         self._write_dim(self.translator.t("subagent.tool-started", run=run_id))
         return Message(

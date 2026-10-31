@@ -84,7 +84,7 @@ Implemented:
   `eval compare`), with the `evals/smoke.json` smoke suite in CI;
 - three themes (dark, light, high contrast) plus theme files, rebindable global keys;
 - plan and findings boards (`/tasks`, `/findings`) with row actions and details;
-- child sessions via `/subagent` and `Ctrl-G`: a child takes a plan task, works in the background, stays visible and stoppable;
+- subagent sessions via `/subagent` and `Ctrl-G`: a subagent takes a plan task, works in the background, stays visible and stoppable;
 - a `Ctrl-P` palette over every action, a `?` key overlay, a run inspector (`/inspect`, `Ctrl-I`) with eight groups and a freshly re-checked scope decision, a first-run welcome pane and empty states;
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v17, append-only events, and optimistic concurrency;
