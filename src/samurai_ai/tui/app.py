@@ -25,7 +25,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from samurai_ai import __version__, config
+from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
@@ -62,7 +62,7 @@ from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
-from samurai_ai.tui import brand, keys, preferences
+from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
@@ -444,19 +444,8 @@ class SamuraiApp(
         journal = self.query_one("#journal", RichLog)
         journal.write(Text(text, style=self.paint(self._DIM_STYLE)))
 
-    def brand_painter(self) -> brand.Painter:
-        """Mark colours: steel, guard in the theme accent, blood-red arc."""
-        return brand.Painter(
-            {
-                brand.BLADE: self.paint("text"),
-                brand.GUARD: self.paint("accent"),
-                brand.HILT: self.paint("text-dim"),
-                brand.ARC: self.paint("danger"),
-            }
-        )
-
     def _brand_text(self) -> Text:
-        """The side strip carries the name; the mark lives in ``--version`` and the README."""
+        """The side strip carries the name; the logo lives in the README."""
         return Text("Samurai AI", style=self.paint("bold accent"))
 
     def _write_user_message(self, text: str) -> None:
@@ -526,26 +515,10 @@ class SamuraiApp(
             self._write_dim(self.translator.t("theme.problem", problem=problem))
         for problem in self._key_problems:
             self._write_dim(self.translator.t("keys.problem", problem=problem))
-        self._hint_legacy_directory()
         if self._locale_known:
             self._after_locale()
         else:
             self.push_screen(LanguagePromptScreen(self.translator), self._on_locale_chosen)
-
-    def _hint_legacy_directory(self) -> None:
-        """A leftover ``.samurai/`` is not read any more; say where state went."""
-        if config.is_overridden():
-            return
-        legacy = config.legacy_directory(self._cwd)
-        if legacy is None:
-            return
-        self._write_dim(
-            self.translator.t(
-                "config.legacy",
-                legacy=str(legacy),
-                current=str(config.config_directory()),
-            )
-        )
 
     def _on_locale_chosen(self, locale: str | None) -> None:
         if locale:
@@ -577,12 +550,10 @@ class SamuraiApp(
         self._write_dim(self.translator.t("welcome.help-hint"))
 
     def _banner(self) -> Text:
-        """Opening frame: name, version, one line of what this is. No mark."""
+        """Opening frame: name and version, nothing else."""
         block = Text()
         block.append("Samurai AI", style=self.paint("bold accent"))
         block.append(f"  v{__version__}", style=self.paint("dim text-faint"))
-        block.append("\n")
-        block.append(self.translator.t("brand.tagline"), style=self.paint("text-dim"))
         return block
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
