@@ -1,4 +1,4 @@
-"""Sessions screens: the child list and one child's own feed.
+"""Sessions screens: the subagent list and one subagent's own feed.
 
 Both screens are dumb — the app builds the rows and sections and supplies the
 callbacks, so nothing here touches a service.
@@ -22,7 +22,7 @@ Row = tuple[str, str]  # (run id, one-line label)
 
 
 class SessionsScreen(ModalScreen[str]):
-    """List of child sessions; Enter opens one, ``x`` stops it."""
+    """List of subagent sessions; Enter opens one, ``x`` stops it."""
 
     BINDINGS = [
         Binding("escape", "dismiss", "close", priority=True),
@@ -113,11 +113,11 @@ class SessionsScreen(ModalScreen[str]):
 
 
 class SessionDetailScreen(ModalScreen[str]):
-    """One child's steps, tool runs, notes and findings."""
+    """One subagent's steps, tool runs, notes and findings."""
 
     BINDINGS = [
         Binding("escape", "dismiss", "close", priority=True),
-        Binding("x", "stop", "stop child", priority=True),
+        Binding("x", "stop", "stop subagent", priority=True),
         Binding("r", "replay", "replay task", priority=True),
         Binding("i", "inspect", "last run", priority=True),
     ]
