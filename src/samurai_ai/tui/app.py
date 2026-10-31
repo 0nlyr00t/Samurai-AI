@@ -29,7 +29,7 @@ from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
-from samurai_ai.domain.execution import ToolDefinition, ToolRun
+from samurai_ai.domain.execution import SecretRedactor, ToolDefinition, ToolRun
 from samurai_ai.domain.goal import Goal, GoalError
 from samurai_ai.domain.kernel import (
     ApprovalStatus,
@@ -45,6 +45,7 @@ from samurai_ai.domain.permission import (
 )
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.i18n import Translator
+from samurai_ai.services.chat import ChatHistoryService
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
@@ -61,6 +62,7 @@ from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.chat import ChatHistoryRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
@@ -351,6 +353,9 @@ class SamuraiApp(
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
         self._chat_history: list[Message] = []
+        self.chat_history = ChatHistoryService(
+            ChatHistoryRepository(service.repository.database), SecretRedactor()
+        )
         # Plan mode is session state on purpose: it is never persisted and only
         # the operator can enter it.
         self._plan_mode = False
@@ -532,6 +537,8 @@ class SamuraiApp(
 
     def _after_locale(self) -> None:
         self._write_welcome()
+        if not self._chat_history:
+            self._restore_chat()
         self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
         self._maybe_prompt_trust()
@@ -715,6 +722,8 @@ class SamuraiApp(
         self.operation = operation
         self._auto_title = None
         self._chat_history.clear()
+        self.query_one("#journal", RichLog).clear()
+        self._write_welcome()
         self._write_dim(self.translator.t("newop.created", name=name, mode=mode))
         self._switch_view("journal")
         self._refresh_chrome()
@@ -1040,13 +1049,17 @@ class SamuraiApp(
         if len(self._chat_history) <= 1 or self._chat_busy:
             self._write_dim(self.translator.t("chat.undo-empty"))
             return
+        dropped = 0
         while len(self._chat_history) > 1 and self._is_turn_payload(self._chat_history[-1]):
             self._chat_history.pop()
+            dropped += 1
         if len(self._chat_history) > 1:
             self._chat_history.pop()
+            dropped += 1
         self._expandable.clear()
         self._write_dim(self.translator.t("chat.undone"))
         if self.operation is not None:
+            self.chat_history.drop_last(self.operation.id, dropped)
             self.service.repository.append_event(
                 OperationEvent(
                     operation_id=self.operation.id,
@@ -2094,6 +2107,10 @@ class SamuraiApp(
             self._write_line(self.translator.t("welcome.no-last"))
             return
         self.operation = latest
+        self._chat_history.clear()
+        self.query_one("#journal", RichLog).clear()
+        self._write_welcome()
+        self._restore_chat()
         self._refresh_chrome()
 
     def _refresh_chrome(self) -> None:
