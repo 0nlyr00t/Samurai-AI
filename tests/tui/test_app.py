@@ -1507,15 +1507,44 @@ def test_mouse_toggle_switches_capture_setting(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             command_input = app.query_one("#command-input", Input)
-            # mouse capture is off by default: native terminal selection
-            command_input.value = "/mouse"
-            await pilot.press("enter")
-            await pilot.pause()
-            assert settings.get_value("tui.mouse") == "1"
+            # mouse capture is on by default, so the toggle turns it off first
             command_input.value = "/mouse"
             await pilot.press("enter")
             await pilot.pause()
             assert settings.get_value("tui.mouse") == "0"
+            command_input.value = "/mouse"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert settings.get_value("tui.mouse") == "1"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_mouse_capture_is_on_until_it_is_turned_off(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    settings = stack[2]
+    settings.set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            calls: list[str] = []
+            with (
+                patch.object(
+                    app._driver, "_enable_mouse_support", lambda: calls.append("on"), create=True
+                ),
+                patch.object(
+                    app._driver, "_disable_mouse_support", lambda: calls.append("off"), create=True
+                ),
+            ):
+                app._apply_mouse()
+                assert calls == ["on"]
+                settings.set_value("tui.mouse", "0")
+                app._apply_mouse()
+                assert calls == ["on", "off"]
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
