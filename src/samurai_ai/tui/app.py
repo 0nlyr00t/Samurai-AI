@@ -134,9 +134,14 @@ class SamuraiApp(
         background: $panel;
     }
     #view-tabs {
-        width: 32;
+        width: auto;
+        max-width: 45%;
         height: 2;
         background: $panel;
+    }
+    #topbar-space {
+        width: 1fr;
+        height: 2;
     }
     #new-tab {
         width: 5;
@@ -148,13 +153,6 @@ class SamuraiApp(
     }
     #new-tab:hover {
         background: $panel-alt;
-    }
-    #opname {
-        width: 1fr;
-        height: 2;
-        padding: 0 1;
-        color: $text-dim;
-        content-align: left middle;
     }
     #brand {
         width: auto;
@@ -228,9 +226,11 @@ class SamuraiApp(
     """
 
     _VIEW_BY_TAB = {
+        "tab-chat": "journal",
         "tab-ops": "view-ops",
         "tab-bounty": "view-bounty",
     }
+    _TAB_BY_VIEW = {pane: tab for tab, pane in _VIEW_BY_TAB.items()}
 
     #: Journal tag styles, as token names resolved against the active theme.
     _TAG_TOKENS = {
@@ -472,13 +472,14 @@ class SamuraiApp(
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
             yield ViewTabs(
+                Tab(self.translator.t("tabs.chat"), id="tab-chat"),
                 Tab(self.translator.t("tabs.ops"), id="tab-ops"),
                 Tab(self.translator.t("tabs.bounty"), id="tab-bounty"),
                 id="view-tabs",
                 active="",
             )
             yield PlusButton("+", id="new-tab")
-            yield Static(id="opname")
+            yield Static(id="topbar-space")
             yield Static(id="brand")
         yield Static(id="welcome")
         with Horizontal(id="body"):
@@ -543,6 +544,12 @@ class SamuraiApp(
         ):
             tab = tabs.query_one(f"#{tab_id}", Tab)
             tab.label = self.translator.t(key)
+
+    def _chat_label(self) -> str:
+        """The chat tab is named after the operation; without one it is a plain journal."""
+        return self._auto_title or (self.operation.name if self.operation else "") or (
+            self.translator.t("tabs.chat")
+        )
 
     def _write_welcome(self) -> None:
         journal = self.query_one("#journal", RichLog)
@@ -679,6 +686,9 @@ class SamuraiApp(
         self._switch_view(pane)
 
     def _switch_view(self, pane: str) -> None:
+        tab = self._TAB_BY_VIEW.get(pane)
+        if tab is not None and self.query_one("#view-tabs", Tabs).active != tab:
+            self.query_one("#view-tabs", Tabs).active = tab
         self.query_one("#views", ContentSwitcher).current = pane
         if pane != "journal":
             self._render_view(pane)
@@ -2089,8 +2099,7 @@ class SamuraiApp(
     def _refresh_chrome(self) -> None:
         self._refresh_welcome()
         self.query_one("#brand", Static).update(self._brand_text())
-        title = self._auto_title or (self.operation.name if self.operation else "")
-        self.query_one("#opname", Static).update(title)
+        self.query_one("#tab-chat", Tab).label = self._chat_label()
         workspace = Text.assemble(
             (self.translator.t("side.workspace"), self.paint("dim text-faint")),
             ("\n" + self._short_cwd(), self.paint("accent")),
