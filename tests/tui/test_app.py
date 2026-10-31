@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rich.text import Text
-from textual.widgets import Button, ContentSwitcher, Input, OptionList, RichLog, Static, Tabs
+from textual.widgets import Button, ContentSwitcher, Input, OptionList, RichLog, Static, Tab, Tabs
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
@@ -1487,7 +1487,7 @@ def test_plus_button_creates_operation_tab(tmp_path: Path) -> None:
             assert app.operation is not None
             assert app.operation.name == "Fresh recon op"
             assert app.operation.mode.value == "red-team"
-            assert "Fresh recon op" in str(app.query_one("#opname", Static).render())
+            assert "Fresh recon op" in str(app.query_one("#tab-chat", Tab).label)
 
             switcher = app.query_one("#views", ContentSwitcher)
             assert switcher.current == "journal"
@@ -3587,6 +3587,71 @@ def test_greeting_is_the_name_and_version_only(tmp_path: Path) -> None:
             lines = [line.text for line in app.query_one("#journal", RichLog).lines]
             assert any("Samurai AI" in line for line in lines)
             assert not any("one shot" in line for line in lines)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_chat_tab_returns_to_the_journal(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            switcher = app.query_one("#views", ContentSwitcher)
+            await pilot.click("#tab-ops")
+            await pilot.pause()
+            assert switcher.current == "view-ops"
+            chat = app.query_one("#tab-chat", Tab)
+            assert str(chat.label) == operation.name  # the tab is the operation's chat
+            await pilot.click("#tab-chat")
+            await pilot.pause()
+            assert switcher.current == "journal"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_chat_tab_is_a_plain_journal_without_an_operation(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert str(app.query_one("#tab-chat", Tab).label) == "Journal"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_creating_an_operation_activates_its_tab(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.click("#tab-bounty")
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(app, "_show_new_operation", lambda: app._on_new_operation(
+                ("gate lab", "bug-bounty", "")
+            )):
+                command_input.value = "/new"
+                await pilot.press("enter")
+                await pilot.pause()
+            tabs = app.query_one("#view-tabs", Tabs)
+            assert tabs.active == "tab-chat"
+            assert str(app.query_one("#tab-chat", Tab).label) == "gate lab"
+            assert app.query_one("#views", ContentSwitcher).current == "journal"
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
