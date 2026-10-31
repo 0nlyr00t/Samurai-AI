@@ -180,7 +180,7 @@ class KernelService:
         return self._apply_plan_mutation(operation_id, mutate)
 
     def reset_task(self, operation_id: str, task_id: str) -> OperationPlan:
-        """Return a task to pending: after a stopped child, or to redo it."""
+        """Return a task to pending: after a stopped subagent, or to redo it."""
 
         def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
             task = plan.task_by_id(task_id)

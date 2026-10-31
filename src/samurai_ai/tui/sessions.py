@@ -1,6 +1,6 @@
-"""Subagent child sessions: spawn, watch, stop.
+"""Subagent sessions: spawn, watch, stop.
 
-A child runs one plan task in its own thread under the governed orchestrator,
+A subagent runs one plan task in its own thread under the governed orchestrator,
 so the parent turn never blocks. It cannot outrun the operator: approvals come
 back to the UI thread as a prompt, the stop event is checked between steps, and
 plan mode's read-only rule is forwarded as ``read_only_only``.
@@ -25,7 +25,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 @dataclass
 class _Spawn:
-    """Handle of the running child; ``run_id`` lands once the row exists."""
+    """Handle of the running subagent; ``run_id`` lands once the row exists."""
 
     task_id: str
     instruction: str
@@ -99,7 +99,7 @@ class SessionController:
         *,
         specialization: AgentSpecialization = AgentSpecialization.GENERAL,
     ) -> str | None:
-        """Start a child session; returns the created run id, or None."""
+        """Start a subagent session; returns the created run id, or None."""
         operation = self.operation
         if operation is None:
             self._write_line("[subagent] " + self.translator.t("status.no-operation"))
@@ -190,7 +190,7 @@ class SessionController:
         if spawn is None or (run_id is not None and spawn.run_id != run_id):
             return False
         spawn.stop_event.set()
-        # A child blocked on an approval is not between steps, so the event
+        # A subagent blocked on an approval is not between steps, so the event
         # alone would leave it waiting: answer the prompt negatively and close
         # it. The run then ends as cancelled instead of hanging.
         waiting = self._approval_wait
@@ -217,9 +217,9 @@ class SessionController:
 
     # -- approvals --------------------------------------------------------
     def _resolve_approval_from_thread(self, approval_id: str) -> bool:
-        """Called on the child thread: ask the operator, block for the answer.
+        """Called on the subagent thread: ask the operator, block for the answer.
 
-        ``yolo`` and ``never`` never ask, so a child's calls are approved in
+        ``yolo`` and ``never`` never ask, so a subagent's calls are approved in
         place, exactly like the ones from the chat.
         """
         if not self._permission_mode.prompts_for_tools:

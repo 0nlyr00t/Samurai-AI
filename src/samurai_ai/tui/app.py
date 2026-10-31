@@ -276,7 +276,7 @@ class SamuraiApp(
         Binding("ctrl+p", "command_palette", "Commands", show=False, priority=True),
         Binding("f1", "show_help", "Keys", show=False),
         Binding("ctrl+i", "inspect_last_run", "Inspect run", show=False, priority=True),
-        Binding("ctrl+g", "open_sessions", "Child sessions", show=False, priority=True),
+        Binding("ctrl+g", "open_sessions", "Subagent sessions", show=False, priority=True),
         Binding("ctrl+t", "open_task_board", "Plan board", show=False, priority=True),
         Binding("ctrl+f", "open_finding_board", "Findings board", show=False, priority=True),
         Binding("ctrl+s", "steer", "Steer the running turn", show=False, priority=True),
@@ -1313,7 +1313,7 @@ class SamuraiApp(
             )
         )
 
-    # -- child sessions ---------------------------------------------------
+    # -- subagent sessions ---------------------------------------------------
     def _cmd_subagent(self, argument: str) -> None:
         self.run_worker(self.spawn_subagent(argument), exclusive=False)
 
@@ -1396,10 +1396,10 @@ class SamuraiApp(
         self._write_dim(self.translator.t("sessions.replayed", task=task_id))
 
     def _child_tool_runs(self, run: AgentRun) -> list[ToolRun]:
-        """Tool runs caused by this child, oldest first.
+        """Tool runs caused by this subagent, oldest first.
 
         Tool runs carry the plan task, not the agent run, so the task plus the
-        child's start time is the attribution we have.
+        subagent's start time is the attribution we have.
         """
         if self.operation is None:
             return []
