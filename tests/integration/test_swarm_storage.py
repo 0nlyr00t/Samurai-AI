@@ -131,6 +131,11 @@ def test_migration_13_from_v12_database(tmp_path: Path) -> None:
         connection.execute("DELETE FROM schema_migrations WHERE version >= 13")
         connection.execute("DROP TABLE swarm_runs")
         connection.execute("DROP TABLE IF EXISTS custom_models")
+        # v12 не знает поздних таблиц: без их удаления CREATE ... IF NOT EXISTS
+        # переживает откат, а ALTER из v25 упирается в уже добавленную колонку
+        connection.execute("DROP TABLE IF EXISTS finding_retests")
+        connection.execute("DROP TABLE IF EXISTS finding_traffic")
+        connection.execute("DROP TABLE IF EXISTS traffic_pairs")
         connection.execute("ALTER TABLE model_endpoints DROP COLUMN verify_tls")
         connection.execute(
             """

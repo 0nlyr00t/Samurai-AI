@@ -382,11 +382,11 @@ class SamuraiApp(
         self.lessons = LessonService(
             service, kernel, LessonRepository(service.repository.database), settings
         )
-        self.retests = RetestService(
-            service, kernel, RetestRepository(service.repository.database)
-        )
         self.traffic = TrafficService(
             service, kernel, TrafficRepository(service.repository.database)
+        )
+        self.retests = RetestService(
+            service, kernel, RetestRepository(service.repository.database), self.traffic
         )
         self.constraints = ConstraintService(
             service, ConstraintRepository(service.repository.database)

@@ -42,6 +42,7 @@ class Retest(BaseModel):
     summary: str = ""
     evidence: str = ""
     control: str = ""
+    control_pair: str = ""
     created_by: str = "operator"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None

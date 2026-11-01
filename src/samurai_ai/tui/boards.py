@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from samurai_ai.domain.kernel import FindingStatus, GateStatus, TaskStatus
+from samurai_ai.domain.traffic import TrafficNotFoundError, TrafficRole
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from samurai_ai.domain.kernel import Finding, OperationPlan, PlanTask, StageGate
@@ -37,6 +38,7 @@ class BoardController:
         kernel: Any
         execution: Any
         orchestrator: Any
+        traffic: Any
         translator: Any
 
         def child_runs(self) -> list[Any]: ...
@@ -152,6 +154,8 @@ class BoardController:
             "u": self._finding_duplicate,
             "r": self._finding_reported,
             "e": self._finding_evidence,
+            "t": self._finding_traffic_bind,
+            "y": self._finding_traffic_unbind,
         }
         labels = {key: self.translator.t(f"board.action.{key}") for key in actions}
         self.push_screen(
@@ -330,6 +334,72 @@ class BoardController:
 
         self.run_worker(ask(), exclusive=False)  # type: ignore[attr-defined]
 
+    def _finding_traffic_bind(self, finding_id: str) -> None:
+        """Bind one of the operation's unbound pairs, as supporting evidence."""
+
+        async def ask() -> None:
+            from samurai_ai.tui.screens import ArgumentScreen
+
+            bound = {binding.traffic_id for binding in self.traffic.bindings(finding_id)}
+            free = [
+                pair
+                for pair in self.traffic.for_operation(self.operation.id)  # type: ignore[union-attr]
+                if pair.id not in bound
+            ]
+            if not free:
+                self._write_line(self.translator.t("board.no-traffic"))
+                return
+            label = self.translator.t(
+                "board.traffic-of",
+                candidates=", ".join(f"{pair.id} {pair.method} {pair.url}" for pair in free[-6:]),
+            )
+            pair_id = await self.push_screen_wait(ArgumentScreen(self.translator, label))
+            if not pair_id or not pair_id.strip():
+                return
+            self._finding_action(
+                self.translator.t("board.action.t"),
+                finding_id,
+                lambda: self.traffic.bind(finding_id, pair_id.strip(), TrafficRole.SUPPORTING),
+            )
+
+        self.run_worker(ask(), exclusive=False)  # type: ignore[attr-defined]
+
+    def _finding_traffic_unbind(self, finding_id: str) -> None:
+        async def ask() -> None:
+            from samurai_ai.tui.screens import ArgumentScreen
+
+            bindings = self.traffic.bindings(finding_id)
+            if not bindings:
+                self._write_line(self.translator.t("board.no-traffic"))
+                return
+            label = self.translator.t(
+                "board.traffic-bound",
+                candidates=", ".join(f"{b.traffic_id} ({b.role.value})" for b in bindings[-6:]),
+            )
+            pair_id = await self.push_screen_wait(ArgumentScreen(self.translator, label))
+            if not pair_id or not pair_id.strip():
+                return
+            self._finding_action(
+                self.translator.t("board.action.y"),
+                finding_id,
+                lambda: self.traffic.unbind(finding_id, pair_id.strip()),
+            )
+
+        self.run_worker(ask(), exclusive=False)  # type: ignore[attr-defined]
+
+    def _traffic_lines(self, finding_id: str) -> list[str]:
+        lines: list[str] = []
+        for binding in self.traffic.bindings(finding_id):
+            try:
+                pair = self.traffic.get(binding.traffic_id)
+            except TrafficNotFoundError:
+                lines.append(f"{binding.traffic_id} ({binding.role.value})")
+                continue
+            lines.append(
+                f"{pair.id} ({binding.role.value}) {pair.method} {pair.url} -> {pair.status}"
+            )
+        return lines
+
     def _evidence_ids(self, finding_id: str) -> list[str]:
         finding = self.kernel.kernel.get_finding(finding_id)
         return list(finding.evidence_ids) if finding is not None else []
@@ -415,6 +485,8 @@ class BoardController:
             "u": lambda: self._finding_duplicate(finding_id),
             "r": lambda: self._finding_reported(finding_id),
             "e": lambda: self._finding_evidence(finding_id),
+            "t": lambda: self._finding_traffic_bind(finding_id),
+            "y": lambda: self._finding_traffic_unbind(finding_id),
         }
         self.push_screen(
             ItemDetailScreen(
@@ -454,6 +526,7 @@ class BoardController:
                 [finding.remediation] if finding.remediation else [],
             ),
             (t.t("board.section.evidence"), list(finding.evidence_ids)),
+            (t.t("board.section.traffic"), self._traffic_lines(finding.id)),
             (
                 t.t("board.section.duplicate"),
                 [finding.duplicate_of] if finding.duplicate_of else [],
