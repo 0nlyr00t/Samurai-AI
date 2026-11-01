@@ -49,7 +49,14 @@ class ReportService:
         operation_id: str,
         format: ReportFormat = ReportFormat.MARKDOWN,
         created_by: str = "operator",
+        evidence_version: int | None = None,
     ) -> BountyReport:
+        """Render a report; ``evidence_version`` guards against stale evidence.
+
+        A caller that read the finding's evidence at version N and reports later
+        gets a refusal when the evidence moved since, instead of a report that
+        silently describes something else.
+        """
         operation = self.operations.get(operation_id)
         if operation.status not in _ALLOWED_STATUSES:
             raise ReportStateError(
@@ -63,6 +70,13 @@ class ReportService:
             raise ReportStateError(
                 f"operation {operation_id} has no validated findings to report"
             )
+        if evidence_version is not None:
+            current = max(finding.evidence_version for finding in findings)
+            if current != evidence_version:
+                raise ReportStateError(
+                    f"evidence moved: report was written against version "
+                    f"{evidence_version}, current is {current} — re-read and regenerate"
+                )
         assets = self.playbooks.list_assets(operation_id)
         self._check_report_scope(operation, findings, assets)
 

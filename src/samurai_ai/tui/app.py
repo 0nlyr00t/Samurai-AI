@@ -46,6 +46,7 @@ from samurai_ai.domain.permission import (
     parse_mode,
 )
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.traffic import TrafficRole
 from samurai_ai.i18n import Translator
 from samurai_ai.services.chat import ChatHistoryService
 from samurai_ai.services.constraints import ConstraintService
@@ -65,6 +66,7 @@ from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
+from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.chat import ChatHistoryRepository
@@ -72,6 +74,7 @@ from samurai_ai.storage.constraints import ConstraintRepository
 from samurai_ai.storage.graph import GraphRepository
 from samurai_ai.storage.lessons import LessonRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
+from samurai_ai.storage.traffic import TrafficRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
@@ -375,6 +378,9 @@ class SamuraiApp(
         )
         self.lessons = LessonService(
             service, kernel, LessonRepository(service.repository.database), settings
+        )
+        self.traffic = TrafficService(
+            service, kernel, TrafficRepository(service.repository.database)
         )
         self.constraints = ConstraintService(
             service, ConstraintRepository(service.repository.database)
@@ -1942,6 +1948,38 @@ class SamuraiApp(
             return
         for row in rows:
             self._write_line(f"[constraint] {row.id} | {row.kind.value} | {row.text}")
+
+    def _handle_traffic_command(self, argument: str) -> None:
+        """`/traffic` lists captured pairs; `/traffic bind <pair> <finding> [role]` binds."""
+        if self.operation is None:
+            self._write_line("[error] " + self.translator.t("palette.no-operation"))
+            return
+        parts = argument.split()
+        try:
+            if parts and parts[0] == "bind" and len(parts) >= 3:
+                role = TrafficRole(parts[3]) if len(parts) > 3 else TrafficRole.SUPPORTING
+                finding = self.traffic.bind(parts[2], parts[1], role)
+                self._write_dim(
+                    self.translator.t(
+                        "traffic.bound",
+                        pair=parts[1],
+                        finding=finding.id,
+                        role=role.value,
+                    )
+                )
+                return
+        except Exception as exc:  # noqa: BLE001 - command feedback, never a crash
+            self._write_line(f"[traffic] {exc}")
+            return
+        pairs = self.traffic.for_operation(self.operation.id)
+        if not pairs:
+            self._write_dim(self.translator.t("traffic.empty"))
+            return
+        for pair in pairs:
+            self._write_line(
+                f"[traffic] {pair.id} | {pair.method} {pair.url} | {pair.status}"
+                f"{' | clipped' if pair.truncated else ''}"
+            )
 
     def _handle_skills_gaps(self) -> None:
         rows = self.skills.gaps_report(self._memory_workspace())
