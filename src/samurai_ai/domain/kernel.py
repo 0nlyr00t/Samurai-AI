@@ -90,6 +90,7 @@ class FindingStatus(StrEnum):
     FALSE_POSITIVE = "false-positive"
     DUPLICATE = "duplicate"
     REPORTED = "reported"
+    FIXED = "fixed"
 
 
 def _validate_kebab_id(value: str) -> str:
@@ -281,6 +282,15 @@ class Finding(BaseModel):
             )
         if artifact_id not in self.evidence_ids:
             self.evidence_ids = (*self.evidence_ids, artifact_id)
+        self._touch()
+
+    def mark_fixed(self) -> None:
+        """A retest proved the fix: only a reported or validated finding can get here."""
+        if self.status not in (FindingStatus.VALIDATED, FindingStatus.REPORTED):
+            raise FindingStateError(
+                f"finding {self.id} cannot be marked fixed in {self.status.value}"
+            )
+        self.status = FindingStatus.FIXED
         self._touch()
 
     def mark_validated(self) -> None:

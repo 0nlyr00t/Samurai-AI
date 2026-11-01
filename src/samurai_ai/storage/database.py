@@ -787,6 +787,24 @@ CREATE TABLE IF NOT EXISTS finding_traffic (
 );
 """
 
+_MIGRATION_24 = """
+CREATE TABLE IF NOT EXISTS finding_retests (
+    id           TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    finding_id   TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    verdict      TEXT,
+    summary      TEXT NOT NULL DEFAULT '',
+    evidence     TEXT NOT NULL DEFAULT '',
+    control      TEXT NOT NULL DEFAULT '',
+    created_by   TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    finished_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS finding_retests_finding
+ON finding_retests(finding_id, created_at);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -811,6 +829,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (21, _MIGRATION_21),
     (22, _MIGRATION_22),
     (23, _MIGRATION_23),
+    (24, _MIGRATION_24),
 )
 
 
