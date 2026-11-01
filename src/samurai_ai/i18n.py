@@ -174,7 +174,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "board.action.t": "bind traffic",
         "board.action.y": "unbind traffic",
         "board.no-traffic": "no traffic captured in this operation",
-        "board.traffic-of": "Traffic pair to bind: {candidates}",
+        "board.traffic-of": (
+            "Pair to bind, and a role ({roles}, default supporting): {candidates}"
+        ),
         "board.traffic-bound": "Bound pair to remove: {candidates}",
         "board.section.evidence": "EVIDENCE",
         "board.section.duplicate": "DUPLICATE OF",
@@ -680,7 +682,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "board.action.t": "прицепить трафик",
         "board.action.y": "отвязать трафик",
         "board.no-traffic": "трафика в операции нет",
-        "board.traffic-of": "Какую пару прицепить: {candidates}",
+        "board.traffic-of": (
+            "Пару прицепить, и роль ({roles}, по умолчанию supporting): {candidates}"
+        ),
         "board.traffic-bound": "Какую привязку снять: {candidates}",
         "board.section.evidence": "ДОКАЗАТЕЛЬСТВА",
         "board.section.duplicate": "ДУБЛЬ ОТ",

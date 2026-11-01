@@ -4256,6 +4256,34 @@ def test_traffic_bind_and_unbind_ask_for_a_pair(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_traffic_bind_from_the_board_takes_a_role(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens import ArgumentScreen
+
+    stack, _provider, operation, finding, _duplicate, _artifact = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            pair = app.traffic.record(operation.id, "GET", "https://a.test/x", 200)
+
+            app._finding_traffic_bind(finding.id)
+            for _ in range(20):
+                await pilot.pause()
+                if isinstance(app.screen, ArgumentScreen):
+                    break
+            app.screen.dismiss(f"{pair.id} proof")
+            for _ in range(20):
+                await pilot.pause()
+                if app.traffic.bindings(finding.id):
+                    break
+            assert [b.role.value for b in app.traffic.bindings(finding.id)] == ["proof"]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_finding_evidence_and_duplicate_prompt_for_an_id(tmp_path: Path) -> None:
     from samurai_ai.tui.screens import ArgumentScreen
 

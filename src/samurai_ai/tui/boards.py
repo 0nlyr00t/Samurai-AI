@@ -352,14 +352,17 @@ class BoardController:
             label = self.translator.t(
                 "board.traffic-of",
                 candidates=", ".join(f"{pair.id} {pair.method} {pair.url}" for pair in free[-6:]),
+                roles="|".join(role.value for role in TrafficRole),
             )
-            pair_id = await self.push_screen_wait(ArgumentScreen(self.translator, label))
-            if not pair_id or not pair_id.strip():
+            answer = await self.push_screen_wait(ArgumentScreen(self.translator, label))
+            if not answer or not answer.strip():
                 return
+            pair_id, _sep, role_name = answer.strip().partition(" ")
+            role = TrafficRole(role_name.strip()) if role_name.strip() else TrafficRole.SUPPORTING
             self._finding_action(
                 self.translator.t("board.action.t"),
                 finding_id,
-                lambda: self.traffic.bind(finding_id, pair_id.strip(), TrafficRole.SUPPORTING),
+                lambda: self.traffic.bind(finding_id, pair_id, role),
             )
 
         self.run_worker(ask(), exclusive=False)  # type: ignore[attr-defined]
