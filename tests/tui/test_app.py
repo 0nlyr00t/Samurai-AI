@@ -3558,6 +3558,45 @@ def test_finding_detail_lists_bound_traffic(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_retest_fixed_accepts_a_control_pair(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            artifact = stack[1].register_artifact(
+                operation.id, ArtifactKind.COMMAND_OUTPUT, "body"
+            )
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+            stack[1].attach_evidence(finding.id, artifact.id)
+            stack[1].validate_finding(finding.id)
+            pair = app.traffic.record(
+                operation.id, "GET", "https://x/user/1", 200, response_body="own"
+            )
+
+            app._handle_command(f"/retest {finding.id}")
+            await pilot.pause()
+            retest = app.retests.for_finding(finding.id)[0]
+
+            app._handle_command(
+                f"/retest verdict {retest.id} fixed 403 on another object"
+                f" | GET /user/2 -> 403 | {pair.id}"
+            )
+            await pilot.pause()
+            finished = app.retests.get(retest.id)
+            assert finished.control_pair == pair.id
+            assert [(b.traffic_id, b.role.value) for b in app.traffic.bindings(finding.id)] == [
+                (pair.id, "verification")
+            ]
+            assert stack[1].kernel.get_finding(finding.id).status is FindingStatus.FIXED
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_skills_gaps_report_lists_misses(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")
@@ -4167,6 +4206,50 @@ def test_finding_without_evidence_says_so(tmp_path: Path) -> None:
                 app._finding_validate(finding.id)
                 await pilot.pause()
                 assert any("no evidence" in str(message) for message in messages)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_traffic_bind_and_unbind_ask_for_a_pair(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens import ArgumentScreen
+
+    stack, _provider, operation, finding, _duplicate, _artifact = _board_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            pair = app.traffic.record(operation.id, "GET", "https://a.test/x", 200)
+
+            app._finding_traffic_bind(finding.id)
+            for _ in range(20):
+                await pilot.pause()
+                if isinstance(app.screen, ArgumentScreen):
+                    break
+            assert isinstance(app.screen, ArgumentScreen)
+            app.screen.dismiss(pair.id)
+            for _ in range(20):
+                await pilot.pause()
+                if app.traffic.bindings(finding.id):
+                    break
+            assert [b.traffic_id for b in app.traffic.bindings(finding.id)] == [pair.id]
+            assert stack[1].kernel.get_finding(finding.id).evidence_version == 1
+
+            app._finding_traffic_unbind(finding.id)
+            for _ in range(20):
+                await pilot.pause()
+                if isinstance(app.screen, ArgumentScreen):
+                    break
+            assert isinstance(app.screen, ArgumentScreen)
+            app.screen.dismiss(pair.id)
+            for _ in range(20):
+                await pilot.pause()
+                if not app.traffic.bindings(finding.id):
+                    break
+            assert app.traffic.bindings(finding.id) == []
+            assert stack[1].kernel.get_finding(finding.id).evidence_version == 2
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 

@@ -49,6 +49,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "retest.started": "retest {id} on finding {finding}",
         "retest.finished": "retest {id}: {verdict}",
+        "retest.finished-pair": "retest {id}: {verdict}, control pair {pair} bound",
         "help.retest": "/retest <finding>  Re-check a finding, then record the verdict",
         "help.traffic": "/traffic [bind <pair> <finding> <role>]  Captured request/response pairs",
         "help.constraint": (
@@ -555,6 +556,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "retest.started": "рететс {id} по находке {finding}",
         "retest.finished": "рететс {id}: {verdict}",
+        "retest.finished-pair": "рететс {id}: {verdict}, контрольная пара {pair} привязана",
         "help.retest": "/retest <находка>  Перепроверить находку и записать вердикт",
         "help.traffic": "/traffic [bind <пара> <находка> <роль>]  Захваченные пары запрос/ответ",
         "help.constraint": "/constraint [deny|allow|rm] <текст|id>  Границы задачи от оператора",
