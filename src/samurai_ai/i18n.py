@@ -274,6 +274,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.expand-empty": "nothing to expand yet — no tool output in this reply",
         "chat.empty-reply": "(empty model reply)",
+        "graph.plan-title": "chat exploration",
+        "graph.no-operation": "no operation open — the graph needs one",
+        "graph.no-free-task": (
+            "every plan task is finished — revise the plan before opening an intent"
+        ),
+        "graph.intent-opened": "intent {title}",
+        "graph.intent-closed": "intent {intent} is {state}",
+        "graph.fact-recorded": "fact {fact} for {intent}",
+        "graph.fact-bare": "fact recorded without an artifact",
+        "graph.finding": "finding {finding}: {title}",
+        "chat.frontier": "exploration graph (code-owned, above the heuristics):\n{block}",
         "chat.stagnant": "no new findings: {direction} is repeating",
         "chat.stagnant-note": (
             "[progress] {direction} has now run three times without a finding. "
@@ -709,6 +720,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.expand-empty": "пока нечего раскрывать — в этом ответе нет вывода команд",
         "chat.empty-reply": "(пустой ответ модели)",
+        "graph.plan-title": "исследование из чата",
+        "graph.no-operation": "операция не открыта — графу она нужна",
+        "graph.no-free-task": (
+            "все задачи плана закрыты — пересмотри план, прежде чем открывать интент"
+        ),
+        "graph.intent-opened": "интент {title}",
+        "graph.intent-closed": "интент {intent} → {state}",
+        "graph.fact-recorded": "факт {fact} для {intent}",
+        "graph.fact-bare": "факт записан без артефакта",
+        "graph.finding": "находка {finding}: {title}",
+        "chat.frontier": "граф исследования (принадлежит коду, выше эвристик):\n{block}",
         "chat.stagnant": "новых находок нет: {direction} повторяется",
         "chat.stagnant-note": (
             "[прогресс] {direction} отработал три раза без находки. "

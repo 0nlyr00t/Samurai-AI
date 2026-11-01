@@ -49,6 +49,7 @@ from samurai_ai.services.chat import ChatHistoryService
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
+from samurai_ai.services.graph import GraphService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -63,6 +64,7 @@ from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.chat import ChatHistoryRepository
+from samurai_ai.storage.graph import GraphRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
@@ -355,9 +357,13 @@ class SamuraiApp(
         self._tab_activations_seen: int = 0
         self._chat_history: list[Message] = []
         self._progress = Stagnation()
+        self._graph_used = False
         self._last_turn_reason: TerminalReason | None = None
         self.chat_history = ChatHistoryService(
             ChatHistoryRepository(service.repository.database), SecretRedactor()
+        )
+        self.graph = GraphService(
+            service, kernel, GraphRepository(service.repository.database)
         )
         # Plan mode is session state on purpose: it is never persisted and only
         # the operator can enter it.
@@ -724,6 +730,7 @@ class SamuraiApp(
         operation = self.service.create(name, OperationMode(mode), ScopeContract(includes=includes))
         self.operation = operation
         self._auto_title = None
+        self._graph_used = False
         self._chat_history.clear()
         self.query_one("#journal", RichLog).clear()
         self._write_welcome()

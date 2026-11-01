@@ -70,6 +70,10 @@ class Stagnation:
         shape = direction(command)
         if shape is None:
             return None
+        return self.record_shape(shape)
+
+    def record_shape(self, shape: str) -> str | None:
+        """Feed a direction that is already normalised, e.g. an intent title."""
         self._window.append(shape)
         if shape in self._reported:
             return None
