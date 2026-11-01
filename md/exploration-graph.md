@@ -1,7 +1,7 @@
 # Граф исследования
 
 Статус: слой данных и сервис с инвариантами реализованы (`domain/graph.py`, `storage/graph.py`,
-`services/graph.py`, миграция 19); инструменты модели и блок границы в промпте подняты; доска — следующий PR. Заменяет слой blackboard **в чате** и
+`services/graph.py`, миграция 19); инструменты модели, блок границы в промпте и доска `/graph` реализованы. Заменяет слой blackboard **в чате** и
 вводит вид «Граф» в TUI. Заимствовано у ARTEX (`db/constants.go`, `db/exploration*.go`,
 `agent/tools.go`, `agent/coldgraph.go`), адаптировано под наш governed kernel.
 
