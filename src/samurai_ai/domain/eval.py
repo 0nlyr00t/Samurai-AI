@@ -69,6 +69,7 @@ class EvalLiveTarget(BaseModel):
     api_family: ApiFamily = ApiFamily.OPENAI_COMPATIBLE
     model: str = Field(min_length=1)
     secret_env: str = Field(min_length=1)
+    timeout_seconds: float = Field(default=120.0, gt=0.0)
     cost_input_per_m: float = Field(default=0.0, ge=0.0)
     cost_output_per_m: float = Field(default=0.0, ge=0.0)
 

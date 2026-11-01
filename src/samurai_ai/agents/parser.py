@@ -21,6 +21,9 @@ from samurai_ai.domain.agents import (
 )
 
 MAX_PARSE_RETRIES = 2
+_COMMAND_TYPES = frozenset(
+    {"request_tool_run", "note", "propose_finding", "complete_task", "fail"}
+)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -46,8 +49,42 @@ def parse_planner_output(text: str) -> PlannerOutput:
         raise AgentOutputError(f"planner output failed schema validation: {exc}") from exc
 
 
+def _lift_bare_commands(payload: dict[str, Any]) -> dict[str, Any]:
+    """A command written as a bare type string becomes ``{"type": ...}``.
+
+    Small models do this constantly, and the command schema itself stays strict
+    — only the wrapping shape is repaired, never the fields.
+    """
+    commands = payload.get("commands")
+    if isinstance(commands, list):
+        payload = dict(payload)
+        payload["commands"] = [
+            _repair_command(item) for item in commands
+        ]
+    return payload
+
+
+def _repair_command(item: Any) -> Any:
+    """Repair the two shapes small models reach for instead of a command."""
+    if isinstance(item, str):
+        if item in _COMMAND_TYPES:
+            return {"type": item}
+        return {"type": "request_tool_run", "tool_id": item}
+    if not isinstance(item, dict):
+        return item
+    known = item.get("type")
+    if isinstance(known, str) and known not in _COMMAND_TYPES and not item.get("tool_id"):
+        # `{"type": "local.echo", "params": {...}}` — a tool id where the
+        # command name belongs; the fields are already in the right place
+        return {**item, "type": "request_tool_run", "tool_id": known}
+    return item
+
+
 def parse_executor_output(text: str) -> tuple[AgentCommand, ...]:
-    payload = _extract_json_object(text)
+    payload = _lift_bare_commands(_extract_json_object(text))
+    # an envelope key the model added (a blackboard echo, a note) is dropped;
+    # the command objects themselves stay strict
+    payload = {key: value for key, value in payload.items() if key == "commands"}
     try:
         output = ExecutorOutput.model_validate(payload)
     except ValidationError as exc:

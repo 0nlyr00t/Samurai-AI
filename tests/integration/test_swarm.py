@@ -59,6 +59,9 @@ EXECUTOR_ANSWER = (
 FAIL_ANSWER = '{"commands": [{"type": "fail", "reason": "cannot proceed"}]}'
 
 
+CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task"}]}'
+
+
 class _SwarmHandler(BaseHTTPRequestHandler):
     queue: list[str] = []
     executor_queue: list[str] = []
@@ -76,6 +79,11 @@ class _SwarmHandler(BaseHTTPRequestHandler):
             # executor queue so worker timing cannot mix the roles.
             if b"Current step:" in raw and _SwarmHandler.executor_queue:
                 text = _SwarmHandler.executor_queue.pop(0)
+            elif b"Current step:" in raw and _SwarmHandler.queue:
+                text = _SwarmHandler.queue.pop(0)
+            elif b"Current step:" in raw:
+                # the queue can run dry on the closing step, which must still close
+                text = CLOSE_OUT_ANSWER
             elif _SwarmHandler.queue:
                 text = _SwarmHandler.queue.pop(0)
             else:

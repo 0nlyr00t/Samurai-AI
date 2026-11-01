@@ -71,6 +71,11 @@ DEFAULT_MAX_STEPS = 8
 DEFAULT_MAX_DEPTH = 1
 MAX_CONSECUTIVE_REJECTS = 3
 _MAX_BLACKBOARD_ITEMS = 20
+_CLOSE_OUT_STEP = (
+    "The planned steps are done. Emit exactly one command: complete_task if the task is "
+    'finished ({"type":"complete_task"}), otherwise fail with the reason '
+    '({"type":"fail","reason":...}). No tool runs.'
+)
 
 _PLANNER_INSTRUCTION = (
     "You are the planner of a governed security operation. Decompose the "
@@ -78,7 +83,9 @@ _PLANNER_INSTRUCTION = (
     'object: {"steps": ["step one", "step two"]}. No prose.'
 )
 _EXECUTOR_INSTRUCTION = (
-    "You are the executor of a governed security operation. Emit exactly one "
+    "You are the executor of a governed security operation. Values must be "
+    "literal — a URL needs scheme and host (https://example.com/), and an angle "
+    "bracket placeholder is copied as-is, never resolved. Emit exactly one "
     'JSON object: {"commands": [...]}. Allowed command types: '
     'request_tool_run {"type":"request_tool_run","tool_id":...,"params":{...}}, '
     'note {"type":"note","key":...,"value":...}, propose_finding '
@@ -86,6 +93,38 @@ _EXECUTOR_INSTRUCTION = (
     '"artifact_ids":[...]}, complete_task {"type":"complete_task"}, fail '
     '{"type":"fail","reason":...}. No prose.'
 )
+
+
+def _parameter_hint(parameters: dict[str, Any]) -> str:
+    """Name the accepted parameters, required ones first.
+
+    Without this the model invents keys and the registry rejects the call, which
+    costs a whole round for something the prompt could have said.
+    """
+    required = parameters.get("required") or ()
+    properties = parameters.get("properties") or {}
+    if not required and not properties:
+        return " (no parameters)"
+    names = [str(name) for name in required]
+    names += [name for name in properties if name not in names]
+    parts = []
+    for name in names:
+        shape = properties.get(name) or {}
+        label = f"{name}*" if name in required else name
+        parts.append(f"{label}{_shape_hint(shape)}")
+    return f" (params: {', '.join(parts)}; * required)"
+
+
+def _shape_hint(shape: dict[str, Any]) -> str:
+    """The type and, crucially, the allowed values — a guess costs a round."""
+    kind = shape.get("type")
+    allowed = shape.get("enum")
+    if allowed:
+        return f":{kind} one of {'|'.join(str(item) for item in allowed)}"
+    if kind == "array":
+        items = (shape.get("items") or {}).get("type")
+        return f":{kind}<{items}>" if items else f":{kind}"
+    return f":{kind}" if kind else ""
 
 
 class AgentOrchestrator:
@@ -389,6 +428,63 @@ class AgentOrchestrator:
                         )
                 if run.status is not AgentRunStatus.RUNNING:
                     return
+        # the planned steps ran out while the task was still open: one forced
+        # closing step, or the work silently evaporates with the run
+        still_open = self._task_open(operation_id, run.task_id)
+        if still_open and not self._stop_requested(run, stop_event):
+            self._close_out(
+                operation_id,
+                run,
+                approval_id,
+                extra_context,
+                approval_resolver=approval_resolver,
+                model_approvals=model_approvals,
+                stop_event=stop_event,
+            )
+
+    def _task_open(self, operation_id: str, task_id: str) -> bool:
+        plan = self.kernel.get_current_plan(operation_id)
+        task = plan.task_by_id(task_id) if plan is not None else None
+        return task is not None and task.status is TaskStatus.IN_PROGRESS
+
+    def _close_out(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        approval_id: str | None,
+        extra_context: str,
+        *,
+        approval_resolver: Callable[[str], bool] | None,
+        model_approvals: dict[str, str] | None,
+        stop_event: threading.Event | None,
+    ) -> None:
+        """Ask for the closing command alone when the plan ran out mid-task."""
+        try:
+            commands = self._execute_step_prompt(
+                operation_id,
+                run,
+                _CLOSE_OUT_STEP,
+                len(_CLOSE_OUT_STEP),
+                approval_id,
+                extra_context,
+                approval_resolver=approval_resolver,
+                model_approvals=model_approvals,
+                stop_event=stop_event,
+            )
+        except AgentError:
+            # a failed closing step must not discard what the run already did
+            return
+        for kind in (CompleteTaskCommand, FailCommand):
+            for command in commands:
+                if isinstance(command, kind):
+                    self._apply_command(
+                        operation_id,
+                        run,
+                        command,
+                        read_only_only=False,
+                        approval_resolver=approval_resolver,
+                    )
+                    return
 
     def _execute_step_prompt(
         self,
@@ -644,12 +740,15 @@ class AgentOrchestrator:
 
     def _tools_excerpt(self) -> str:
         lines = [
-            "Available tools (request_tool_run tool_id must be one of these):",
+            "Available tools — reachable only through the request_tool_run "
+            "command, with the id in tool_id and these parameters as its only keys "
+            "(required ones must be present):",
         ]
         for definition in self.execution.list_tools():
             description = definition.description.split(".")[0][:80]
             lines.append(
                 f"- {definition.id} (risk {definition.risk_class.value}): {description}"
+                f"{_parameter_hint(definition.parameters)}"
             )
         return "\n".join(lines)
 
