@@ -115,6 +115,7 @@ from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookReposito
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamConflictError, RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.skill_gaps import SkillGapRepository
 from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
@@ -533,7 +534,9 @@ def _make_services(
         vault=vault,
     )
     memory_service = CampaignMemoryService(MemoryRepository(database), vault)
-    skill_service = SkillService(SkillRepository(database), vault)
+    skill_service = SkillService(
+        SkillRepository(database), vault, SkillGapRepository(database)
+    )
     agents = AgentOrchestrator(
         models,
         kernel,

@@ -1943,6 +1943,14 @@ class SamuraiApp(
         for row in rows:
             self._write_line(f"[constraint] {row.id} | {row.kind.value} | {row.text}")
 
+    def _handle_skills_gaps(self) -> None:
+        rows = self.skills.gaps_report(self._memory_workspace())
+        if not rows:
+            self._write_dim(self.translator.t("skills.no-gaps"))
+            return
+        for row in rows:
+            self._write_line(f"[gap] {row.skill} | misses={row.misses} | last={row.last_seen}")
+
     def _handle_lessons_command(self, argument: str) -> None:
         """`/lessons [extract|adopt <id>|reject <id>|mode <mode>]`, listing by default."""
         workspace = self._memory_workspace()
@@ -2011,7 +2019,10 @@ class SamuraiApp(
                 f"[memory] {entry.id} | {entry.workspace} | {entry.kind.value} | {entry.title}"
             )
 
-    def _show_skills(self) -> None:
+    def _show_skills(self, argument: str = "") -> None:
+        if argument.strip().lower() == "gaps":
+            self._handle_skills_gaps()
+            return
         installed = self.skills.list_skills()
         if not installed:
             self._write_line("[skills] " + self.translator.t("skills.empty"))
