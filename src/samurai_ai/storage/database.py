@@ -735,6 +735,20 @@ CREATE TABLE IF NOT EXISTS lesson_evidence (
 );
 """
 
+_MIGRATION_21 = """
+CREATE TABLE IF NOT EXISTS task_constraints (
+    id           TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    task_id      TEXT NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('allow', 'deny')),
+    text         TEXT NOT NULL,
+    created_by   TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS task_constraints_task ON task_constraints(task_id, kind);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -756,6 +770,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (18, _MIGRATION_18),
     (19, _MIGRATION_19),
     (20, _MIGRATION_20),
+    (21, _MIGRATION_21),
 )
 
 
