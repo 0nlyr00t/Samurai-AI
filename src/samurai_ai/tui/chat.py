@@ -793,10 +793,11 @@ class ChatController:
             if self._finding_count() > findings_before:
                 findings_before = self._finding_count()
                 self._progress.finding_seen()
-        # The tool rounds are exhausted: force a final summary call without
-        # tools so the operator always gets a closing answer instead of
-        # silence after the loop.
+        # The tool rounds are exhausted. Before anything else, a settlement pass:
+        # the model may only record and close, so what it already found is written
+        # down instead of dying with the turn. Then one closing answer without tools.
         self._write_dim(self.translator.t("chat.tool-limit"))
+        await self._settle(operation_id, model_id, reasoning)
         try:
             final = await self._request_chat_completion(operation_id, model_id, reasoning, ())
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
@@ -810,6 +811,32 @@ class ChatController:
         if final.text.strip():
             self._write_ai_message(final)
         return TerminalReason.ROUNDS
+
+    async def _settle(self, operation_id: str, model_id: str, reasoning: str | None) -> None:
+        """One write-only round: persist what the turn found, without new exploration."""
+        if not self._graph_used:
+            return
+        tools = tuple(
+            spec
+            for spec in self._CHAT_TOOL_SPECS
+            if spec.name in ("record_fact", "close_intent", "propose_finding")
+        )
+        self._remember(
+            Message(role="user", content=self.translator.t("chat.settle-prompt"))
+        )
+        try:
+            response = await self._request_chat_completion(
+                operation_id, model_id, reasoning, tools
+            )
+        except Exception:  # noqa: BLE001 - the closing summary still has to happen
+            return
+        if response is None:
+            return
+        self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
+        for call in response.tool_calls:
+            self._remember(await self._run_chat_tool(call))
+        if response.text.strip():
+            self._remember(Message(role="assistant", content=response.text))
 
     def _chat_tool_read_only(self, name: str) -> bool:
         tool_id = self._CHAT_TOOL_IDS.get(name)

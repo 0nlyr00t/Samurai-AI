@@ -31,7 +31,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "lessons.mode": "lesson mode: {mode}",
         "lessons.mode-line": "lesson mode: {mode}",
         "lessons.would-show": "shadow: inject would show {count} lesson(s)",
-        "help.lessons": "/lessons [extract|adopt <id>|reject <id>|mode]  Lessons from outcomes",
+        "constraint.empty": "no constraints on this operation",
+        "constraint.added": "constraint recorded: {text}",
+        "constraint.removed": "constraint {id} removed",
+        "constraint.no-plan": "no plan yet — open the plan before constraining a task",
+        "help.constraint": (
+            "/constraint [deny|allow|rm] <text|id>  Operator boundaries for the task"
+        ),
         "help.memory": "/memory [ws]     Show campaign memory entries (workspace filter)",
         "help.skills": "/skills          Show installed trusted skills",
         "help.playbooks": "/playbooks       Show installed custom playbooks",
@@ -296,7 +302,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{autonomy}"
         ),
         "chat.tool-denied": "denied by operator: {command}",
-        "chat.tool-limit": "tool round limit reached — summarizing without tools",
+        "chat.tool-limit": "tool round limit reached — settling what is already known",
+        "chat.settle-prompt": (
+            "[wrap-up] rounds are spent. Record what this turn established with "
+            "record_fact (and close_intent), and say nothing else yet; a closing "
+            "summary follows without tools."
+        ),
         "chat.tool-exit": "exit {code}",
         "chat.tool-collapsed": (
             "▸ ⚙ {command} — exit {code} · {lines} lines · /expand to show"
@@ -504,6 +515,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "lessons.mode": "режим уроков: {mode}",
         "lessons.mode-line": "режим уроков: {mode}",
         "lessons.would-show": "shadow: inject показал бы уроков: {count}",
+        "constraint.empty": "ограничений в операции нет",
+        "constraint.added": "ограничение записано: {text}",
+        "constraint.removed": "ограничение {id} снято",
+        "constraint.no-plan": "плана ещё нет — заведи план, прежде чем ограничивать задачу",
+        "help.constraint": "/constraint [deny|allow|rm] <текст|id>  Границы задачи от оператора",
         "help.lessons": "/lessons [extract|adopt <id>|reject <id>|mode]  Уроки из исходов",
         "help.memory": "/memory [ws]     Показать записи campaign memory (фильтр workspace)",
         "help.skills": "/skills          Показать установленные доверенные skills",
