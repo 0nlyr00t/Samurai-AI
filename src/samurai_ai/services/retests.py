@@ -20,17 +20,14 @@ from samurai_ai.domain.retest import (
     RetestNotFoundError,
     RetestVerdict,
 )
+from samurai_ai.domain.traffic import TrafficNotFoundError, TrafficRole
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.traffic import TrafficService
 from samurai_ai.storage.retests import RetestRepository
 
 #: Findings far enough along to be worth re-checking.
 RETESTABLE = (FindingStatus.VALIDATED, FindingStatus.REPORTED)
-#: Verdicts that may change the finding's own status.
-APPLIES = {
-    RetestVerdict.FIXED: "fixed",
-    RetestVerdict.REPRODUCED: "reproduced",
-}
 
 
 def _now() -> str:
@@ -39,11 +36,16 @@ def _now() -> str:
 
 class RetestService:
     def __init__(
-        self, operations: OperationService, kernel: KernelService, retests: RetestRepository
+        self,
+        operations: OperationService,
+        kernel: KernelService,
+        retests: RetestRepository,
+        traffic: TrafficService,
     ) -> None:
         self.operations = operations
         self.kernel = kernel
         self.retests = retests
+        self.traffic = traffic
 
     def start(self, finding_id: str, *, created_by: str = "operator") -> Retest:
         finding = self._finding(finding_id)
@@ -81,17 +83,36 @@ class RetestService:
             raise RetestError(
                 f"verdict {verdict.value} needs evidence — requests, responses or command output"
             )
+        control_pair = ""
         if verdict is RetestVerdict.FIXED and not control:
             raise RetestError(
                 "verdict fixed needs a control: a comparable request that still behaves normally"
             )
-        finished = self.retests.finish(retest_id, verdict, summary, evidence, control, _now())
+        if control:
+            control_pair = self._control_pair(retest.finding_id, control)
+        finished = self.retests.finish(
+            retest_id, verdict, summary, evidence, control, control_pair, _now()
+        )
         if finished is None:
             raise RetestError(f"retest {retest_id} was finished concurrently")
         self._event(finished.operation_id, "retest.finished", finished)
         if verdict is RetestVerdict.FIXED:
             self.kernel.mark_fixed(finished.finding_id)
         return finished
+
+    def _control_pair(self, finding_id: str, control: str) -> str:
+        """A control that names a captured pair gets checked and bound; text stays text."""
+        if not control.startswith("trf_"):
+            return ""
+        try:
+            pair = self.traffic.get(control)
+        except TrafficNotFoundError:
+            return ""
+        finding = self._finding(finding_id)
+        if pair.operation_id != finding.operation_id:
+            raise RetestError(f"control pair {control} belongs to another operation")
+        self.traffic.bind(finding_id, pair.id, TrafficRole.VERIFICATION)
+        return pair.id
 
     def get(self, retest_id: str) -> Retest:
         retest = self.retests.get(retest_id)

@@ -15,8 +15,8 @@ class RetestRepository:
                 """
                 INSERT INTO finding_retests(
                     id, operation_id, finding_id, verdict, summary, evidence,
-                    control, created_by, created_at, finished_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    control, control_pair, created_by, created_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     retest.id,
@@ -26,6 +26,7 @@ class RetestRepository:
                     retest.summary,
                     retest.evidence,
                     retest.control,
+                    retest.control_pair,
                     retest.created_by,
                     retest.created_at.isoformat(),
                     retest.finished_at.isoformat() if retest.finished_at else None,
@@ -46,6 +47,7 @@ class RetestRepository:
         summary: str,
         evidence: str,
         control: str,
+        control_pair: str,
         now: str,
     ) -> Retest | None:
         """Fill a still-open retest; returns None when it already has a verdict."""
@@ -53,10 +55,11 @@ class RetestRepository:
             cursor = connection.execute(
                 """
                 UPDATE finding_retests
-                SET verdict = ?, summary = ?, evidence = ?, control = ?, finished_at = ?
+                SET verdict = ?, summary = ?, evidence = ?, control = ?,
+                    control_pair = ?, finished_at = ?
                 WHERE id = ? AND verdict IS NULL
                 """,
-                (verdict.value, summary, evidence, control, now, retest_id),
+                (verdict.value, summary, evidence, control, control_pair, now, retest_id),
             )
             if (cursor.rowcount or 0) == 0:
                 return None
@@ -93,6 +96,7 @@ def _retest(row: object) -> Retest:
         summary=data["summary"],
         evidence=data["evidence"],
         control=data["control"],
+        control_pair=data["control_pair"],
         created_by=data["created_by"],
         created_at=data["created_at"],
         finished_at=data["finished_at"],

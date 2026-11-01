@@ -32,6 +32,7 @@ from samurai_ai.domain.redteam import AttackStep, Debrief
 from samurai_ai.domain.reports import BountyReport, ReportFormat
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization, SwarmRun
+from samurai_ai.domain.traffic import TrafficRole
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
@@ -3527,6 +3528,30 @@ def test_retest_command_records_a_verdict(tmp_path: Path) -> None:
             await pilot.pause()
             finished = app.retests.get(retest.id)
             assert finished.verdict.value == "inconclusive"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_finding_detail_lists_bound_traffic(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+            pair = app.traffic.record(operation.id, "GET", "https://x/user/2", 200)
+            app.traffic.bind(finding.id, pair.id, TrafficRole.PROOF)
+
+            lines = app._traffic_lines(finding.id)
+            assert lines == [f"{pair.id} (proof) GET https://x/user/2 -> 200"]
+            assert app._traffic_lines("fnd_missing") == []
+
+            app._show_finding_detail(finding.id)
+            await pilot.pause()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 

@@ -805,6 +805,10 @@ CREATE INDEX IF NOT EXISTS finding_retests_finding
 ON finding_retests(finding_id, created_at);
 """
 
+_MIGRATION_25 = """
+ALTER TABLE finding_retests ADD COLUMN control_pair TEXT NOT NULL DEFAULT '';
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -830,6 +834,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (22, _MIGRATION_22),
     (23, _MIGRATION_23),
     (24, _MIGRATION_24),
+    (25, _MIGRATION_25),
 )
 
 
