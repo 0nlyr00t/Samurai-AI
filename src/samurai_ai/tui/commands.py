@@ -116,13 +116,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/debrief", GROUP_PLAYBOOKS, "_show_debriefs", operation=True),
     _spec("/test-cases", GROUP_PLAYBOOKS, "_show_test_cases", operation=True),
     _spec("/runbook", GROUP_PLAYBOOKS, "_show_runbooks", operation=True),
-    _spec(
-        "/memory",
-        GROUP_PLAYBOOKS,
-        "_show_memory",
-        argument=True,
-        prompt_key="palette.prompt.workspace",
-    ),
+    _spec("/memory", GROUP_PLAYBOOKS, "_show_memory", argument=True),
     _spec("/skills", GROUP_PLAYBOOKS, "_show_skills"),
     _spec("/playbooks", GROUP_PLAYBOOKS, "_show_custom_playbooks"),
     # view and control
