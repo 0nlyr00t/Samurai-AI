@@ -1,4 +1,7 @@
+import os
 from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -21,6 +24,7 @@ from samurai_ai.domain.eval import (
 )
 from samurai_ai.domain.kernel import OperationPlan, PlanTask
 from samurai_ai.domain.operations import OperationEvent
+from samurai_ai.services.eval import EvalService, _model_of
 
 
 def _event(event_type: str, payload: dict | None = None) -> OperationEvent:
@@ -112,6 +116,66 @@ def test_scenario_requires_unique_task_ids() -> None:
                 "script": {"responses": ["{}"]},
             }
         )
+
+
+def test_a_scenario_needs_exactly_one_provider() -> None:
+    base = {
+        "id": "one",
+        "title": "One",
+        "scope_includes": ["example.com"],
+        "tasks": [{"id": "t1", "title": "T1"}],
+    }
+    live = {"base_url": "http://x", "model": "local/m@v1", "secret_env": "KEY"}
+    with pytest.raises(ValidationError):
+        EvalScenario.model_validate(base)
+    with pytest.raises(ValidationError):
+        EvalScenario.model_validate({**base, "script": {"responses": ["{}"]}, "live": live})
+    scenario = EvalScenario.model_validate({**base, "live": live})
+    assert scenario.live is not None
+    assert scenario.live.api_family.value == "openai-compatible"
+
+
+def test_a_live_scenario_sets_the_model_not_an_id() -> None:
+    live = {"base_url": "http://x", "model": "local/m@v1", "secret_env": "KEY"}
+    base = {
+        "id": "one",
+        "title": "One",
+        "scope_includes": ["example.com"],
+        "tasks": [{"id": "t1", "title": "T1"}],
+        "live": live,
+    }
+    with pytest.raises(ValidationError):
+        EvalScenario.model_validate({**base, "model_id": "eval/other@v1"})
+    assert _model_of(EvalScenario.model_validate(base)) == "local/m@v1"
+
+
+def test_a_live_scenario_without_its_secret_fails_before_the_run(tmp_path: Path) -> None:
+    suite = EvalSuite.model_validate(
+        {
+            "name": "live",
+            "version": "1",
+            "scenarios": [
+                {
+                    "id": "one",
+                    "title": "One",
+                    "scope_includes": ["example.com"],
+                    "tasks": [{"id": "t1", "title": "T1"}],
+                    "live": {
+                        "base_url": "http://127.0.0.1:9",
+                        "model": "local/m@v1",
+                        "secret_env": "SAMURAI_EVAL_TEST_KEY",
+                    },
+                }
+            ],
+        }
+    )
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("SAMURAI_EVAL_TEST_KEY", None)
+        report = EvalService().run_suite(suite, workdir=tmp_path)
+
+    result = report.results[0]
+    assert result.status is EvalScenarioStatus.ERROR
+    assert "SAMURAI_EVAL_TEST_KEY" in (result.error or "")
 
 
 def test_metrics_from_events_counts_all_signal_types() -> None:
