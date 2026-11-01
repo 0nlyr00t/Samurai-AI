@@ -675,6 +675,43 @@ CREATE INDEX IF NOT EXISTS chat_messages_operation_id
 ON chat_messages(operation_id, id);
 """
 
+_MIGRATION_19 = """
+CREATE TABLE IF NOT EXISTS exploration_nodes (
+    id             TEXT PRIMARY KEY,
+    operation_id   TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    task_id        TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    state          TEXT NOT NULL,
+    payload        TEXT NOT NULL DEFAULT '{}',
+    priority       INTEGER NOT NULL DEFAULT 0,
+    blocked_reason TEXT,
+    delete_reason  TEXT,
+    created_by     TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    completed_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS exploration_nodes_task
+ON exploration_nodes(task_id, kind, state);
+
+CREATE INDEX IF NOT EXISTS exploration_nodes_operation
+ON exploration_nodes(operation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS exploration_edges (
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    src_id       TEXT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+    dst_id       TEXT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+    rel          TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (operation_id, src_id, rel, dst_id),
+    CHECK (src_id <> dst_id)
+);
+
+CREATE INDEX IF NOT EXISTS exploration_edges_src ON exploration_edges(src_id, rel);
+CREATE INDEX IF NOT EXISTS exploration_edges_dst ON exploration_edges(dst_id, rel);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -694,6 +731,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (16, _MIGRATION_16),
     (17, _MIGRATION_17),
     (18, _MIGRATION_18),
+    (19, _MIGRATION_19),
 )
 
 
