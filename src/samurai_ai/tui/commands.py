@@ -120,6 +120,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/memory", GROUP_PLAYBOOKS, "_show_memory", argument=True),
     _spec("/lessons", GROUP_PLAYBOOKS, "_handle_lessons_command", argument=True),
     _spec("/constraint", GROUP_PLAYBOOKS, "_handle_constraint_command", argument=True),
+    _spec("/traffic", GROUP_PLAYBOOKS, "_handle_traffic_command", operation=True, argument=True),
     _spec("/skills", GROUP_PLAYBOOKS, "_show_skills", argument=True),
     _spec("/playbooks", GROUP_PLAYBOOKS, "_show_custom_playbooks"),
     # view and control

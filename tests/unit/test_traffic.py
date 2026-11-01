@@ -119,3 +119,37 @@ def test_traffic_from_another_operation_is_refused(stack, tmp_path: Path) -> Non
 
     with pytest.raises(TrafficError):
         traffic.bind(finding_id, pair.id, TrafficRole.PROOF)
+
+
+def test_a_stale_report_is_refused(stack, tmp_path: Path) -> None:
+    from samurai_ai.domain.kernel import ArtifactKind
+    from samurai_ai.domain.operations import OperationStatus
+    from samurai_ai.domain.reports import ReportStateError
+    from samurai_ai.services.playbooks import PlaybookService
+    from samurai_ai.services.reports import ReportService
+    from samurai_ai.storage.playbooks import PlaybookRepository
+    from samurai_ai.storage.reports import ReportRepository
+
+    traffic, kernel, operation_id, finding_id = stack
+    database = kernel.kernel.database  # type: ignore[attr-defined]
+    reports = ReportService(
+        kernel.operations,
+        kernel,
+        PlaybookService(kernel.operations, kernel, PlaybookRepository(database)),
+        ReportRepository(database),
+    )
+    for target in (
+        OperationStatus.PLANNING,
+        OperationStatus.APPROVAL,
+        OperationStatus.EXECUTION,
+        OperationStatus.VERIFICATION,
+    ):
+        kernel.operations.transition(operation_id, target)
+    artifact = kernel.register_artifact(operation_id, ArtifactKind.COMMAND_OUTPUT, "body")
+    kernel.attach_evidence(finding_id, artifact.id)
+    kernel.validate_finding(finding_id)
+    pair = traffic.record(operation_id, "GET", "https://x", 200)
+    traffic.bind(finding_id, pair.id, TrafficRole.PROOF)
+
+    with pytest.raises(ReportStateError):
+        reports.generate(operation_id, evidence_version=0)
