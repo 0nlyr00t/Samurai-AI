@@ -118,6 +118,7 @@ class ChatController:
         _last_turn_reason: TerminalReason | None
         chat_history: ChatHistoryService
         graph: GraphService
+        lessons: Any
         _graph_used: bool
         _steer_queue: list[str]
         _chat_busy: bool
@@ -141,6 +142,7 @@ class ChatController:
         def _write_user_message(self, text: str) -> None: ...
         def _write_ai_message(self, response: Any) -> None: ...
         def _write_welcome(self) -> None: ...
+        def _log_shadow_lessons(self) -> None: ...
         def _refresh_chrome(self) -> None: ...
         def copy_to_clipboard(self, text: str) -> None: ...
         def query_one(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -376,8 +378,19 @@ class ChatController:
         except Exception:  # noqa: BLE001 - memory must not break a turn
             return prompt
         if not digest:
+            return self._append_lessons(prompt)
+        with_memory = f"{prompt}\n\n{self.translator.t('chat.memory', digest=digest)}"
+        return self._append_lessons(with_memory)
+
+    def _append_lessons(self, prompt: str) -> str:
+        """Adopted lessons ride behind the memory digest; shadow mode adds nothing."""
+        try:
+            digest, _ids = self.lessons.digest(self._memory_workspace())
+        except Exception:  # noqa: BLE001 - lessons must not break a turn
             return prompt
-        return f"{prompt}\n\n{self.translator.t('chat.memory', digest=digest)}"
+        if not digest:
+            return prompt
+        return f"{prompt}\n\n{self.translator.t('chat.lessons', digest=digest)}"
 
     def _append_frontier(self, prompt: str) -> str:
         """The open directions sit above the memory digest: a boundary beats advice."""
@@ -716,6 +729,7 @@ class ChatController:
         self._progress.reset()
         findings_before = self._finding_count()
         self._carry_previous_reason()
+        self._log_shadow_lessons()
         reasoning = (
             self.settings.get_value(f"model.reasoning_effort.{model_id}")
             or self.models.default_reasoning_effort()

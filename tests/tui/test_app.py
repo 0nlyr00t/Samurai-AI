@@ -3381,6 +3381,93 @@ def test_graph_board_reports_an_empty_graph(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_a_verdict_on_the_board_teaches_a_lesson(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            artifact = stack[1].register_artifact(
+                operation.id, ArtifactKind.COMMAND_OUTPUT, "body"
+            )
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+            stack[1].attach_evidence(finding.id, artifact.id)
+
+            app._finding_validate(finding.id)
+            await pilot.pause()
+
+            lessons = app.lessons.all(app._memory_workspace())
+            assert len(lessons) == 1
+            assert lessons[0].kind.value == "positive"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_shadow_logs_what_inject_would_show(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            artifact = stack[1].register_artifact(
+                operation.id, ArtifactKind.COMMAND_OUTPUT, "body"
+            )
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+            stack[1].attach_evidence(finding.id, artifact.id)
+            app._finding_validate(finding.id)
+            await pilot.pause()
+
+            app._log_shadow_lessons()
+            shadow = [
+                event
+                for event in app.service.repository.events(operation.id)
+                if event.event_type == "lesson.shadow"
+            ]
+            assert shadow and shadow[0].payload["lesson_ids"]
+            assert app.lessons.digest(app._memory_workspace()) == ("", ())
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_injected_lesson_reaches_the_prompt(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            artifact = stack[1].register_artifact(
+                operation.id, ArtifactKind.COMMAND_OUTPUT, "body"
+            )
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+            stack[1].attach_evidence(finding.id, artifact.id)
+            app._finding_validate(finding.id)
+            await pilot.pause()
+
+            lesson = app.lessons.all(app._memory_workspace())[0]
+            app._handle_command("/lessons mode inject")
+            caught = app._chat_system_prompt()
+            assert "IDOR on /user" not in caught  # candidate, not adopted yet
+
+            app._handle_command(f"/lessons adopt {lesson.id}")
+            prompt = app._chat_system_prompt()
+            assert "IDOR on /user" in prompt
+            assert "earlier outcomes" in prompt
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_repeating_one_direction_raises_a_stagnation_note(tmp_path: Path) -> None:
     from samurai_ai.tui.progress import TerminalReason
 

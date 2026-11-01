@@ -712,6 +712,29 @@ CREATE INDEX IF NOT EXISTS exploration_edges_src ON exploration_edges(src_id, re
 CREATE INDEX IF NOT EXISTS exploration_edges_dst ON exploration_edges(dst_id, rel);
 """
 
+_MIGRATION_20 = """
+CREATE TABLE IF NOT EXISTS lessons (
+    id         TEXT PRIMARY KEY,
+    workspace  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    cue        TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'candidate',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS lessons_identity ON lessons(workspace, kind, cue);
+
+CREATE TABLE IF NOT EXISTS lesson_evidence (
+    lesson_id   TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL,
+    source_id   TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (lesson_id, source_kind, source_id)
+);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -732,6 +755,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (17, _MIGRATION_17),
     (18, _MIGRATION_18),
     (19, _MIGRATION_19),
+    (20, _MIGRATION_20),
 )
 
 
