@@ -25,6 +25,7 @@ _FINDING_CLOSED = (
     FindingStatus.FALSE_POSITIVE,
     FindingStatus.DUPLICATE,
     FindingStatus.REPORTED,
+    FindingStatus.FIXED,
 )
 
 
