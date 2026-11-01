@@ -407,6 +407,20 @@ class KernelService:
         self.kernel.add_finding(finding, event)
         return finding
 
+    def bump_evidence_version(self, finding_id: str) -> Finding:
+        """Register that a finding's evidence changed (traffic bound or unbound)."""
+        finding = self._get_finding(finding_id)
+        expected_version = finding.version
+        finding.evidence_version += 1
+        finding._touch()
+        event = OperationEvent(
+            operation_id=finding.operation_id,
+            event_type="finding.evidence-version",
+            payload={"finding_id": finding_id, "version": finding.evidence_version},
+        )
+        self.kernel.save_finding(finding, expected_version, event)
+        return finding
+
     def attach_evidence(self, finding_id: str, artifact_id: str) -> Finding:
         finding = self._get_finding(finding_id)
         artifact = self.kernel.get_artifact(artifact_id)

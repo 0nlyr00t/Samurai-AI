@@ -257,6 +257,9 @@ class Finding(BaseModel):
     severity: FindingSeverity = FindingSeverity.INFO
     status: FindingStatus = FindingStatus.CANDIDATE
     evidence_ids: tuple[str, ...] = ()
+    #: Bumped whenever the evidence set changes; a report written against an older
+    #: version is refused instead of silently describing stale evidence.
+    evidence_version: int = Field(default=0, ge=0)
     remediation: str = ""
     duplicate_of: str | None = None
     version: int = Field(default=1, ge=1)

@@ -759,6 +759,34 @@ CREATE TABLE IF NOT EXISTS skill_gaps (
 );
 """
 
+_MIGRATION_23 = """
+CREATE TABLE IF NOT EXISTS traffic_pairs (
+    id           TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    method       TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    status       INTEGER NOT NULL,
+    request_body TEXT NOT NULL,
+    response_body TEXT NOT NULL,
+    truncated    INTEGER NOT NULL DEFAULT 0,
+    sha256       TEXT NOT NULL,
+    created_by   TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS traffic_pairs_operation
+ON traffic_pairs(operation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS finding_traffic (
+    finding_id TEXT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    traffic_id TEXT NOT NULL REFERENCES traffic_pairs(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (finding_id, traffic_id)
+);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -782,6 +810,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (20, _MIGRATION_20),
     (21, _MIGRATION_21),
     (22, _MIGRATION_22),
+    (23, _MIGRATION_23),
 )
 
 
