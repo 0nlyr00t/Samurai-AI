@@ -3597,6 +3597,42 @@ def test_retest_fixed_accepts_a_control_pair(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_commands_are_gated_by_role(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.access.configure("https://idp.test", "client")  # nobody is signed in
+
+            app._handle_command("/whoami")  # open command, reports the state
+            await pilot.pause()
+            app._handle_command("/tasks")
+            await pilot.pause()
+            log = " ".join(str(line.text) for line in app.query("RichLog").first().lines)
+            assert "not signed in" in log
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_the_actor_is_the_signed_in_subject(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert app._actor() == "local"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_skills_gaps_report_lists_misses(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")

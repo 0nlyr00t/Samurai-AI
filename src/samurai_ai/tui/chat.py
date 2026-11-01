@@ -141,6 +141,7 @@ class ChatController:
         _yolo: Any
 
         def _write_line(self, text: str) -> None: ...
+        def _actor(self) -> str: ...
         def _write_dim(self, text: str) -> None: ...
         def _write_user_message(self, text: str) -> None: ...
         def _write_ai_message(self, response: Any) -> None: ...
@@ -662,7 +663,7 @@ class ChatController:
             except ApprovalRequiredError as exc:
                 self.kernel.approve(
                     exc.approval_id,
-                    decided_by="operator" if ask else mode.value,
+                    decided_by=self._actor() if ask else mode.value,
                 )
                 approval_id = exc.approval_id
                 result = await asyncio.to_thread(
@@ -756,13 +757,13 @@ class ChatController:
                     AccessPromptScreen(self.translator, action, risk)
                 )
                 if allowed:
-                    self.kernel.approve(exc.approval_id, decided_by="operator")
+                    self.kernel.approve(exc.approval_id, decided_by=self._actor())
                     self._write_line(
                         "[allow] " + self.translator.t("access.granted", action=action)
                     )
                     approval_id = exc.approval_id
                     continue
-                self.kernel.reject(exc.approval_id, decided_by="operator")
+                self.kernel.reject(exc.approval_id, decided_by=self._actor())
                 self._write_line("[deny] " + self.translator.t("access.denied", action=action))
                 return None
 
@@ -1161,10 +1162,10 @@ class ChatController:
                     AccessPromptScreen(self.translator, f"model.call {model_id}", "r2")
                 )
             if not allowed:
-                self.kernel.reject(exc.approval_id, decided_by="operator")
+                self.kernel.reject(exc.approval_id, decided_by=self._actor())
                 return None, None
             if not self._yolo:  # yolo already approved it above
-                self.kernel.approve(exc.approval_id, decided_by="operator")
+                self.kernel.approve(exc.approval_id, decided_by=self._actor())
             try:
                 response = await asyncio.to_thread(
                     self.models.chat,
