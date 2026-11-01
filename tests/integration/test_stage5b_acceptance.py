@@ -69,6 +69,12 @@ EXECUTOR_ANSWER = (
 )
 
 
+CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task"}]}'
+
+
+_PLANNER_MARKER = "You are the planner"
+
+
 class _CapturingHandler(BaseHTTPRequestHandler):
     queue: list[str] = []
     executor_queue: list[str] = []
@@ -86,6 +92,9 @@ class _CapturingHandler(BaseHTTPRequestHandler):
             # executor queue so worker timing cannot mix the roles.
             if b"Current step:" in raw and _CapturingHandler.executor_queue:
                 text = _CapturingHandler.executor_queue.pop(0)
+            elif b"Current step:" in raw:
+                # the queue can run dry on the closing step, which must still close
+                text = CLOSE_OUT_ANSWER
             else:
                 text = (
                     _CapturingHandler.queue.pop(0)
@@ -229,7 +238,12 @@ def test_campaign_memory_shared_across_operations_with_redaction(
     assert run_b.status is AgentRunStatus.COMPLETED
 
     # обе операции получили digest своего workspace, без чужих записей и секретов
-    planner_prompts = _CapturingHandler.prompts[::2]
+    # a corrective retry repeats the prompt, so match the role explicitly
+    planner_prompts = [
+        prompt
+        for prompt in _CapturingHandler.prompts
+        if prompt.startswith(_PLANNER_MARKER)
+    ]
     assert len(planner_prompts) == 2
     for prompt in planner_prompts:
         assert "Campaign memory" in prompt

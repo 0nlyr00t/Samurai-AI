@@ -325,6 +325,8 @@ def test_complete_task_without_required_artifact_rejected(
     fake.queue(
         '{"steps": ["finish"]}',
         '{"commands": [{"type": "complete_task"}]}',
+        # the closing step asks again and is refused for the same reason
+        '{"commands": [{"type": "complete_task"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert run.status is AgentRunStatus.COMPLETED
@@ -452,6 +454,8 @@ def test_approval_resolver_decides_instead_of_raising(
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "echo hi"}}'
         "]}",
+        # the task is still open, so the closing step runs and closes it
+        '{"commands": [{"type": "complete_task"}]}',
     )
     seen: list[str] = []
 
@@ -537,6 +541,8 @@ def test_read_only_only_mode_rejects_mutating_tools(
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "ls"}}'
         "]}",
+        # the rejection leaves the task open, so the closing step closes it
+        '{"commands": [{"type": "complete_task"}]}',
     )
     assert orchestrator._is_read_only("shell.exec") is False
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID], read_only_only=True)

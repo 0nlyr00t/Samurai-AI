@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from samurai_ai import __version__
+from samurai_ai.agents.ollama import OllamaProvider
+from samurai_ai.agents.openai_compat import OpenAICompatProvider
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.eval import (
@@ -36,15 +39,27 @@ from samurai_ai.domain.models import (
     ModelCapability,
     ModelDefinition,
     ProviderDefinition,
+    parse_model_id,
 )
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.execution.process import ProcessManager
+from samurai_ai.execution.registry import (
+    HttpFetchTool,
+    LocalEchoTool,
+    ProcessExecTool,
+    SandboxExecTool,
+    ShellExecTool,
+    ToolRegistry,
+)
+from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
+from samurai_ai.execution.security import HttpxProbeTool, NucleiScanTool
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
-from samurai_ai.services.models import ModelService
+from samurai_ai.services.models import ModelService, ProviderImpl
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.swarm import SwarmService
-from samurai_ai.services.vault import VaultService
+from samurai_ai.services.vault import VaultService, load_master_key
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
@@ -185,6 +200,37 @@ class ScriptedProviderServer:
         self._thread.join(timeout=5)
 
 
+def _eval_registry(workdir: Path) -> ToolRegistry:
+    """The stock registry, with the sandbox bound to this workdir.
+
+    The sandbox refuses to run without a signed allowlist, and the operator's
+    global one says nothing about an eval run — so the run signs its own.
+    """
+    key_path = workdir / "vault.key"
+    signature_path = workdir / "sandbox-allowlist.sig"
+    # the vault may have been keyed from the environment, leaving no file behind;
+    # the runner loads from the file, so the key has to be there
+    if not key_path.exists():
+        key_path.write_bytes(load_master_key(key_path))
+    sign_allowlist(signature_path, key_path.read_bytes())
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        signature_path,
+        lambda: load_master_key(key_path),
+    )
+    return ToolRegistry(
+        adapters=(
+            LocalEchoTool(),
+            ProcessExecTool(),
+            ShellExecTool(),
+            HttpFetchTool(),
+            SandboxExecTool(runner),
+            HttpxProbeTool(runner),
+            NucleiScanTool(runner),
+        )
+    )
+
+
 class _ScenarioStack:
     def __init__(
         self,
@@ -196,6 +242,7 @@ class _ScenarioStack:
         api_key: str = "unused-key",
         cost_input_per_m: float = 1.0,
         cost_output_per_m: float = 2.0,
+        timeout_seconds: float | None = None,
     ) -> None:
         workdir.mkdir(parents=True, exist_ok=True)
         self.database = Database(workdir / "samurai.db")
@@ -217,14 +264,18 @@ class _ScenarioStack:
             else:
                 os.environ["SAMURAI_VAULT_KEY"] = previous_key
         execution = ToolExecutionService(
-            self.operations, self.kernel, recovery, ToolRunRepository(self.database)
+            self.operations,
+            self.kernel,
+            recovery,
+            ToolRunRepository(self.database),
+            registry=_eval_registry(workdir),
         )
         endpoints = ModelEndpointRepository(self.database)
         registry = ModelRegistry(
             endpoints,
             providers=(
                 ProviderDefinition(
-                    id="eval",
+                    id=parse_model_id(model_id)[0],
                     api_family=api_family,
                     base_url=base_url,
                     secret_name="eval-key",
@@ -233,7 +284,7 @@ class _ScenarioStack:
             models=(
                 ModelDefinition(
                     id=model_id,
-                    provider_id="eval",
+                    provider_id=parse_model_id(model_id)[0],
                     context_limit=128000,
                     capabilities=frozenset(
                         {ModelCapability.STRUCTURED_OUTPUT, ModelCapability.TOOLS}
@@ -244,8 +295,21 @@ class _ScenarioStack:
             ),
         )
         self.models = ModelService(
-            registry, vault, self.kernel, self.operations, endpoints, recovery_repository
+            registry,
+            vault,
+            self.kernel,
+            self.operations,
+            endpoints,
+            recovery_repository,
+            provider_factory=(
+                _provider_with_timeout(api_key, api_family, timeout_seconds)
+                if timeout_seconds is not None
+                else None
+            ),
         )
+        # a reused workdir keeps the old value otherwise, which a live run notices
+        if vault.repository.find_any("eval-key") is not None:
+            vault.remove("eval-key")
         vault.add("eval-key", api_key)
         self.orchestrator = AgentOrchestrator(
             self.models, self.kernel, execution, self.operations,
@@ -268,6 +332,28 @@ def load_suite(path: Path) -> EvalSuite:
         return EvalSuite.model_validate(raw)
     except ValidationError as exc:
         raise EvalSuiteError(f"invalid suite {path}: {exc}") from exc
+
+
+def _always_approve(_approval_id: str) -> bool:
+    """A live run is unattended: a tool's own approval is not the thing measured."""
+    return True
+
+
+def _provider_with_timeout(
+    api_key: str, api_family: ApiFamily, timeout_seconds: float
+) -> Callable[[ProviderDefinition], ProviderImpl]:
+    """A real provider that waits as long as the target says it needs.
+
+    Local models on a loaded machine take minutes, and the stock client timeout
+    would turn that into a provider error rather than a slow answer.
+    """
+
+    def build(provider: ProviderDefinition) -> ProviderImpl:
+        if api_family is ApiFamily.OLLAMA:
+            return OllamaProvider(provider, timeout=timeout_seconds)
+        return OpenAICompatProvider(provider, api_key, timeout=timeout_seconds)
+
+    return build
 
 
 def _model_of(scenario: EvalScenario) -> str:
@@ -405,6 +491,7 @@ class EvalService:
             api_key=api_key,
             cost_input_per_m=target.cost_input_per_m,
             cost_output_per_m=target.cost_output_per_m,
+            timeout_seconds=target.timeout_seconds,
         )
         operation = stack.operations.create(
             f"eval:{scenario.id}", scenario.mode, ScopeContract(includes=scenario.scope_includes)
@@ -432,6 +519,7 @@ class EvalService:
                     [target.model],
                     approval_id=approval.id,
                     created_by="eval-harness",
+                    approval_resolver=_always_approve,
                 )
         else:
             stack.swarms.start(
@@ -441,6 +529,7 @@ class EvalService:
                 workers=scenario.workers,
                 approval_id=approval.id,
                 created_by="eval-harness",
+                approval_resolver=_always_approve,
             )
         wall = time.monotonic() - started
         return metrics_from_events(

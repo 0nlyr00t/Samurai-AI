@@ -61,6 +61,9 @@ EXECUTOR_ANSWER = (
 )
 
 
+CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task"}]}'
+
+
 class _LatencyHandler(BaseHTTPRequestHandler):
     queue: list[str] = []
     executor_queue: list[str] = []
@@ -76,6 +79,11 @@ class _LatencyHandler(BaseHTTPRequestHandler):
             # executor queue so worker timing cannot mix the roles.
             if b"Current step:" in raw and _LatencyHandler.executor_queue:
                 text = _LatencyHandler.executor_queue.pop(0)
+            elif b"Current step:" in raw and _LatencyHandler.queue:
+                text = _LatencyHandler.queue.pop(0)
+            elif b"Current step:" in raw:
+                # the queue can run dry on the closing step, which must still close
+                text = CLOSE_OUT_ANSWER
             elif _LatencyHandler.queue:
                 text = _LatencyHandler.queue.pop(0)
             else:

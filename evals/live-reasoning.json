@@ -1,0 +1,134 @@
+{
+  "name": "live-reasoning",
+  "version": "1.0.0",
+  "note": "Live suite: a real model, no network targets and no sandbox images needed — tasks are solvable with note and complete_task, so the metrics are about instruction following, schema repair and cost, not about reaching a host. mistral is picked for speed; a thinking model such as qwen3.5 needs timeout_seconds of 300+.",
+  "scenarios": [
+    {
+      "id": "note-then-complete",
+      "title": "One task: write a note, then close it",
+      "mode": "bug-bounty",
+      "scope_includes": [
+        "example.com"
+      ],
+      "live": {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "ollama/mistral@v1",
+        "secret_env": "OPENAI_API_KEY",
+        "cost_input_per_m": 0.0,
+        "cost_output_per_m": 0.0,
+        "timeout_seconds": 180.0
+      },
+      "tasks": [
+        {
+          "id": "recon",
+          "title": "Recon. Use only the note and complete_task commands: note with key 'surface' and a value naming one page worth testing, then complete_task",
+          "risk_class": "r1"
+        }
+      ],
+      "expectations": {
+        "expect_solve": true,
+        "min_tasks_done": 1,
+        "max_invalid_actions": 3,
+        "max_wall_seconds": 300
+      }
+    },
+    {
+      "id": "two-sequential-tasks",
+      "title": "Two tasks done in order, each with its own note",
+      "mode": "bug-bounty",
+      "scope_includes": [
+        "example.com"
+      ],
+      "live": {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "ollama/mistral@v1",
+        "secret_env": "OPENAI_API_KEY",
+        "cost_input_per_m": 0.0,
+        "cost_output_per_m": 0.0,
+        "timeout_seconds": 180.0
+      },
+      "tasks": [
+        {
+          "id": "recon",
+          "title": "Recon. Use only the note and complete_task commands: note with key 'surface' and a value naming one page worth testing, then complete_task",
+          "risk_class": "r1"
+        },
+        {
+          "id": "testing",
+          "title": "Testing. Use only the note and complete_task commands: note with key 'hypothesis' and a value describing one test, then complete_task",
+          "risk_class": "r1"
+        }
+      ],
+      "expectations": {
+        "expect_solve": true,
+        "min_tasks_done": 2,
+        "max_invalid_actions": 3,
+        "max_wall_seconds": 420
+      }
+    },
+    {
+      "id": "unknown-tool-then-recover",
+      "title": "A request for an unregistered tool, then recovery",
+      "mode": "bug-bounty",
+      "scope_includes": [
+        "example.com"
+      ],
+      "live": {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "ollama/mistral@v1",
+        "secret_env": "OPENAI_API_KEY",
+        "cost_input_per_m": 0.0,
+        "cost_output_per_m": 0.0,
+        "timeout_seconds": 180.0
+      },
+      "tasks": [
+        {
+          "id": "probe",
+          "title": "Probe. Request the tool 'nmap_scan' once — it is not registered. Do not try other tools afterwards: use note with key 'recovery' and a short value, then complete_task",
+          "risk_class": "r1"
+        }
+      ],
+      "expectations": {
+        "expect_solve": true,
+        "min_tasks_done": 1,
+        "max_invalid_actions": 3,
+        "max_wall_seconds": 300
+      }
+    },
+    {
+      "id": "two-worker-swarm",
+      "title": "Two independent tasks on a two-worker swarm",
+      "mode": "bug-bounty",
+      "scope_includes": [
+        "example.com"
+      ],
+      "live": {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "ollama/mistral@v1",
+        "secret_env": "OPENAI_API_KEY",
+        "cost_input_per_m": 0.0,
+        "cost_output_per_m": 0.0,
+        "timeout_seconds": 180.0
+      },
+      "workers": 2,
+      "tasks": [
+        {
+          "id": "recon",
+          "title": "Recon. Use only the note and complete_task commands: note with key 'surface' and a value naming one page worth testing, then complete_task",
+          "risk_class": "r1"
+        },
+        {
+          "id": "analysis",
+          "title": "Analysis. Use only the note and complete_task commands: note with key 'risk' and a value naming one risk class, then complete_task",
+          "risk_class": "r1"
+        }
+      ],
+      "expectations": {
+        "expect_solve": true,
+        "min_tasks_done": 2,
+        "max_invalid_actions": 3,
+        "max_wall_seconds": 420
+      }
+    }
+  ]
+}
