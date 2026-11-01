@@ -47,6 +47,7 @@ from samurai_ai.domain.permission import (
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.i18n import Translator
 from samurai_ai.services.chat import ChatHistoryService
+from samurai_ai.services.constraints import ConstraintService
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
@@ -66,6 +67,7 @@ from samurai_ai.services.skills import SkillService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.chat import ChatHistoryRepository
+from samurai_ai.storage.constraints import ConstraintRepository
 from samurai_ai.storage.graph import GraphRepository
 from samurai_ai.storage.lessons import LessonRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
@@ -372,6 +374,9 @@ class SamuraiApp(
         )
         self.lessons = LessonService(
             service, kernel, LessonRepository(service.repository.database), settings
+        )
+        self.constraints = ConstraintService(
+            service, ConstraintRepository(service.repository.database)
         )
         # Plan mode is session state on purpose: it is never persisted and only
         # the operator can enter it.

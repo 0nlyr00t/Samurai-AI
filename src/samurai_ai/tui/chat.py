@@ -119,6 +119,7 @@ class ChatController:
         chat_history: ChatHistoryService
         graph: GraphService
         lessons: Any
+        constraints: Any
         _graph_used: bool
         _steer_queue: list[str]
         _chat_busy: bool
@@ -372,6 +373,7 @@ class ChatController:
             version=__version__,
             autonomy=autonomy,
         )
+        prompt = self._append_constraints(prompt)
         prompt = self._append_frontier(prompt)
         try:
             digest, _ids = self.memory.digest(self._memory_workspace())
@@ -391,6 +393,25 @@ class ChatController:
         if not digest:
             return prompt
         return f"{prompt}\n\n{self.translator.t('chat.lessons', digest=digest)}"
+
+    def _append_constraints(self, prompt: str) -> str:
+        """Operator boundaries go above everything: they outrank advice and history."""
+        if self.operation is None:
+            return prompt
+        try:
+            plan = self.kernel.get_current_plan(self.operation.id)
+            if plan is None:
+                return prompt
+            block = "\n".join(
+                text
+                for text in (self.constraints.block(str(task.id)) for task in plan.tasks)
+                if text
+            )
+        except Exception:  # noqa: BLE001 - constraints must not break a turn
+            return prompt
+        if not block:
+            return prompt
+        return f"{prompt}\n\n{self.translator.t('chat.constraints', block=block)}"
 
     def _append_frontier(self, prompt: str) -> str:
         """The open directions sit above the memory digest: a boundary beats advice."""
