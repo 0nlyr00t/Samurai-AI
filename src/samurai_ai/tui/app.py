@@ -28,6 +28,7 @@ from textual.widgets.option_list import Option
 from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
+from samurai_ai.domain.access import AccessError, Role
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.constraints import ConstraintKind
 from samurai_ai.domain.execution import SecretRedactor, ToolDefinition, ToolRun
@@ -49,6 +50,7 @@ from samurai_ai.domain.retest import RetestVerdict
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.traffic import TrafficRole
 from samurai_ai.i18n import Translator
+from samurai_ai.services.access import AccessService
 from samurai_ai.services.chat import ChatHistoryService
 from samurai_ai.services.constraints import ConstraintService
 from samurai_ai.services.ctf import CtfService
@@ -70,6 +72,7 @@ from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.storage.access import AccessRepository
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.chat import ChatHistoryRepository
 from samurai_ai.storage.constraints import ConstraintRepository
@@ -81,7 +84,7 @@ from samurai_ai.storage.traffic import TrafficRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
-from samurai_ai.tui.commands import CommandSpec, find_command
+from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
 from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
@@ -125,6 +128,10 @@ _BARE_TOKEN = re.compile(
     r"(?<![\w-])(?:" + "|".join(sorted(TOKENS, key=len, reverse=True)) + r")(?![\w-])"
 )
 _YOLO_LEGACY_KEY = "tui.yolo"
+
+
+#: Reachable without a role: otherwise nobody could ever sign in.
+_OPEN_COMMANDS = frozenset({"/login", "/whoami"})
 
 
 class SamuraiApp(
@@ -387,6 +394,9 @@ class SamuraiApp(
         )
         self.retests = RetestService(
             service, kernel, RetestRepository(service.repository.database), self.traffic
+        )
+        self.access = AccessService(
+            settings, vault, AccessRepository(service.repository.database)
         )
         self.constraints = ConstraintService(
             service, ConstraintRepository(service.repository.database)
@@ -1269,6 +1279,104 @@ class SamuraiApp(
         self._apply_mouse()
         self._write_dim(self.translator.t("mouse.enabled" if enabled else "mouse.disabled"))
 
+    def _actor(self) -> str:
+        """Who signs the action: the signed-in subject, or `operator` locally."""
+        try:
+            return str(self.access.current().label)
+        except AccessError:
+            return "operator"
+
+    def _require_path(self, path: str) -> bool:
+        """Gate a board action that is not a slash command."""
+        try:
+            self.access.require(path)
+        except AccessError as exc:
+            self._write_line(f"[access] {exc}")
+            return False
+        return True
+
+    def _handle_login_command(self, argument: str) -> None:
+        """`/login` prints the code, `/login configure <issuer> <client_id>` sets it up."""
+
+        async def run() -> None:
+            from samurai_ai.tui.screens import ArgumentScreen
+
+            if argument.startswith("configure"):
+                parts = argument.split()
+                issuer = parts[1] if len(parts) > 1 else ""
+                client = parts[2] if len(parts) > 2 else ""
+                if not issuer or not client:
+                    issuer = await self.push_screen_wait(
+                        ArgumentScreen(self.translator, self.translator.t("auth.issuer"))
+                    ) or ""
+                    client = await self.push_screen_wait(
+                        ArgumentScreen(self.translator, self.translator.t("auth.client"))
+                    ) or ""
+                try:
+                    self.access.configure(issuer, client)
+                except AccessError as exc:
+                    self._write_line(f"[auth] {exc}")
+                    return
+                self._write_dim(self.translator.t("auth.configured", issuer=issuer))
+                return
+            try:
+                code = self.access.begin()
+            except AccessError as exc:
+                self._write_line(f"[auth] {exc}")
+                return
+            self._write_line(
+                self.translator.t("auth.code", code=code.user_code, url=code.verification_uri)
+            )
+            try:
+                session = await asyncio.to_thread(self.access.complete, code)
+            except AccessError as exc:
+                self._write_line(f"[auth] {exc}")
+                return
+            self._write_dim(
+                self.translator.t(
+                    "auth.signed-in", who=session.principal.label, role=session.principal.role.value
+                )
+            )
+            self._refresh_chrome()
+
+        self.run_worker(run())
+
+    def _handle_whoami_command(self, argument: str) -> None:
+        try:
+            principal = self.access.current()
+        except AccessError as exc:
+            self._write_line(f"[auth] {exc}")
+            return
+        self._write_line(
+            self.translator.t("auth.whoami", who=principal.label, role=principal.role.value)
+        )
+
+    def _handle_logout_command(self, argument: str) -> None:
+        ended = self.access.logout()
+        self._write_dim(self.translator.t("auth.signed-out" if ended else "auth.no-session"))
+        self._refresh_chrome()
+
+    def _handle_role_command(self, argument: str) -> None:
+        parts = argument.split()
+        try:
+            if parts and parts[0] == "map" and len(parts) >= 3:
+                self.access.map_role(parts[1], Role(parts[2]))
+                self._write_dim(self.translator.t("auth.mapped", claim=parts[1], role=parts[2]))
+                return
+            if parts and parts[0] == "rm" and len(parts) >= 2:
+                self.access.access.remove_mapping(parts[1])
+                self._write_dim(self.translator.t("auth.unmapped", claim=parts[1]))
+                return
+        except (AccessError, ValueError) as exc:
+            self._write_line(f"[role] {exc}")
+            return
+        mappings = self.access.access.list_mappings()
+        if not mappings:
+            self._write_dim(self.translator.t("auth.no-mappings"))
+            return
+        for claim, role in mappings:
+            self._write_line(f"[role] {claim} -> {role.value}")
+
     def _handle_command(self, command: str) -> None:
         if command.startswith("!"):
             self._shell_mode(command[1:].strip())
@@ -1299,6 +1407,12 @@ class SamuraiApp(
         if spec.needs_operation and self.operation is None:
             self._write_line("[error] " + self.translator.t("palette.no-operation"))
             return
+        if spec.name not in _OPEN_COMMANDS:
+            try:
+                self.access.require(command_path(spec))
+            except AccessError as exc:
+                self._write_line(f"[access] {exc}")
+                return
         handler = getattr(self, spec.handler)
         handler(argument) if spec.takes_argument else handler()
 
