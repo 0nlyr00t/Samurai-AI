@@ -284,7 +284,7 @@ class AgentOrchestrator:
         if skill_names:
             if self.skills is None:
                 raise AgentError("skills are not configured")
-            fragment, skill_ids = self.skills.prompt_fragment(skill_names)
+            fragment, skill_ids = self.skills.prompt_fragment(skill_names, workspace)
             if fragment:
                 sections.append(
                     "Installed skills (trusted operator instructions):\n" + fragment

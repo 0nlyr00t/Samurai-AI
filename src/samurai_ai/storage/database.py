@@ -749,6 +749,16 @@ CREATE TABLE IF NOT EXISTS task_constraints (
 CREATE INDEX IF NOT EXISTS task_constraints_task ON task_constraints(task_id, kind);
 """
 
+_MIGRATION_22 = """
+CREATE TABLE IF NOT EXISTS skill_gaps (
+    skill        TEXT NOT NULL,
+    workspace    TEXT NOT NULL,
+    misses       INTEGER NOT NULL DEFAULT 0,
+    last_seen    TEXT NOT NULL,
+    PRIMARY KEY (skill, workspace)
+);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -771,6 +781,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (19, _MIGRATION_19),
     (20, _MIGRATION_20),
     (21, _MIGRATION_21),
+    (22, _MIGRATION_22),
 )
 
 

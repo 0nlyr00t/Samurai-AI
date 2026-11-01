@@ -39,7 +39,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "/constraint [deny|allow|rm] <text|id>  Operator boundaries for the task"
         ),
         "help.memory": "/memory [ws]     Show campaign memory entries (workspace filter)",
-        "help.skills": "/skills          Show installed trusted skills",
+        "help.skills": "/skills [gaps]   Show installed skills, or the gaps report",
         "help.playbooks": "/playbooks       Show installed custom playbooks",
         "help.secrets": "/secrets         Show secret metadata (values are never shown)",
         "help.assets": "/assets           Show the bug bounty asset ledger",

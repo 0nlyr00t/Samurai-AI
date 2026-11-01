@@ -61,6 +61,7 @@ from samurai_ai.storage.playbooks import PlaybookRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
+from samurai_ai.storage.skill_gaps import SkillGapRepository
 from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
@@ -156,7 +157,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     agents.finish(swarm_member)
     memory = CampaignMemoryService(MemoryRepository(database))
     memory.add("tui-ws", "TUI methodology", kind=MemoryKind.METHODOLOGY)
-    skills = SkillService(SkillRepository(database))
+    skills = SkillService(SkillRepository(database), gaps=SkillGapRepository(database))
     skills.install("tui-skill", "TUI skill body", trusted=True)
     custom_template = PlaybookTemplate(
         name="tui-custom",
@@ -377,7 +378,7 @@ def _minimal_stack(tmp_path: Path, provider_factory=None, trust_cwd: bool = True
         SwarmRunRepository(database),
         GoalService(OperationService(OperationRepository(database)), GoalRepository(database)),
         CampaignMemoryService(MemoryRepository(database)),
-        SkillService(SkillRepository(database)),
+        SkillService(SkillRepository(database), gaps=SkillGapRepository(database)),
         models,
     )
 
@@ -3457,6 +3458,26 @@ def test_exhausted_rounds_settle_the_graph_before_the_summary(tmp_path: Path) ->
 
             assert seen == [("record_fact", "close_intent", "propose_finding")]
             assert app.graph.get(intent.id).state.value == "open"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_skills_gaps_report_lists_misses(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.skills.record_gap("invented-skill", app._memory_workspace())
+
+            app._handle_command("/skills gaps")
+            await pilot.pause()
+            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            assert any("invented-skill" in line and "misses=1" in line for line in lines)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
