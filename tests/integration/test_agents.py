@@ -325,7 +325,9 @@ def test_complete_task_without_required_artifact_rejected(
     fake.queue(
         '{"steps": ["finish"]}',
         '{"commands": [{"type": "complete_task"}]}',
-        # the closing step asks again and is refused for the same reason
+        # the refusal goes back to the model, which asks again and is refused,
+        # and the closing step does the same
+        '{"commands": [{"type": "complete_task"}]}',
         '{"commands": [{"type": "complete_task"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -554,3 +556,47 @@ def test_read_only_only_mode_rejects_mutating_tools(
     ]
     assert rejected
     assert "read-only" in str(rejected[0].payload)
+
+
+def test_a_refused_step_is_asked_again_with_the_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": [{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}}]}',
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    assert run.status is AgentRunStatus.COMPLETED
+    retry_prompt = fake.requests[2].messages[-1].content
+    assert "[rejected]" in retry_prompt
+    assert "tool not found: missing.tool" in retry_prompt
+    assert kernel.get_current_plan(operation_id).task_by_id("probe").status is (  # type: ignore[union-attr]
+        TaskStatus.DONE
+    )
+
+
+def test_a_partly_accepted_step_is_not_asked_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": ['
+        '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}},'
+        '{"type": "complete_task"}'
+        "]}",
+    )
+
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    assert run.status is AgentRunStatus.COMPLETED
+    # planner + one executor call, and the close-out never fires
+    assert len(fake.requests) == 2

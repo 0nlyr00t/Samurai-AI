@@ -95,6 +95,12 @@ _EXECUTOR_INSTRUCTION = (
 )
 
 
+def _rejection_block(reasons: list[str]) -> str:
+    """What the model must read before trying again, in its own prompt."""
+    listed = "\n".join(f"- {reason}" for reason in dict.fromkeys(reasons))
+    return f"[rejected] Your previous commands were refused:\n{listed}\nFix them.\n"
+
+
 def _parameter_hint(parameters: dict[str, Any]) -> str:
     """Name the accepted parameters, required ones first.
 
@@ -407,25 +413,41 @@ class AgentOrchestrator:
                 model_approvals=model_approvals,
                 stop_event=stop_event,
             )
-            for command in commands:
-                if self._stop_requested(run, stop_event):
-                    return
-                accepted = self._apply_command(
+            rejects, consecutive_rejects = self._run_commands(
+                operation_id,
+                run,
+                commands,
+                consecutive_rejects,
+                read_only_only=read_only_only,
+                approval_resolver=approval_resolver,
+                stop_event=stop_event,
+            )
+            if run.status is not AgentRunStatus.RUNNING:
+                return
+            if rejects and not self._stop_requested(run, stop_event):
+                # the model never learns why a command was refused, so it repeats
+                # it; one re-ask per step, with the reasons, is the whole remedy
+                retry = self._execute_step_prompt(
                     operation_id,
                     run,
-                    command,
+                    step,
+                    index,
+                    approval_id,
+                    extra_context,
+                    approval_resolver=approval_resolver,
+                    model_approvals=model_approvals,
+                    stop_event=stop_event,
+                    rejection_notes=_rejection_block(rejects),
+                )
+                _rejects, consecutive_rejects = self._run_commands(
+                    operation_id,
+                    run,
+                    retry,
+                    consecutive_rejects,
                     read_only_only=read_only_only,
                     approval_resolver=approval_resolver,
+                    stop_event=stop_event,
                 )
-                if accepted:
-                    consecutive_rejects = 0
-                else:
-                    consecutive_rejects += 1
-                    if consecutive_rejects > MAX_CONSECUTIVE_REJECTS:
-                        raise AgentError(
-                            f"too many consecutive rejected commands "
-                            f"(>{MAX_CONSECUTIVE_REJECTS})"
-                        )
                 if run.status is not AgentRunStatus.RUNNING:
                     return
         # the planned steps ran out while the task was still open: one forced
@@ -441,6 +463,46 @@ class AgentOrchestrator:
                 model_approvals=model_approvals,
                 stop_event=stop_event,
             )
+
+    def _run_commands(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        commands: tuple[AgentCommand, ...],
+        consecutive_rejects: int,
+        *,
+        read_only_only: bool,
+        approval_resolver: Callable[[str], bool] | None,
+        stop_event: threading.Event | None,
+    ) -> tuple[list[str], int]:
+        rejects: list[str] = []
+        applied = 0
+        for command in commands:
+            if self._stop_requested(run, stop_event):
+                return rejects, consecutive_rejects
+            reason = self._apply_command(
+                operation_id,
+                run,
+                command,
+                read_only_only=read_only_only,
+                approval_resolver=approval_resolver,
+            )
+            if reason is None:
+                consecutive_rejects = 0
+                applied += 1
+                continue
+            rejects.append(reason)
+            consecutive_rejects += 1
+            if consecutive_rejects > MAX_CONSECUTIVE_REJECTS:
+                raise AgentError(
+                    f"too many consecutive rejected commands (>{MAX_CONSECUTIVE_REJECTS})"
+                )
+            if run.status is not AgentRunStatus.RUNNING:
+                return rejects, consecutive_rejects
+        if applied:
+            # a step that got something done does not need re-asking
+            return [], consecutive_rejects
+        return rejects, consecutive_rejects
 
     def _task_open(self, operation_id: str, task_id: str) -> bool:
         plan = self.kernel.get_current_plan(operation_id)
@@ -498,11 +560,13 @@ class AgentOrchestrator:
         approval_resolver: Callable[[str], bool] | None = None,
         model_approvals: dict[str, str] | None = None,
         stop_event: threading.Event | None = None,
+        rejection_notes: str = "",
     ) -> tuple[AgentCommand, ...]:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         prompt = (
             f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
             f"{self._tools_excerpt()}\n"
+            f"{rejection_notes}"
             f"Current step: {step}\n"
             f"Blackboard:\n{self._blackboard_excerpt(blackboard, run.id) or '(empty)'}"
         )
@@ -604,17 +668,14 @@ class AgentOrchestrator:
         *,
         read_only_only: bool = False,
         approval_resolver: Callable[[str], bool] | None = None,
-    ) -> bool:
+    ) -> str | None:
+        """None when the command was applied, the reason when it was rejected."""
         try:
             if isinstance(command, RequestToolRunCommand):
                 if read_only_only and not self._is_read_only(command.tool_id):
-                    self._reject(
-                        operation_id,
-                        run,
-                        command,
-                        "plan mode allows read-only tool calls only",
-                    )
-                    return False
+                    reason = "plan mode allows read-only tool calls only"
+                    self._reject(operation_id, run, command, reason)
+                    return reason
                 self._command_tool_run(
                     operation_id, run, command, approval_resolver=approval_resolver
                 )
@@ -622,8 +683,9 @@ class AgentOrchestrator:
                 try:
                     self._append_note(operation_id, run, command)
                 except ValueError as exc:
-                    self._reject(operation_id, run, command, f"invalid note key: {exc}")
-                    return False
+                    reason = f"invalid note key: {exc}"
+                    self._reject(operation_id, run, command, reason)
+                    return reason
             elif isinstance(command, ProposeFindingCommand):
                 self._command_propose_finding(operation_id, run, command)
             elif isinstance(command, CompleteTaskCommand):
@@ -633,15 +695,16 @@ class AgentOrchestrator:
             else:
                 raise AgentError(f"unsupported command type: {command!r}")
         except ApprovalRequiredError as exc:
-            self._reject(operation_id, run, command, f"approval-required:{exc.approval_id}")
-            return False
+            reason = f"approval-required:{exc.approval_id}"
+            self._reject(operation_id, run, command, reason)
+            return reason
         except (ToolNotFoundError, ToolExecutionError) as exc:
             self._reject(operation_id, run, command, str(exc))
-            return False
+            return str(exc)
         except (KernelError, ArtifactError) as exc:
             self._reject(operation_id, run, command, str(exc))
-            return False
-        return True
+            return str(exc)
+        return None
 
     def _is_read_only(self, tool_id: str) -> bool:
         try:
