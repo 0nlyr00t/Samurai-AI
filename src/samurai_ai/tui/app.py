@@ -1975,7 +1975,12 @@ class SamuraiApp(
                     retest_id, RetestVerdict(verdict), summary, evidence, control
                 )
                 self._write_dim(
-                    self.translator.t("retest.finished", id=finished.id, verdict=verdict)
+                    self.translator.t(
+                        "retest.finished-pair" if finished.control_pair else "retest.finished",
+                        id=finished.id,
+                        verdict=verdict,
+                        pair=finished.control_pair,
+                    )
                 )
                 self._refresh_chrome()
                 return
