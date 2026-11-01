@@ -3406,6 +3406,63 @@ def test_constraints_reach_the_prompt_above_the_frontier(tmp_path: Path) -> None
     asyncio.run(exercise())
 
 
+def test_constraint_command_adds_lists_and_removes(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            task_id, _root, _intent = _seed_graph(app, stack, operation)
+
+            app._handle_command("/constraint deny do not touch /admin")
+            await pilot.pause()
+            stored = app.constraints.for_task(task_id)
+            assert [row.text for row in stored] == ["do not touch /admin"]
+
+            app._handle_command("/constraint")
+            await pilot.pause()
+            app._handle_command(f"/constraint rm {stored[0].id}")
+            await pilot.pause()
+            assert app.constraints.for_task(task_id) == []
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_exhausted_rounds_settle_the_graph_before_the_summary(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            task_id, root, _intent = _seed_graph(app, stack, operation)
+            app._graph_used = True
+            intent = app.graph.open_intent(operation.id, task_id, "still open", root.id)
+
+            seen: list[tuple[str, ...]] = []
+
+            async def fake_request(operation_id, model_id, reasoning, tools):  # type: ignore[no-untyped-def]
+                seen.append(tuple(spec.name for spec in tools))
+                return None
+
+            original = app._request_chat_completion
+            app._request_chat_completion = fake_request  # type: ignore[method-assign]
+            await app._settle(operation.id, "gpt/test-model@v1", None)
+            app._request_chat_completion = original  # type: ignore[method-assign]
+
+            assert seen == [("record_fact", "close_intent", "propose_finding")]
+            assert app.graph.get(intent.id).state.value == "open"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_a_verdict_on_the_board_teaches_a_lesson(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")

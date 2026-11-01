@@ -29,6 +29,7 @@ from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
+from samurai_ai.domain.constraints import ConstraintKind
 from samurai_ai.domain.execution import SecretRedactor, ToolDefinition, ToolRun
 from samurai_ai.domain.goal import Goal, GoalError
 from samurai_ai.domain.kernel import (
@@ -1908,6 +1909,39 @@ class SamuraiApp(
                     f"  [member] {member.task_id} | {member.id} | {member.status.value} | "
                     f"{member.specialization.value}"
                 )
+
+    def _handle_constraint_command(self, argument: str) -> None:
+        """`/constraint [deny|allow|rm] <text|id>`, listing when bare."""
+        if self.operation is None:
+            self._write_line("[error] " + self.translator.t("palette.no-operation"))
+            return
+        plan = self.kernel.get_current_plan(self.operation.id)
+        rows = self.constraints.in_operation(self.operation.id)
+        parts = argument.split(maxsplit=1)
+        action = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if action in ("deny", "allow") and rest:
+                if plan is None:
+                    self._write_line(self.translator.t("constraint.no-plan"))
+                    return
+                constraint = self.constraints.add(
+                    self.operation.id, str(plan.tasks[0].id), ConstraintKind(action), rest
+                )
+                self._write_dim(self.translator.t("constraint.added", text=constraint.text))
+                return
+            if action == "rm" and rest:
+                self.constraints.remove(rest)
+                self._write_dim(self.translator.t("constraint.removed", id=rest))
+                return
+        except Exception as exc:  # noqa: BLE001 - command feedback, never a crash
+            self._write_line(f"[constraint] {exc}")
+            return
+        if not rows:
+            self._write_dim(self.translator.t("constraint.empty"))
+            return
+        for row in rows:
+            self._write_line(f"[constraint] {row.id} | {row.kind.value} | {row.text}")
 
     def _handle_lessons_command(self, argument: str) -> None:
         """`/lessons [extract|adopt <id>|reject <id>|mode <mode>]`, listing by default."""
