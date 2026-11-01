@@ -14,12 +14,18 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from samurai_ai.domain.agents import AgentError, AgentPlanError, AgentRunStatus
+from samurai_ai.agents.blackboard import Blackboard
+from samurai_ai.agents.provider import Message
+from samurai_ai.domain.agents import AgentError, AgentPlanError, AgentRun, AgentRunStatus
+from samurai_ai.domain.execution import SecretRedactor
 from samurai_ai.domain.kernel import PlanTask, RiskClass, StageGate, TaskStatus
 from samurai_ai.domain.swarm import AgentSpecialization
 
+#: A subagent hands back what it learned, not a transcript.
+_SPAWN_MAX_NOTES = 8
+_SPAWN_MAX_CHARS = 1200
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from samurai_ai.domain.agents import AgentRun
     from samurai_ai.domain.operations import Operation
 
 
@@ -38,6 +44,7 @@ class SessionController:
 
     if TYPE_CHECKING:  # pragma: no cover - typing only
         operation: Operation | None
+        service: Any
         screen: Any
         orchestrator: Any
         kernel: Any
@@ -48,6 +55,7 @@ class SessionController:
         _permission_mode: Any
 
         def _write_line(self, message: Any) -> None: ...
+        def _remember(self, message: Message) -> None: ...
         def _write_dim(self, message: str) -> None: ...
         def _refresh_chrome(self) -> None: ...
         def run_worker(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -175,6 +183,7 @@ class SessionController:
             self._spawn = None
         if run is None:
             self._write_line(f"[subagent] {error}")
+            self._hand_back(spawn, self.translator.t("subagent.no-result", error=error))
         else:
             key = (
                 "subagent.finished"
@@ -182,7 +191,43 @@ class SessionController:
                 else "subagent.stopped"
             )
             self._write_line(self.translator.t(key, run=run.id, status=run.status.value))
+            summary = self._subagent_digest(run)
+            if summary:
+                self._write_dim(summary)
+            else:
+                self._write_dim(self.translator.t("subagent.no-notes", run=run.id))
+            self._hand_back(
+                spawn,
+                summary or self.translator.t("subagent.no-notes", run=run.id),
+                status=run.status.value,
+            )
         self._refresh_chrome()
+
+    def _subagent_digest(self, run: AgentRun) -> str:
+        """What the subagent left on the blackboard, bounded and redacted."""
+        notes = Blackboard.from_events(self.service.repository.events(run.operation_id))
+        visible = list(notes.visible_for(run.id).items())[:_SPAWN_MAX_NOTES]
+        redactor = SecretRedactor()
+        lines = []
+        spent = 0
+        for key, value in visible:
+            line = f"{key}: {value}"
+            if spent + len(line) > _SPAWN_MAX_CHARS:
+                line = line[: max(0, _SPAWN_MAX_CHARS - spent)] + "…"
+            lines.append(redactor.redact(line).text)
+            spent += len(line)
+            if spent >= _SPAWN_MAX_CHARS:
+                break
+        return "\n".join(lines)
+
+    def _hand_back(self, spawn: _Spawn, text: str, status: str = "none") -> None:
+        """Feed the outcome back to the chat model; it runs on a later call."""
+        message = Message(
+            role="user",
+            content=f"[tool agent_spawn result run={spawn.run_id} task={spawn.task_id} "
+            f"status={status}]\n{text}",
+        )
+        self._remember(message)
 
     # -- stop -------------------------------------------------------------
     def stop_subagent(self, run_id: str | None = None) -> bool:

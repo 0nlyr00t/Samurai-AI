@@ -7,6 +7,7 @@ while ``app.py`` stays a shell: layout, bindings, status bar, command dispatch.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
@@ -14,13 +15,16 @@ from textual.widgets import Input, RichLog, Static
 
 from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, Message, ToolCall, ToolSpec
-from samurai_ai.domain.execution import ApprovalRequiredError
-from samurai_ai.domain.operations import Operation, OperationMode
+from samurai_ai.domain.execution import ApprovalRequiredError, SecretRedactor
+from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
+from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import classify_command
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.i18n import Translator
 from samurai_ai.services.chat import ChatHistoryService, marker
+from samurai_ai.services.memory import CampaignMemoryService
+from samurai_ai.services.vault import VaultService
 from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
@@ -33,6 +37,14 @@ if TYPE_CHECKING:
     from samurai_ai.storage.models import CustomModelConflictError  # noqa: F401
 
 
+LEARN_BODY_LIMIT = 500
+
+
+def _one_line(text: str) -> str:
+    """Collapse a lesson onto one line: memory digests are line-oriented."""
+    return " ".join(text.split())
+
+
 class ChatController:
     """Behaviour that needs the app's widgets; mixed into ``SamuraiApp``."""
 
@@ -43,6 +55,8 @@ class ChatController:
         execution: ToolExecutionService
         goals: GoalService
         models: ModelService
+        memory: CampaignMemoryService
+        vault: VaultService
         translator: Translator
         operation: Operation | None
         _cwd: Any
@@ -151,11 +165,33 @@ class ChatController:
                 "additionalProperties": False,
             },
         ),
+        ToolSpec(
+            name="memory_learn",
+            description=(
+                "Write one lesson into the campaign memory of this workspace, so "
+                "it outlives the session: a working method, a decision and its "
+                "reason, or a failure worth not repeating. Keep it one fact."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["methodology", "decision", "failure"],
+                    },
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "body": {"type": "string", "maxLength": 500},
+                },
+                "required": ["kind", "title"],
+                "additionalProperties": False,
+            },
+        ),
     )
     _CHAT_TOOL_IDS = {"shell_exec": "shell.exec"}
     _CHAT_TOOL_HANDLERS = {
         "shell_exec": "_run_shell_tool",
         "agent_spawn": "_run_spawn_tool",
+        "memory_learn": "_run_learn_tool",
     }
 
     #: Braille spinner, the way quiet harnesses show work in progress.
@@ -176,12 +212,19 @@ class ChatController:
             if not self._permission_mode.allows_operator_questions
             else "chat.autonomy.ask"
         )
-        return self.translator.t(
+        prompt = self.translator.t(
             "chat.system",
             cwd=str(self._cwd),
             version=__version__,
             autonomy=autonomy,
         )
+        try:
+            digest, _ids = self.memory.digest(self._memory_workspace())
+        except Exception:  # noqa: BLE001 - memory must not break a turn
+            return prompt
+        if not digest:
+            return prompt
+        return f"{prompt}\n\n{self.translator.t('chat.memory', digest=digest)}"
 
     def _restore_chat(self) -> None:
         """Bring the operation's earlier turns back into the context and the journal."""
@@ -552,6 +595,60 @@ class ChatController:
                 "background; its steps and output are in the sessions screen (Ctrl-G)"
             ),
         )
+
+    async def _run_learn_tool(self, call: ToolCall) -> Message:
+        """A lesson the model wrote down: closed shape, redacted, audited."""
+        if self.settings.get_value("memory.agent_writes") == "0":
+            return Message(
+                role="user",
+                content="[tool memory_learn] agent writes are off (setting memory.agent_writes)",
+            )
+        raw_kind = str(call.arguments.get("kind", "") or "")
+        title = _one_line(str(call.arguments.get("title", "") or ""))
+        body = _one_line(str(call.arguments.get("body", "") or ""))
+        if not title:
+            return Message(role="user", content="[tool error] memory_learn needs a title")
+        try:
+            kind = MemoryKind(raw_kind)
+        except ValueError:
+            kind = MemoryKind.NOTE
+        if kind is MemoryKind.NOTE:  # notes belong to the operator
+            kind = MemoryKind.METHODOLOGY
+        redactor = SecretRedactor()
+        for metadata in self.vault.list_metadata():
+            redactor.register(self.vault.get(metadata.name))
+        try:
+            entry = self.memory.add(
+                self._memory_workspace(),
+                redactor.redact(title).text[:MAX_MEMORY_TITLE_CHARS],
+                redactor.redact(body).text[:LEARN_BODY_LIMIT],
+                kind=kind,
+                created_by="agent",
+            )
+        except Exception as exc:  # noqa: BLE001 - fed back to the model
+            return Message(role="user", content=f"[tool memory_learn] error: {exc}")
+        if self.operation is not None:
+            self.service.repository.append_event(
+                OperationEvent(
+                    operation_id=self.operation.id,
+                    event_type="memory.learned",
+                    payload={
+                        "entry_id": entry.id,
+                        "kind": kind.value,
+                        "workspace": entry.workspace,
+                    },
+                )
+            )
+        self._write_dim(self.translator.t("memory.learned", kind=kind.value, title=entry.title))
+        return Message(
+            role="user",
+            content=f"[tool memory_learn] stored {entry.id} ({kind.value}) in {entry.workspace}",
+        )
+
+    def _memory_workspace(self) -> str:
+        """The directory name, slugged to the kebab-case memory workspaces require."""
+        slug = re.sub(r"[^a-z0-9]+", "-", self._cwd.name.lower()).strip("-")
+        return slug or "workspace"
 
     async def _run_shell_tool(self, call: ToolCall) -> Message:
         tool_id = self._CHAT_TOOL_IDS.get(call.name)

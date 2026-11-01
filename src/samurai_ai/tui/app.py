@@ -1887,7 +1887,7 @@ class SamuraiApp(
                 )
 
     def _show_memory(self, workspace: str) -> None:
-        entries = self.memory.list_entries(workspace or None)
+        entries = self.memory.list_entries(workspace.strip() or None)
         if not entries:
             self._write_line("[memory] " + self.translator.t("memory.empty"))
             return
