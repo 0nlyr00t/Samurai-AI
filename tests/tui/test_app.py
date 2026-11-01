@@ -3500,6 +3500,39 @@ def test_record_traffic_tool_and_bind_command(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_retest_command_records_a_verdict(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            artifact = stack[1].register_artifact(
+                operation.id, ArtifactKind.COMMAND_OUTPUT, "body"
+            )
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+            stack[1].attach_evidence(finding.id, artifact.id)
+            stack[1].validate_finding(finding.id)
+
+            app._handle_command(f"/retest {finding.id}")
+            await pilot.pause()
+            retest = app.retests.for_finding(finding.id)[0]
+            assert retest.open
+
+            app._handle_command(
+                f"/retest verdict {retest.id} inconclusive the target sits behind a captcha"
+                " | curl -> captcha page"
+            )
+            await pilot.pause()
+            finished = app.retests.get(retest.id)
+            assert finished.verdict.value == "inconclusive"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_skills_gaps_report_lists_misses(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")

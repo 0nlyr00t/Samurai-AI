@@ -39,6 +39,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "traffic.recorded": "traffic {pair}: {url}",
         "traffic.bound": "traffic {pair} bound to {finding} as {role}",
         "traffic.clipped": " (clipped)",
+        "retest.usage": (
+            "/retest <finding>  or  /retest verdict <id> <verdict> <summary> | "
+            "<evidence> [| control]"
+        ),
+        "retest.rules": (
+            "[retest] verdicts: reproduced (evidence), fixed (evidence + a control that "
+            "still works), inconclusive (say what blocked you)"
+        ),
+        "retest.started": "retest {id} on finding {finding}",
+        "retest.finished": "retest {id}: {verdict}",
+        "help.retest": "/retest <finding>  Re-check a finding, then record the verdict",
         "help.traffic": "/traffic [bind <pair> <finding> <role>]  Captured request/response pairs",
         "help.constraint": (
             "/constraint [deny|allow|rm] <text|id>  Operator boundaries for the task"
@@ -524,6 +535,22 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "constraint.added": "ограничение записано: {text}",
         "constraint.removed": "ограничение {id} снято",
         "constraint.no-plan": "плана ещё нет — заведи план, прежде чем ограничивать задачу",
+        "traffic.empty": "трафика в операции нет",
+        "traffic.recorded": "трафик {pair}: {url}",
+        "traffic.bound": "трафик {pair} привязан к {finding} как {role}",
+        "traffic.clipped": " (обрезано)",
+        "retest.usage": (
+            "/retest <находка>  или  /retest verdict <id> <вердикт> <итог> | "
+            "<доказательства> [| контроль]"
+        ),
+        "retest.rules": (
+            "[retest] вердикты: reproduced (доказательства), fixed (доказательства + "
+            "контрольный запрос), inconclusive (скажи, что помешало)"
+        ),
+        "retest.started": "рететс {id} по находке {finding}",
+        "retest.finished": "рететс {id}: {verdict}",
+        "help.retest": "/retest <находка>  Перепроверить находку и записать вердикт",
+        "help.traffic": "/traffic [bind <пара> <находка> <роль>]  Захваченные пары запрос/ответ",
         "help.constraint": "/constraint [deny|allow|rm] <текст|id>  Границы задачи от оператора",
         "help.lessons": "/lessons [extract|adopt <id>|reject <id>|mode]  Уроки из исходов",
         "help.memory": "/memory [ws]     Показать записи campaign memory (фильтр workspace)",

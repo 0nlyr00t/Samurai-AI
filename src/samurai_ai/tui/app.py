@@ -45,6 +45,7 @@ from samurai_ai.domain.permission import (
     next_mode,
     parse_mode,
 )
+from samurai_ai.domain.retest import RetestVerdict
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.traffic import TrafficRole
 from samurai_ai.i18n import Translator
@@ -64,6 +65,7 @@ from samurai_ai.services.playbooks import PlaybookService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
+from samurai_ai.services.retests import RetestService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.traffic import TrafficService
@@ -73,6 +75,7 @@ from samurai_ai.storage.chat import ChatHistoryRepository
 from samurai_ai.storage.constraints import ConstraintRepository
 from samurai_ai.storage.graph import GraphRepository
 from samurai_ai.storage.lessons import LessonRepository
+from samurai_ai.storage.retests import RetestRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.traffic import TrafficRepository
 from samurai_ai.tui import keys, preferences
@@ -378,6 +381,9 @@ class SamuraiApp(
         )
         self.lessons = LessonService(
             service, kernel, LessonRepository(service.repository.database), settings
+        )
+        self.retests = RetestService(
+            service, kernel, RetestRepository(service.repository.database)
         )
         self.traffic = TrafficService(
             service, kernel, TrafficRepository(service.repository.database)
@@ -1948,6 +1954,42 @@ class SamuraiApp(
             return
         for row in rows:
             self._write_line(f"[constraint] {row.id} | {row.kind.value} | {row.text}")
+
+    def _handle_retest_command(self, argument: str) -> None:
+        """`/retest <finding>` starts; `/retest verdict <id> <verdict> <summary> | <evidence>
+        [| control]` closes; `/retest <finding>` with history lists it."""
+        parts = argument.split(maxsplit=1)
+        action = parts[0].strip().lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if action == "verdict" and rest:
+                fields = [part.strip() for part in rest.split("|")]
+                head = fields[0].split(maxsplit=2)
+                if len(head) < 3:
+                    self._write_line(self.translator.t("retest.usage"))
+                    return
+                retest_id, verdict, summary = head[0], head[1], head[2]
+                evidence = fields[1] if len(fields) > 1 else ""
+                control = fields[2] if len(fields) > 2 else ""
+                finished = self.retests.finish(
+                    retest_id, RetestVerdict(verdict), summary, evidence, control
+                )
+                self._write_dim(
+                    self.translator.t("retest.finished", id=finished.id, verdict=verdict)
+                )
+                self._refresh_chrome()
+                return
+            if action:
+                started = self.retests.start(action)
+                self._write_line(self.translator.t("retest.rules"))
+                self._write_dim(
+                    self.translator.t("retest.started", id=started.id, finding=started.finding_id)
+                )
+                return
+        except Exception as exc:  # noqa: BLE001 - command feedback, never a crash
+            self._write_line(f"[retest] {exc}")
+            return
+        self._write_line(self.translator.t("retest.usage"))
 
     def _handle_traffic_command(self, argument: str) -> None:
         """`/traffic` lists captured pairs; `/traffic bind <pair> <finding> [role]` binds."""
