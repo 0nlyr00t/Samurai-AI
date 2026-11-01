@@ -10,6 +10,7 @@ from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
+from samurai_ai.cli_auth import handle_auth_command, handle_role_command
 from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
 from samurai_ai.cli_eval import handle_eval_command, register_eval_commands
 from samurai_ai.cli_events import handle_events_command, register_events_commands
@@ -30,6 +31,7 @@ from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
+from samurai_ai.domain.access import AccessError, Role
 from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
 from samurai_ai.domain.ctf import (
     ChallengeNotFoundError,
@@ -72,6 +74,7 @@ from samurai_ai.domain.swarm import SwarmError, SwarmNotFoundError
 from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
 from samurai_ai.self_update import run_update
+from samurai_ai.services.access import AccessService
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.exports import IntegrationExportService
@@ -95,6 +98,7 @@ from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.swarm import SwarmService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.storage.access import AccessRepository
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfConflictError, CtfRepository
 from samurai_ai.storage.database import Database
@@ -202,6 +206,25 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("operation_id")
     check.add_argument("target")
 
+    auth = subcommands.add_parser("auth", help="Sign in through the identity provider")
+    auth_commands = auth.add_subparsers(dest="auth_command", required=True)
+    configure = auth_commands.add_parser("configure", help="Set the provider issuer and client")
+    configure.add_argument("issuer")
+    configure.add_argument("client_id")
+    configure.add_argument("--claim", default="", help="claim holding groups (default: groups)")
+    auth_commands.add_parser("login", help="Start a device login")
+    auth_commands.add_parser("whoami", help="Show the current identity and role")
+    auth_commands.add_parser("logout", help="End the session")
+
+    role = subcommands.add_parser("role", help="Map a provider claim to a role")
+    role_commands = role.add_subparsers(dest="role_command", required=True)
+    role_map = role_commands.add_parser("map", help="Map a claim value")
+    role_map.add_argument("claim_value")
+    role_map.add_argument("role", choices=[role.value for role in Role])
+    role_rm = role_commands.add_parser("rm", help="Drop a mapping")
+    role_rm.add_argument("claim_value")
+    role_commands.add_parser("list", help="List mappings")
+
     tui = subcommands.add_parser("tui", help="Open the terminal interface")
     tui.add_argument("--operation", dest="operation_id")
 
@@ -253,9 +276,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         memory_service,
         skill_service,
         export_service,
+        access_service,
     ) = _make_services(args.db)
 
+    if args.command not in _OPEN_COMMANDS:
+        try:
+            access_service.require(_command_path(args))
+        except AccessError as exc:
+            print(f"[access] {exc}", file=sys.stderr)
+            return 2
+
     try:
+        auth_result = handle_auth_command(args, access_service)
+        if auth_result is not None:
+            return auth_result
+        role_result = handle_role_command(args, access_service)
+        if role_result is not None:
+            return role_result
         recovery_result = handle_recovery_command(
             args,
             recovery_service,
@@ -482,6 +519,15 @@ def _handle_operation(
     return 0
 
 
+#: Commands that must work before anyone can sign in.
+_OPEN_COMMANDS = frozenset({"update", "auth", "role"})
+
+
+def _command_path(args: argparse.Namespace) -> str:
+    action = getattr(args, f"{args.command}_command", "")
+    return f"{args.command}.{action}" if action else str(args.command)
+
+
 def _make_services(
     database_path: Path | None,
 ) -> tuple[
@@ -504,6 +550,7 @@ def _make_services(
     CampaignMemoryService,
     SkillService,
     IntegrationExportService,
+    AccessService,
 ]:
     database = Database(database_path or default_database_path())
     operation_repository = OperationRepository(database)
@@ -554,6 +601,7 @@ def _make_services(
     swarm = SwarmService(operations, kernel, agents, SwarmRunRepository(database))
     goals = GoalService(operations, GoalRepository(database))
     exports = IntegrationExportService(operations, kernel, redteam, planning, vault)
+    access = AccessService(settings, vault, AccessRepository(database))
     return (
         operations,
         kernel,
@@ -574,6 +622,7 @@ def _make_services(
         memory_service,
         skill_service,
         exports,
+        access,
     )
 
 

@@ -46,6 +46,7 @@ class BoardController:
         def _write_line(self, message: Any) -> None: ...
         def _write_dim(self, message: str) -> None: ...
         def _refresh_chrome(self) -> None: ...
+        def _require_path(self, path: str) -> bool: ...
         def _memory_workspace(self) -> str: ...
         lessons: Any
         def push_screen(self, screen: Any, callback: Any = None) -> Any: ...
@@ -180,6 +181,8 @@ class BoardController:
         return plan.task_by_id(task_id) if plan is not None else None
 
     def _plan_action(self, what: str, target: str, call: Any) -> None:
+        if not self._require_path("task.start"):
+            return
         try:
             call()
         except Exception as exc:  # noqa: BLE001 - a board action must not crash
@@ -224,6 +227,8 @@ class BoardController:
         )
 
     def _task_spawn(self, task_id: str) -> None:
+        if not self._require_path("agent.run"):
+            return
         task = self._task_by_id(task_id)
         if task is None:
             return
@@ -250,6 +255,8 @@ class BoardController:
             return
 
     def _finding_action(self, what: str, finding_id: str, call: Any) -> None:
+        if not self._require_path("finding.propose"):
+            return
         try:
             call()
         except Exception as exc:  # noqa: BLE001 - a board action must not crash

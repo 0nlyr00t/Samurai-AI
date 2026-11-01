@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+GROUP_SESSION = "session"
 GROUP_OPERATION = "operation"
 GROUP_KERNEL = "kernel"
 GROUP_TOOLS = "tools"
@@ -18,6 +19,7 @@ GROUP_VIEW = "view"
 GROUP_CONTROL = "control"
 
 GROUPS: tuple[str, ...] = (
+    GROUP_SESSION,
     GROUP_OPERATION,
     GROUP_KERNEL,
     GROUP_TOOLS,
@@ -119,6 +121,10 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/runbook", GROUP_PLAYBOOKS, "_show_runbooks", operation=True),
     _spec("/memory", GROUP_PLAYBOOKS, "_show_memory", argument=True),
     _spec("/lessons", GROUP_PLAYBOOKS, "_handle_lessons_command", argument=True),
+    _spec("/login", GROUP_SESSION, "_handle_login_command", argument=True),
+    _spec("/whoami", GROUP_SESSION, "_handle_whoami_command", argument=True),
+    _spec("/logout", GROUP_SESSION, "_handle_logout_command", argument=True),
+    _spec("/role", GROUP_SESSION, "_handle_role_command", argument=True),
     _spec("/constraint", GROUP_PLAYBOOKS, "_handle_constraint_command", argument=True),
     _spec("/traffic", GROUP_PLAYBOOKS, "_handle_traffic_command", operation=True, argument=True),
     _spec("/retest", GROUP_PLAYBOOKS, "_handle_retest_command", operation=True, argument=True),
@@ -148,6 +154,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
 )
 
 _BY_NAME = {spec.name: spec for spec in COMMANDS}
+
+
+def command_path(spec: CommandSpec) -> str:
+    """The path the access gate checks: the slash name without its leading slash."""
+    return spec.name.lstrip("/")
 
 
 def find_command(name: str) -> CommandSpec | None:

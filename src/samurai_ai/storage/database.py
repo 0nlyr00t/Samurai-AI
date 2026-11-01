@@ -809,6 +809,26 @@ _MIGRATION_25 = """
 ALTER TABLE finding_retests ADD COLUMN control_pair TEXT NOT NULL DEFAULT '';
 """
 
+_MIGRATION_26 = """
+CREATE TABLE IF NOT EXISTS access_sessions (
+    id                TEXT PRIMARY KEY,
+    subject           TEXT NOT NULL,
+    email             TEXT NOT NULL DEFAULT '',
+    display           TEXT NOT NULL DEFAULT '',
+    role              TEXT NOT NULL,
+    issuer            TEXT NOT NULL DEFAULT '',
+    access_expires_at TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    ended_at          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS role_mappings (
+    claim_value TEXT PRIMARY KEY,
+    role        TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -835,6 +855,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (23, _MIGRATION_23),
     (24, _MIGRATION_24),
     (25, _MIGRATION_25),
+    (26, _MIGRATION_26),
 )
 
 
