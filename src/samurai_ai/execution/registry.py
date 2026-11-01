@@ -248,7 +248,10 @@ class ProcessExecTool:
             id="process.exec",
             version=1,
             kind=ToolKind.PROCESS,
-            description="Run an allowlisted executable with an argv vector (no shell)",
+            description=(
+                "Run one allowlisted executable with an argv vector, no shell"
+                f" (allowlist: {', '.join(sorted(self.manager.allowed_executables))})"
+            ),
             risk_class=RiskClass.R1,
             read_only=True,
             network=NetworkAccess.NONE,
@@ -308,7 +311,10 @@ class ShellExecTool:
             id="shell.exec",
             version=1,
             kind=ToolKind.PROCESS,
-            description="Run a shell command on the operator host (bash -lc)",
+            description=(
+                "Run a shell command on the operator host as bash -lc; use this when a "
+                "pipeline, redirection or substitution is needed"
+            ),
             risk_class=RiskClass.R3,
             network=NetworkAccess.NONE,
             timeout_seconds=120,
