@@ -407,6 +407,18 @@ class KernelService:
         self.kernel.add_finding(finding, event)
         return finding
 
+    def mark_fixed(self, finding_id: str) -> Finding:
+        finding = self._get_finding(finding_id)
+        expected_version = finding.version
+        finding.mark_fixed()
+        event = OperationEvent(
+            operation_id=finding.operation_id,
+            event_type="finding.marked-fixed",
+            payload={"finding_id": finding_id},
+        )
+        self.kernel.save_finding(finding, expected_version, event)
+        return finding
+
     def bump_evidence_version(self, finding_id: str) -> Finding:
         """Register that a finding's evidence changed (traffic bound or unbound)."""
         finding = self._get_finding(finding_id)
