@@ -3033,6 +3033,124 @@ def test_agent_spawn_tool_starts_a_child(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_subagent_hands_its_notes_back_to_the_chat(tmp_path: Path) -> None:
+
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._handle_command("/subagent map the surface")
+            for _ in range(30):
+                await pilot.pause()
+            handed = [m for m in app._chat_history if m.content.startswith("[tool agent_spawn")]
+            assert handed, "the child never handed anything back"
+            assert "status=" in handed[-1].content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_subagent_digest_carries_blackboard_notes(tmp_path: Path) -> None:
+
+    from samurai_ai.domain.agents import AgentRun
+
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            run = AgentRun(operation_id=operation.id, task_id="t1")
+            app.service.repository.append_event(
+                OperationEvent(
+                    operation_id=operation.id,
+                    event_type="agent.note",
+                    payload={"run_id": run.id, "key": f"run.{run.id}.found", "value": "port 443"},
+                )
+            )
+            digest = app._subagent_digest(run)
+            assert "port 443" in digest
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_memory_learn_tool_writes_a_redacted_entry(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ToolCall
+    from samurai_ai.domain.memory import MemoryKind
+
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[5].add("leak", "ghp_" + "z" * 30)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="memory_learn",
+                    arguments={
+                        "kind": "failure",
+                        "title": "  stale /etc/profile  breaks every shell ",
+                        "body": "token ghp_" + "z" * 30,
+                    },
+                )
+            )
+            assert "stored" in message.content
+            entry = stack[15].list_entries()[0]
+            assert entry.kind is MemoryKind.FAILURE
+            assert entry.created_by == "agent"
+            assert entry.title == "stale /etc/profile breaks every shell"
+            assert "ghp_" not in entry.body
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_memory_learn_is_off_with_the_setting(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("memory.agent_writes", "0")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="memory_learn", arguments={"kind": "decision", "title": "x"})
+            )
+            assert "off" in message.content
+            assert stack[15].list_entries() == []
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_memory_reaches_the_system_prompt(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app.memory.add(app._memory_workspace(), "canary method", "always try HEAD first")
+            prompt = app._chat_system_prompt()
+            assert "canary method" in prompt
+            assert "always try HEAD first" in prompt
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_agent_spawn_tool_is_blocked_in_plan_mode(tmp_path: Path) -> None:
     from samurai_ai.agents.provider import ToolCall
 
