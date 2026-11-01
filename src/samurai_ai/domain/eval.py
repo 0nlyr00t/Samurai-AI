@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from samurai_ai.domain.kernel import OperationPlan, RiskClass, TaskStatus
+from samurai_ai.domain.models import ApiFamily
 from samurai_ai.domain.operations import OperationEvent, OperationMode
 
 
@@ -59,6 +60,19 @@ class EvalProviderScript(BaseModel):
     fault: EvalProviderFault | None = None
 
 
+class EvalLiveTarget(BaseModel):
+    """A real model instead of the scripted provider."""
+
+    model_config = ConfigDict(frozen=True)
+
+    base_url: str = Field(min_length=1)
+    api_family: ApiFamily = ApiFamily.OPENAI_COMPATIBLE
+    model: str = Field(min_length=1)
+    secret_env: str = Field(min_length=1)
+    cost_input_per_m: float = Field(default=0.0, ge=0.0)
+    cost_output_per_m: float = Field(default=0.0, ge=0.0)
+
+
 class EvalExpectations(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -79,10 +93,23 @@ class EvalScenario(BaseModel):
     mode: OperationMode = OperationMode.BUG_BOUNTY
     scope_includes: tuple[str, ...] = Field(min_length=1)
     tasks: list[EvalTask] = Field(min_length=1)
-    script: EvalProviderScript
+    script: EvalProviderScript | None = None
+    live: EvalLiveTarget | None = None
     workers: int = Field(default=1, ge=1, le=4)
     model_id: str = "eval/agent@v1"
     expectations: EvalExpectations = Field(default_factory=EvalExpectations)
+
+    @model_validator(mode="after")
+    def _provider(self) -> EvalScenario:
+        if (self.script is None) == (self.live is None):
+            raise EvalSuiteError(
+                f"scenario {self.id}: exactly one of script or live is required"
+            )
+        if self.live is not None and self.model_id != EvalScenario.model_fields[
+            "model_id"
+        ].default:
+            raise EvalSuiteError(f"scenario {self.id}: live sets the model, drop model_id")
+        return self
 
     @model_validator(mode="after")
     def _unique_task_ids(self) -> EvalScenario:

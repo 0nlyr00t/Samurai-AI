@@ -143,22 +143,25 @@ class ScriptedProviderServer:
     """Deterministic OpenAI-compatible provider driven by a scenario script."""
 
     def __init__(self, scenario: EvalScenario) -> None:
-        _ScriptedHandler.queue = list(scenario.script.responses)
-        _ScriptedHandler.fallback = scenario.script.responses[-1]
+        script = scenario.script
+        if script is None:  # pragma: no cover - guarded by the scenario validator
+            raise EvalError(f"scenario {scenario.id} has no script")
+        _ScriptedHandler.queue = list(script.responses)
+        _ScriptedHandler.fallback = script.responses[-1]
         _ScriptedHandler.executor_queue = (
-            list(scenario.script.executor_responses)
-            if scenario.script.executor_responses is not None
+            list(script.executor_responses)
+            if script.executor_responses is not None
             else None
         )
         _ScriptedHandler.executor_fallback = (
-            scenario.script.executor_responses[-1]
-            if scenario.script.executor_responses
+            script.executor_responses[-1]
+            if script.executor_responses
             else ""
         )
-        _ScriptedHandler.latency_ms = scenario.script.latency_ms
-        _ScriptedHandler.prompt_tokens = scenario.script.prompt_tokens
-        _ScriptedHandler.completion_tokens = scenario.script.completion_tokens
-        _ScriptedHandler.fault = scenario.script.fault
+        _ScriptedHandler.latency_ms = script.latency_ms
+        _ScriptedHandler.prompt_tokens = script.prompt_tokens
+        _ScriptedHandler.completion_tokens = script.completion_tokens
+        _ScriptedHandler.fault = script.fault
         _ScriptedHandler.calls = 0
         _ScriptedHandler.requests = []
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _ScriptedHandler)
@@ -183,7 +186,17 @@ class ScriptedProviderServer:
 
 
 class _ScenarioStack:
-    def __init__(self, workdir: Path, base_url: str, model_id: str) -> None:
+    def __init__(
+        self,
+        workdir: Path,
+        base_url: str,
+        model_id: str,
+        *,
+        api_family: ApiFamily = ApiFamily.OPENAI_COMPATIBLE,
+        api_key: str = "unused-key",
+        cost_input_per_m: float = 1.0,
+        cost_output_per_m: float = 2.0,
+    ) -> None:
         workdir.mkdir(parents=True, exist_ok=True)
         self.database = Database(workdir / "samurai.db")
         self.operations = OperationService(OperationRepository(self.database))
@@ -212,7 +225,7 @@ class _ScenarioStack:
             providers=(
                 ProviderDefinition(
                     id="eval",
-                    api_family=ApiFamily.OPENAI_COMPATIBLE,
+                    api_family=api_family,
                     base_url=base_url,
                     secret_name="eval-key",
                 ),
@@ -225,15 +238,15 @@ class _ScenarioStack:
                     capabilities=frozenset(
                         {ModelCapability.STRUCTURED_OUTPUT, ModelCapability.TOOLS}
                     ),
-                    cost_input_per_m=1.0,
-                    cost_output_per_m=2.0,
+                    cost_input_per_m=cost_input_per_m,
+                    cost_output_per_m=cost_output_per_m,
                 ),
             ),
         )
         self.models = ModelService(
             registry, vault, self.kernel, self.operations, endpoints, recovery_repository
         )
-        vault.add("eval-key", "unused-key")
+        vault.add("eval-key", api_key)
         self.orchestrator = AgentOrchestrator(
             self.models, self.kernel, execution, self.operations,
             AgentRunRepository(self.database),
@@ -255,6 +268,11 @@ def load_suite(path: Path) -> EvalSuite:
         return EvalSuite.model_validate(raw)
     except ValidationError as exc:
         raise EvalSuiteError(f"invalid suite {path}: {exc}") from exc
+
+
+def _model_of(scenario: EvalScenario) -> str:
+    """The model a scenario actually calls; the scripted id is not a model."""
+    return scenario.live.model if scenario.live is not None else scenario.model_id
 
 
 class EvalService:
@@ -279,7 +297,8 @@ class EvalService:
             samurai_version=__version__,
             config={
                 "repeats": repeats,
-                "models": sorted({scenario.model_id for scenario in suite.scenarios}),
+                "models": sorted({_model_of(scenario) for scenario in suite.scenarios}),
+                "live": [scenario.id for scenario in suite.scenarios if scenario.live],
                 "workers": {
                     scenario.id: scenario.workers for scenario in suite.scenarios
                 },
@@ -319,6 +338,8 @@ class EvalService:
         )
 
     def _run_once(self, scenario: EvalScenario, scenario_dir: Path) -> ScenarioMetrics:
+        if scenario.live is not None:
+            return self._run_live(scenario, scenario_dir)
         with ScriptedProviderServer(scenario) as provider:
             stack = _ScenarioStack(scenario_dir, provider.base_url, scenario.model_id)
             operation = stack.operations.create(
@@ -365,6 +386,68 @@ class EvalService:
                 stack.kernel.get_current_plan(operation.id),
                 wall_seconds=wall,
             )
+
+    def _run_live(self, scenario: EvalScenario, scenario_dir: Path) -> ScenarioMetrics:
+        """The same run against a real model; nothing but the provider differs."""
+        target = scenario.live
+        if target is None:  # pragma: no cover - caller checked
+            raise EvalError(f"scenario {scenario.id} has no live target")
+        api_key = os.environ.get(target.secret_env, "")
+        if not api_key:
+            raise EvalError(
+                f"scenario {scenario.id} needs {target.secret_env} in the environment"
+            )
+        stack = _ScenarioStack(
+            scenario_dir,
+            target.base_url,
+            target.model,
+            api_family=target.api_family,
+            api_key=api_key,
+            cost_input_per_m=target.cost_input_per_m,
+            cost_output_per_m=target.cost_output_per_m,
+        )
+        operation = stack.operations.create(
+            f"eval:{scenario.id}", scenario.mode, ScopeContract(includes=scenario.scope_includes)
+        )
+        stack.kernel.create_plan(
+            operation.id,
+            f"{scenario.title} plan",
+            [
+                PlanTask(id=task.id, title=task.title, risk_class=task.risk_class)
+                for task in scenario.tasks
+            ],
+            [],
+        )
+        approval = stack.kernel.request_approval(
+            operation.id, f"model.call {target.model}", RiskClass.R2
+        )
+        stack.kernel.approve(approval.id, decided_by="eval-harness")
+        started = time.monotonic()
+        if scenario.workers == 1:
+            for task in scenario.tasks:
+                stack.kernel.start_task(operation.id, task.id)
+                stack.orchestrator.run_task(
+                    operation.id,
+                    task.id,
+                    [target.model],
+                    approval_id=approval.id,
+                    created_by="eval-harness",
+                )
+        else:
+            stack.swarms.start(
+                operation.id,
+                None,
+                [target.model],
+                workers=scenario.workers,
+                approval_id=approval.id,
+                created_by="eval-harness",
+            )
+        wall = time.monotonic() - started
+        return metrics_from_events(
+            stack.operations.events(operation.id),
+            stack.kernel.get_current_plan(operation.id),
+            wall_seconds=wall,
+        )
 
 
 def load_report(path: Path) -> SuiteReport:
