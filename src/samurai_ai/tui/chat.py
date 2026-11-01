@@ -12,7 +12,8 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from rich.text import Text
 from textual.widgets import Input, RichLog, Static
@@ -20,7 +21,21 @@ from textual.widgets import Input, RichLog, Static
 from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, ImagePart, Message, ToolCall, ToolSpec
 from samurai_ai.domain.execution import ApprovalRequiredError, SecretRedactor
-from samurai_ai.domain.kernel import ArtifactKind
+from samurai_ai.domain.graph import (
+    GraphError,
+    GraphInvariantError,
+    GraphNode,
+    NodeKind,
+    NodeState,
+)
+from samurai_ai.domain.kernel import (
+    ArtifactKind,
+    FindingSeverity,
+    KernelError,
+    PlanTask,
+    RiskClass,
+    TaskStatus,
+)
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
 from samurai_ai.domain.models import ModelCapability
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
@@ -29,6 +44,7 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.i18n import Translator
 from samurai_ai.services.chat import ChatHistoryService, marker
+from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.tui.progress import Stagnation, TerminalReason
@@ -101,6 +117,8 @@ class ChatController:
         _progress: Stagnation
         _last_turn_reason: TerminalReason | None
         chat_history: ChatHistoryService
+        graph: GraphService
+        _graph_used: bool
         _steer_queue: list[str]
         _chat_busy: bool
         _shell_running: str
@@ -203,6 +221,84 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="open_intent",
+            description=(
+                "Open one exploration direction under a fact. Every intent hangs on "
+                "the fact it grew from (omit parent_fact to use the newest confirmed "
+                "fact or the task origin). One intent is one testable hypothesis."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "parent_fact": {"type": "string"},
+                },
+                "required": ["title"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            name="record_fact",
+            description=(
+                "Record what an intent produced. Pass the artifact ids that prove it — "
+                "a fact without an artifact is a claim. `result=negative` is for a "
+                "checked-and-empty direction."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string", "minLength": 1},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "artifact_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 8,
+                    },
+                    "result": {"type": "string", "enum": ["success", "negative"]},
+                },
+                "required": ["intent", "summary"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            name="close_intent",
+            description=(
+                "Close a direction: `done` needs a fact first, `blocked` and "
+                "`exhausted` need a reason."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string", "minLength": 1},
+                    "outcome": {"type": "string", "enum": ["done", "blocked", "exhausted"]},
+                    "reason": {"type": "string", "maxLength": 500},
+                },
+                "required": ["intent", "outcome"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            name="propose_finding",
+            description=(
+                "Register a finding that one recorded fact proves. The fact must carry "
+                "an artifact; its artifacts become the finding's evidence."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "low", "medium", "high", "critical"],
+                    },
+                    "summary": {"type": "string", "maxLength": 2000},
+                },
+                "required": ["fact", "title"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="read_image",
             description=(
                 "Read a screenshot or image inside the working directory: local OCR "
@@ -244,6 +340,10 @@ class ChatController:
         "agent_spawn": "_run_spawn_tool",
         "memory_learn": "_run_learn_tool",
         "read_image": "_run_image_tool",
+        "open_intent": "_run_open_intent_tool",
+        "record_fact": "_run_record_fact_tool",
+        "close_intent": "_run_close_intent_tool",
+        "propose_finding": "_run_propose_finding_tool",
     }
 
     #: Braille spinner, the way quiet harnesses show work in progress.
@@ -270,6 +370,7 @@ class ChatController:
             version=__version__,
             autonomy=autonomy,
         )
+        prompt = self._append_frontier(prompt)
         try:
             digest, _ids = self.memory.digest(self._memory_workspace())
         except Exception:  # noqa: BLE001 - memory must not break a turn
@@ -277,6 +378,25 @@ class ChatController:
         if not digest:
             return prompt
         return f"{prompt}\n\n{self.translator.t('chat.memory', digest=digest)}"
+
+    def _append_frontier(self, prompt: str) -> str:
+        """The open directions sit above the memory digest: a boundary beats advice."""
+        if self.operation is None:
+            return prompt
+        try:
+            plan = self.kernel.get_current_plan(self.operation.id)
+            if plan is None:
+                return prompt
+            block = "\n".join(
+                self.graph.frontier(str(task.id))
+                for task in plan.tasks
+                if self.graph.for_task(str(task.id))
+            )
+        except Exception:  # noqa: BLE001 - the graph must not break a turn
+            return prompt
+        if not block:
+            return prompt
+        return f"{prompt}\n\n{self.translator.t('chat.frontier', block=block)}"
 
     def _finding_count(self) -> int:
         if self.operation is None:
@@ -503,7 +623,8 @@ class ChatController:
             self._shell_running = ""
             return
         prefix = "[bg] " if self._shell_background else ""
-        self._progress.last_stuck = self._progress.record(command)
+        if not self._graph_used:
+            self._progress.last_stuck = self._progress.record(command)
         self._expandable.append((f"!{command}", result.run.exit_code, result.stdout, result.stderr))
         self._write_dim(
             prefix
@@ -702,6 +823,128 @@ class ChatController:
             content=(
                 f"[tool agent_spawn] run={run_id} task=<plan task> started in the "
                 "background; its steps and output are in the sessions screen (Ctrl-G)"
+            ),
+        )
+
+    # --- open exploration graph -------------------------------------------
+
+    def _graph_task(self, title: str) -> str:
+        """The task the graph hangs from: a free one, or a fresh single-task plan."""
+        if self.operation is None:
+            raise GraphInvariantError(self.translator.t("graph.no-operation"))
+        plan = self.kernel.get_current_plan(self.operation.id)
+        if plan is not None:
+            for task in plan.tasks:
+                if task.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
+                    return str(task.id)
+            raise GraphInvariantError(self.translator.t("graph.no-free-task"))
+        task = PlanTask(id=f"chat-{uuid4().hex[:8]}", title=title[:200], risk_class=RiskClass.R2)
+        self.kernel.create_plan(
+            self.operation.id, self.translator.t("graph.plan-title"), [task], []
+        )
+        return task.id
+
+    def _graph_root(self, task_id: str, title: str) -> GraphNode:
+        assert self.operation is not None
+        return self.graph.origin(self.operation.id, task_id, title)
+
+    async def _run_open_intent_tool(self, call: ToolCall) -> Message:
+        title = str(call.arguments.get("title", "") or "").strip()
+        try:
+            task_id = self._graph_task(title)
+            root = self._graph_root(task_id, title)
+            parent = str(call.arguments.get("parent_fact", "") or "").strip()
+            if not parent:
+                facts = [
+                    node
+                    for node in self.graph.for_task(task_id)
+                    if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
+                ]
+                parent = facts[-1].id if facts else root.id
+            assert self.operation is not None
+            intent = self.graph.open_intent(self.operation.id, task_id, title, parent)
+        except GraphError as exc:
+            return Message(role="user", content=f"[tool open_intent] {exc}")
+        self._graph_used = True
+        self._progress.last_stuck = self._progress.record_shape(" ".join(title.lower().split()))
+        self._write_dim(self.translator.t("graph.intent-opened", title=intent.text()))
+        return Message(
+            role="user",
+            content=f"[tool open_intent] {intent.id} open: {intent.text()} (parent {parent})",
+        )
+
+    async def _run_record_fact_tool(self, call: ToolCall) -> Message:
+        intent_id = str(call.arguments.get("intent", "") or "").strip()
+        summary = str(call.arguments.get("summary", "") or "")
+        raw = call.arguments.get("artifact_ids") or []
+        artifacts = tuple(str(item) for item in raw if str(item).strip())
+        try:
+            intent = self.graph.get(intent_id)
+            if intent.state is NodeState.OPEN:
+                intent = self.graph.start_intent(intent.id)
+            fact = self.graph.record_fact(
+                intent.id,
+                summary,
+                artifacts,
+                negative=str(call.arguments.get("result", "")) == "negative",
+            )
+            if fact.payload.get("artifact_ids"):
+                pass
+            else:
+                self._write_dim(self.translator.t("graph.fact-bare"))
+        except GraphError as exc:
+            return Message(role="user", content=f"[tool record_fact] {exc}")
+        if artifacts:
+            self._progress.finding_seen()
+        self._write_dim(self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id))
+        return Message(
+            role="user", content=f"[tool record_fact] {fact.id} recorded for {intent.id}"
+        )
+
+    async def _run_close_intent_tool(self, call: ToolCall) -> Message:
+        intent_id = str(call.arguments.get("intent", "") or "").strip()
+        outcome = str(call.arguments.get("outcome", "") or "").strip()
+        reason = str(call.arguments.get("reason", "") or "")
+        try:
+            intent = self.graph.close_intent(intent_id, outcome, reason)
+        except GraphError as exc:
+            return Message(role="user", content=f"[tool close_intent] {exc}")
+        self._write_dim(self.translator.t("graph.intent-closed", intent=intent.id, state=outcome))
+        return Message(role="user", content=f"[tool close_intent] {intent.id} is {outcome}")
+
+    async def _run_propose_finding_tool(self, call: ToolCall) -> Message:
+        fact_id = str(call.arguments.get("fact", "") or "").strip()
+        title = str(call.arguments.get("title", "") or "").strip()
+        summary = str(call.arguments.get("summary", "") or "")
+        raw_severity = str(call.arguments.get("severity", "") or "info")
+        try:
+            severity = FindingSeverity(raw_severity)
+        except ValueError:
+            severity = FindingSeverity.INFO
+        try:
+            fact = self.graph.get(fact_id)
+            # Refuse before creating anything: a rejected proposal must not leave
+            # a stray finding behind in the kernel.
+            if fact.kind is not NodeKind.FACT:
+                raise GraphInvariantError(f"{fact.id} is a {fact.kind.value}, not a fact")
+            if not fact.payload.get("artifact_ids"):
+                raise GraphInvariantError(f"fact {fact.id} has no artifact — evidence first")
+            assert self.operation is not None
+            finding = self.kernel.create_finding(self.operation.id, title, severity, summary)
+            for artifact_id in cast("list[str]", fact.payload.get("artifact_ids") or []):
+                self.kernel.attach_evidence(finding.id, str(artifact_id))
+            self.graph.attach_finding(fact.id, finding.id)
+        except (GraphError, KernelError) as exc:
+            return Message(role="user", content=f"[tool propose_finding] {exc}")
+        self._progress.finding_seen()
+        self._write_line(
+            self.translator.t("graph.finding", finding=finding.id, title=finding.title)
+        )
+        return Message(
+            role="user",
+            content=(
+                f"[tool propose_finding] {finding.id} registered on {fact.id} "
+                f"({severity.value})"
             ),
         )
 
@@ -949,7 +1192,9 @@ class ChatController:
             self._write_line(f"[error] {exc}")
             return Message(role="user", content=f"[tool {call.name}] error: {exc}")
         exit_code = result.run.exit_code
-        self._progress.last_stuck = self._progress.record(command)
+        self._progress.last_stuck = (
+            None if self._graph_used else self._progress.record(command)
+        )
         # Long tool output collapses under an arrow; /expand reveals it.
         self._expandable.append((command, exit_code, result.stdout, result.stderr))
         self._write_dim(

@@ -3096,6 +3096,176 @@ def _vision_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
     return stack, provider, operation
 
 
+async def _open(app, pilot, title: str) -> str:  # type: ignore[no-untyped-def]
+    message = await app._run_chat_tool(
+        ToolCall(id="1", name="open_intent", arguments={"title": title})
+    )
+    assert message.content.startswith("[tool open_intent] ")
+    return message.content.split()[2]
+
+
+def test_open_intent_bootstraps_a_task_and_origin(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            intent_id = await _open(app, pilot, "check /api/v1")
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            kinds = [node.kind.value for node in app.graph.for_operation(operation.id)]
+            assert kinds == ["origin", "intent"]
+            assert app.graph.get(intent_id).state.value == "open"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_record_fact_starts_the_intent_first(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            intent_id = await _open(app, pilot, "check /api/v1")
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="record_fact",
+                    arguments={"intent": intent_id, "summary": "12 endpoints, no auth"},
+                )
+            )
+            assert "recorded for" in message.content
+            assert app.graph.get(intent_id).state.value == "running"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_close_intent_without_a_fact_returns_the_reason(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            intent_id = await _open(app, pilot, "check /api/v1")
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="close_intent",
+                    arguments={"intent": intent_id, "outcome": "done"},
+                )
+            )
+            assert "no fact yet" in message.content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_propose_finding_needs_an_artifact_backed_fact(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            intent_id = await _open(app, pilot, "check /api/v1")
+            bare = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="record_fact",
+                    arguments={"intent": intent_id, "summary": "no evidence"},
+                )
+            )
+            fact_id = bare.content.split()[2]
+            refused = await app._run_chat_tool(
+                ToolCall(
+                    id="1", name="propose_finding", arguments={"fact": fact_id, "title": "IDOR"}
+                )
+            )
+            assert "no artifact" in refused.content
+
+            artifact = stack[1].register_artifact(operation.id, ArtifactKind.COMMAND_OUTPUT, "body")
+            good = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="record_fact",
+                    arguments={
+                        "intent": intent_id,
+                        "summary": "IDOR confirmed",
+                        "artifact_ids": [artifact.id],
+                    },
+                )
+            )
+            proven = good.content.split()[2]
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="propose_finding",
+                    arguments={"fact": proven, "title": "IDOR on /user", "severity": "medium"},
+                )
+            )
+            assert "registered on" in message.content
+            finding_id = message.content.split()[2]
+            finding = stack[1].kernel.get_finding(finding_id)
+            assert finding.evidence_ids == (artifact.id,)
+            assert len(stack[1].kernel.list_findings(operation.id)) == 1  # no stray finding
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_the_frontier_reaches_the_system_prompt(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await _open(app, pilot, "check /api/v1")
+            prompt = app._chat_system_prompt()
+            assert "exploration graph" in prompt
+            assert "check /api/v1" in prompt
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_repeating_intents_raise_the_stagnation_note(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            stuck = [await _open(app, pilot, "Enumerate endpoints on /api") for _ in range(3)]
+            assert app._progress.last_stuck  # the loop would inject it here
+            app._note_stagnation()
+            notes = [
+                m.content for m in app._chat_history if m.content.startswith("[progress]")
+            ]
+            assert notes
+            assert len(stuck) == 3
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_repeating_one_direction_raises_a_stagnation_note(tmp_path: Path) -> None:
     from samurai_ai.tui.progress import TerminalReason
 
