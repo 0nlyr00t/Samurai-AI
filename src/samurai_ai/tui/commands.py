@@ -120,7 +120,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/memory", GROUP_PLAYBOOKS, "_show_memory", argument=True),
     _spec("/lessons", GROUP_PLAYBOOKS, "_handle_lessons_command", argument=True),
     _spec("/constraint", GROUP_PLAYBOOKS, "_handle_constraint_command", argument=True),
-    _spec("/skills", GROUP_PLAYBOOKS, "_show_skills"),
+    _spec("/skills", GROUP_PLAYBOOKS, "_show_skills", argument=True),
     _spec("/playbooks", GROUP_PLAYBOOKS, "_show_custom_playbooks"),
     # view and control
     _spec("/lang", GROUP_VIEW, "_show_lang", argument=True, prompt_key="palette.prompt.locale"),
