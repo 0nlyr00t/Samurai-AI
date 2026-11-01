@@ -7,16 +7,22 @@ while ``app.py`` stays a shell: layout, bindings, status bar, command dispatch.
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
+import shutil
+import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual.widgets import Input, RichLog, Static
 
 from samurai_ai import __version__
-from samurai_ai.agents.provider import ChatResponse, Message, ToolCall, ToolSpec
+from samurai_ai.agents.provider import ChatResponse, ImagePart, Message, ToolCall, ToolSpec
 from samurai_ai.domain.execution import ApprovalRequiredError, SecretRedactor
+from samurai_ai.domain.kernel import ArtifactKind
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
+from samurai_ai.domain.models import ModelCapability
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import classify_command
 from samurai_ai.domain.scope import ScopeContract
@@ -38,6 +44,34 @@ if TYPE_CHECKING:
 
 
 LEARN_BODY_LIMIT = 500
+_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+_IMAGE_TEXT_LIMIT = 4000
+_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def _resolve_image(raw: str, cwd: Path) -> Path:
+    """Absolute-ise against the workspace, then resolve symlinks."""
+    path = Path(raw).expanduser()
+    return (path if path.is_absolute() else cwd / path).resolve()
+
+
+def _ocr(path: Path) -> str | None:
+    """Text via tesseract; None when the host has no tesseract."""
+    binary = shutil.which("tesseract")
+    if binary is None:
+        return None
+    try:
+        done = subprocess.run(
+            [binary, str(path), "stdout"], capture_output=True, text=True, timeout=60
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip()
+
+
+def _bounded(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit] + "…"
 
 
 def _one_line(text: str) -> str:
@@ -166,6 +200,20 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="read_image",
+            description=(
+                "Read a screenshot or image inside the working directory: local OCR "
+                "plus a vision model describe its text and content. Use it instead "
+                "of guessing what a picture shows."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 4096}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="memory_learn",
             description=(
                 "Write one lesson into the campaign memory of this workspace, so "
@@ -192,6 +240,7 @@ class ChatController:
         "shell_exec": "_run_shell_tool",
         "agent_spawn": "_run_spawn_tool",
         "memory_learn": "_run_learn_tool",
+        "read_image": "_run_image_tool",
     }
 
     #: Braille spinner, the way quiet harnesses show work in progress.
@@ -595,6 +644,129 @@ class ChatController:
                 "background; its steps and output are in the sessions screen (Ctrl-G)"
             ),
         )
+
+    async def _run_image_tool(self, call: ToolCall) -> Message:
+        """OCR and a vision description of one image inside the trusted directory."""
+        raw = str(call.arguments.get("path", "") or "").strip()
+        if not raw:
+            return Message(role="user", content="[tool error] read_image needs a path")
+        if not self._directory_trusted():
+            self._write_dim(self.translator.t("chat.tool-denied", command="read_image"))
+            return Message(
+                role="user", content="[tool read_image] the operator has not trusted this directory"
+            )
+        path = await asyncio.to_thread(_resolve_image, raw, self._cwd)
+        if not path.is_relative_to(self._cwd):
+            return Message(
+                role="user",
+                content=f"[tool read_image] outside the working directory: {path}",
+            )
+        if not path.is_file():
+            return Message(role="user", content=f"[tool read_image] no such file: {path}")
+        suffix = path.suffix.lower()
+        mime = _IMAGE_TYPES.get(suffix)
+        if mime is None:
+            return Message(
+                role="user",
+                content=f"[tool read_image] unsupported type {suffix!r} "
+                f"(allowed: {', '.join(sorted(_IMAGE_TYPES))})",
+            )
+        size = path.stat().st_size
+        if size > _IMAGE_MAX_BYTES:
+            return Message(
+                role="user",
+                content=f"[tool read_image] {size} bytes is over the {_IMAGE_MAX_BYTES} limit",
+            )
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        self._write_dim(self.translator.t("image.reading", path=str(path), size=size))
+
+        text = await asyncio.to_thread(_ocr, path)
+        description, model_id = await self._describe_image(mime, data)
+        if text is None and description is None:
+            return Message(
+                role="user",
+                content="[tool read_image] no text extracted and no vision model available "
+                "(install tesseract or pick a vision model with /model)",
+            )
+        parts = []
+        if text:
+            parts.append(f"text:\n{text}")
+        elif text is not None:
+            parts.append("text: (tesseract found no text)")
+        if description:
+            parts.append(f"description by {model_id}:\n{description}")
+        else:
+            parts.append("description: (no vision model — text only)")
+        result = _bounded("\n\n".join(parts), _IMAGE_TEXT_LIMIT)
+        if self.operation is not None:
+            artifact = self.kernel.register_artifact(
+                self.operation.id,
+                ArtifactKind.OTHER,
+                result,
+                summary=f"image: {path.name}",
+                created_by="agent",
+            )
+            self._write_dim(
+                self.translator.t("image.stored", name=path.name, artifact=artifact.id)
+            )
+        return Message(role="user", content=f"[tool read_image {path.name}]\n{result}")
+
+    def _vision_model(self) -> str | None:
+        """The chat model when it can see, else the configured vision model."""
+        default = self.models.default_model()
+        if default:
+            try:
+                model, _provider = self.models.registry.get_model(default)
+            except Exception:  # noqa: BLE001 - unknown id falls through to the setting
+                model = None
+            if model is not None and ModelCapability.VISION in model.capabilities:
+                return default
+        configured = (self.settings.get_value("model.vision") or "").strip()
+        if configured:
+            return configured
+        return None
+
+    async def _describe_image(self, mime: str, data: str) -> tuple[str | None, str | None]:
+        """One vision call; None when there is no model or the call fails."""
+        model_id = self._vision_model()
+        if model_id is None or self.operation is None:
+            return None, None
+        prompt = Message(role="user", content=self.translator.t("image.prompt"))
+        try:
+            response = await asyncio.to_thread(
+                self.models.chat,
+                self.operation.id,
+                model_id,
+                (prompt,),
+                images=(ImagePart(mime=mime, data=data),),
+            )
+        except ApprovalRequiredError as exc:
+            if self._yolo:
+                self.kernel.approve(exc.approval_id, decided_by="auto")
+                allowed = True
+            else:
+                allowed = await self.push_screen_wait(
+                    AccessPromptScreen(self.translator, f"model.call {model_id}", "r2")
+                )
+            if not allowed:
+                self.kernel.reject(exc.approval_id, decided_by="operator")
+                return None, None
+            if not self._yolo:  # yolo already approved it above
+                self.kernel.approve(exc.approval_id, decided_by="operator")
+            try:
+                response = await asyncio.to_thread(
+                    self.models.chat,
+                    self.operation.id,
+                    model_id,
+                    (prompt,),
+                    images=(ImagePart(mime=mime, data=data),),
+                    approval_id=exc.approval_id,
+                )
+            except Exception as exc2:  # noqa: BLE001 - fed back to the model
+                return f"(vision call failed: {exc2})", model_id
+        except Exception as exc:  # noqa: BLE001 - fed back to the model
+            return f"(vision call failed: {exc})", model_id
+        return response.text.strip(), model_id
 
     async def _run_learn_tool(self, call: ToolCall) -> Message:
         """A lesson the model wrote down: closed shape, redacted, audited."""

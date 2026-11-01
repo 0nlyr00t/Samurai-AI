@@ -14,7 +14,13 @@ import time
 from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
-from samurai_ai.agents.provider import ChatRequest, ChatResponse, ToolCall, Usage
+from samurai_ai.agents.provider import (
+    ChatRequest,
+    ChatResponse,
+    ImagePart,
+    ToolCall,
+    Usage,
+)
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
 from samurai_ai.domain.models import (
     ModelError,
@@ -29,6 +35,23 @@ DEFAULT_TIMEOUT = 60.0
 _MAX_ERROR_SNIPPET = 200
 
 
+def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
+    """Fold images into the last user turn as base64 source blocks."""
+    for message in reversed(messages):
+        if message["role"] != "user":
+            continue
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": message["content"]}]
+        blocks += [
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": image.mime, "data": image.data},
+            }
+            for image in images
+        ]
+        message["content"] = blocks
+        return
+
+
 def build_messages_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
@@ -37,6 +60,8 @@ def build_messages_payload(model_name: str, request: ChatRequest) -> dict[str, A
             system_parts.append(message.content)
         else:
             messages.append({"role": message.role, "content": message.content})
+    if request.images:
+        _attach_images(messages, request.images)
     payload: dict[str, Any] = {
         "model": model_name,
         "max_tokens": request.max_tokens or 4096,

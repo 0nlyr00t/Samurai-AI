@@ -315,6 +315,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "swarm.empty": "No agent swarms",
         "memory.empty": "No campaign memory entries",
         "memory.learned": "learned [{kind}] {title}",
+        "image.reading": "reading {path} ({size} bytes)",
+        "image.stored": "image text stored as {artifact} ({name})",
+        "image.prompt": (
+            "Describe this image for a terminal session: what it shows, "
+            "any text verbatim, and anything security-relevant. Be brief."
+        ),
         "chat.memory": "Campaign memory of this workspace:\n{digest}",
         "skills.empty": "No skills installed",
         "playbooks.custom-empty": "No custom playbooks installed",
@@ -718,6 +724,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "swarm.empty": "Нет swarm-запусков агентов",
         "memory.empty": "Нет записей campaign memory",
         "memory.learned": "запомнено [{kind}] {title}",
+        "image.reading": "читаю {path} ({size} байт)",
+        "image.stored": "текст с картинки сохранён артефактом {artifact} ({name})",
+        "image.prompt": (
+            "Опиши картинку для терминальной сессии: что на ней, весь текст дословно "
+            "и всё, что важно для безопасности. Коротко."
+        ),
         "chat.memory": "Память кампании по этой рабочей области:\n{digest}",
         "skills.empty": "Нет установленных skills",
         "playbooks.custom-empty": "Нет установленных custom playbooks",
