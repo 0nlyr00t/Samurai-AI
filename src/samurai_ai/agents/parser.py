@@ -33,7 +33,9 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         if candidate.startswith("json"):
             candidate = candidate[4:].strip()
     try:
-        decoded = json.loads(candidate)
+        # models leave raw newlines and tabs inside strings; strict=False is the
+        # only difference, structure is still validated afterwards
+        decoded = json.loads(candidate, strict=False)
     except json.JSONDecodeError as exc:
         raise AgentOutputError(f"model output is not valid JSON: {exc}") from exc
     if not isinstance(decoded, dict):
@@ -42,7 +44,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 
 def parse_planner_output(text: str) -> PlannerOutput:
-    payload = _extract_json_object(text)
+    payload = _stringify_steps(_extract_json_object(text))
     try:
         return PlannerOutput.model_validate(payload)
     except ValidationError as exc:
@@ -64,6 +66,34 @@ def _lift_bare_commands(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _stringify_steps(payload: dict[str, Any]) -> dict[str, Any]:
+    """A step written as an object becomes the sentence it was meant to be."""
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return payload
+    repaired = []
+    for step in steps:
+        if isinstance(step, dict):
+            repaired.append(", ".join(f"{key}={value}" for key, value in step.items()))
+        else:
+            repaired.append(step)
+    return {**payload, "steps": repaired}
+
+
+def _unwrap_json_tool_id(item: dict[str, Any]) -> dict[str, Any]:
+    """A whole command object pasted into ``tool_id`` replaces the command."""
+    tool_id = item.get("tool_id")
+    if not (isinstance(tool_id, str) and tool_id.lstrip().startswith("{")):
+        return item
+    try:
+        inner = json.loads(tool_id, strict=False)
+    except json.JSONDecodeError:
+        return item
+    if isinstance(inner, dict) and isinstance(inner.get("type"), str):
+        return inner
+    return item
+
+
 def _repair_command(item: Any) -> Any:
     """Repair the two shapes small models reach for instead of a command."""
     if isinstance(item, str):
@@ -72,6 +102,7 @@ def _repair_command(item: Any) -> Any:
         return {"type": "request_tool_run", "tool_id": item}
     if not isinstance(item, dict):
         return item
+    item = _unwrap_json_tool_id(item)
     known = item.get("type")
     if isinstance(known, str) and known not in _COMMAND_TYPES and not item.get("tool_id"):
         # `{"type": "local.echo", "params": {...}}` — a tool id where the
