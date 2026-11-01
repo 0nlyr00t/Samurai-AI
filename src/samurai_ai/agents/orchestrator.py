@@ -71,6 +71,7 @@ DEFAULT_MAX_STEPS = 8
 DEFAULT_MAX_DEPTH = 1
 MAX_CONSECUTIVE_REJECTS = 3
 _MAX_BLACKBOARD_ITEMS = 20
+_CLOSE_OUT_ATTEMPTS = 2
 _CLOSE_OUT_STEP = (
     "The planned steps are done. Emit exactly one command: complete_task if the task is "
     'finished ({"type":"complete_task"}), otherwise fail with the reason '
@@ -504,6 +505,11 @@ class AgentOrchestrator:
             return [], consecutive_rejects
         return rejects, consecutive_rejects
 
+    def _task_done(self, operation_id: str, task_id: str) -> bool:
+        plan = self.kernel.get_current_plan(operation_id)
+        task = plan.task_by_id(task_id) if plan is not None else None
+        return task is not None and task.status is TaskStatus.DONE
+
     def _task_open(self, operation_id: str, task_id: str) -> bool:
         plan = self.kernel.get_current_plan(operation_id)
         task = plan.task_by_id(task_id) if plan is not None else None
@@ -521,32 +527,57 @@ class AgentOrchestrator:
         stop_event: threading.Event | None,
     ) -> None:
         """Ask for the closing command alone when the plan ran out mid-task."""
-        try:
-            commands = self._execute_step_prompt(
+        notes = ""
+        for _attempt in range(_CLOSE_OUT_ATTEMPTS):
+            try:
+                commands = self._execute_step_prompt(
+                    operation_id,
+                    run,
+                    _CLOSE_OUT_STEP,
+                    len(_CLOSE_OUT_STEP),
+                    approval_id,
+                    extra_context,
+                    approval_resolver=approval_resolver,
+                    model_approvals=model_approvals,
+                    stop_event=stop_event,
+                    rejection_notes=notes,
+                )
+            except AgentError:
+                # a failed closing step must not discard what the run already did
+                return
+            # a `fail` next to a tool call usually blames the tool, not the task
+            if self._task_open(operation_id, run.task_id) and any(
+                isinstance(command, RequestToolRunCommand) for command in commands
+            ):
+                commands = tuple(
+                    command for command in commands if not isinstance(command, FailCommand)
+                )
+            reasons = self._apply_closing(operation_id, run, commands, approval_resolver)
+            if not self._task_open(operation_id, run.task_id) or not reasons:
+                return
+            notes = _rejection_block(reasons)
+
+    def _apply_closing(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        commands: tuple[AgentCommand, ...],
+        approval_resolver: Callable[[str], bool] | None,
+    ) -> list[str]:
+        reasons: list[str] = []
+        for command in commands:
+            if not isinstance(command, (RequestToolRunCommand, CompleteTaskCommand)):
+                continue
+            reason = self._apply_command(
                 operation_id,
                 run,
-                _CLOSE_OUT_STEP,
-                len(_CLOSE_OUT_STEP),
-                approval_id,
-                extra_context,
+                command,
+                read_only_only=False,
                 approval_resolver=approval_resolver,
-                model_approvals=model_approvals,
-                stop_event=stop_event,
             )
-        except AgentError:
-            # a failed closing step must not discard what the run already did
-            return
-        for kind in (CompleteTaskCommand, FailCommand):
-            for command in commands:
-                if isinstance(command, kind):
-                    self._apply_command(
-                        operation_id,
-                        run,
-                        command,
-                        read_only_only=False,
-                        approval_resolver=approval_resolver,
-                    )
-                    return
+            if reason is not None:
+                reasons.append(reason)
+        return reasons
 
     def _execute_step_prompt(
         self,
@@ -689,6 +720,9 @@ class AgentOrchestrator:
             elif isinstance(command, ProposeFindingCommand):
                 self._command_propose_finding(operation_id, run, command)
             elif isinstance(command, CompleteTaskCommand):
+                # re-affirming completion is not a mistake worth a refusal
+                if self._task_done(operation_id, run.task_id):
+                    return None
                 self.kernel.complete_task(operation_id, run.task_id)
             elif isinstance(command, FailCommand):
                 raise AgentError(f"agent requested failure: {command.reason}")
