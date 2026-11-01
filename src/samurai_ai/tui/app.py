@@ -37,6 +37,7 @@ from samurai_ai.domain.kernel import (
     GateStatus,
     TaskStatus,
 )
+from samurai_ai.domain.lessons import LessonMode
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import (
     PermissionMode,
@@ -51,6 +52,7 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.kernel import KernelService
+from samurai_ai.services.lessons import LessonService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
@@ -65,6 +67,7 @@ from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.chat import ChatHistoryRepository
 from samurai_ai.storage.graph import GraphRepository
+from samurai_ai.storage.lessons import LessonRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
@@ -366,6 +369,9 @@ class SamuraiApp(
         )
         self.graph = GraphService(
             service, kernel, GraphRepository(service.repository.database)
+        )
+        self.lessons = LessonService(
+            service, kernel, LessonRepository(service.repository.database), settings
         )
         # Plan mode is session state on purpose: it is never persisted and only
         # the operator can enter it.
@@ -1897,6 +1903,64 @@ class SamuraiApp(
                     f"  [member] {member.task_id} | {member.id} | {member.status.value} | "
                     f"{member.specialization.value}"
                 )
+
+    def _handle_lessons_command(self, argument: str) -> None:
+        """`/lessons [extract|adopt <id>|reject <id>|mode <mode>]`, listing by default."""
+        workspace = self._memory_workspace()
+        parts = argument.split()
+        action = parts[0].lower() if parts else ""
+        target = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if action == "extract":
+                if self.operation is None:
+                    self._write_line("[error] " + self.translator.t("palette.no-operation"))
+                    return
+                admitted = self.lessons.extract(self.operation.id, workspace)
+                self._write_dim(self.translator.t("lessons.extracted", count=len(admitted)))
+                return
+            if action in ("adopt", "reject") and target:
+                lesson = (
+                    self.lessons.adopt(target) if action == "adopt" else self.lessons.reject(target)
+                )
+                self._write_dim(
+                    self.translator.t(
+                        "lessons.status", lesson=lesson.id, status=lesson.status.value
+                    )
+                )
+                return
+            if action == "mode" and target:
+                self.lessons.set_mode(LessonMode(target))
+                self._write_dim(self.translator.t("lessons.mode", mode=target))
+                return
+        except Exception as exc:  # noqa: BLE001 - command feedback, never a crash
+            self._write_line(f"[lessons] {exc}")
+            return
+        lessons = self.lessons.all(workspace)
+        if not lessons:
+            self._write_dim(self.translator.t("lessons.empty"))
+            return
+        self._write_dim(self.translator.t("lessons.mode-line", mode=self.lessons.mode().value))
+        for lesson in lessons:
+            self._write_line(
+                f"[lesson] {lesson.id} | {lesson.status.value} | {lesson.kind.value} | "
+                f"{self.lessons.support(lesson.id)} | {lesson.cue} -> {lesson.action}"
+            )
+
+    def _log_shadow_lessons(self) -> None:
+        """In shadow mode, record what `inject` would have shown — once per turn."""
+        if self.operation is None or self.lessons.mode() is not LessonMode.SHADOW:
+            return
+        candidates = self.lessons.shadow_candidates(self._memory_workspace())
+        if not candidates:
+            return
+        self.service.repository.append_event(
+            OperationEvent(
+                operation_id=self.operation.id,
+                event_type="lesson.shadow",
+                payload={"lesson_ids": list(candidates)},
+            )
+        )
+        self._write_dim(self.translator.t("lessons.would-show", count=len(candidates)))
 
     def _show_memory(self, workspace: str) -> None:
         entries = self.memory.list_entries(workspace.strip() or None)

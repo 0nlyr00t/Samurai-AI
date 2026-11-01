@@ -43,6 +43,8 @@ class BoardController:
         def _write_line(self, message: Any) -> None: ...
         def _write_dim(self, message: str) -> None: ...
         def _refresh_chrome(self) -> None: ...
+        def _memory_workspace(self) -> str: ...
+        lessons: Any
         def push_screen(self, screen: Any, callback: Any = None) -> Any: ...
 
         push_screen_wait: Any
@@ -233,6 +235,15 @@ class BoardController:
         )
 
     # -- finding actions --------------------------------------------------
+    def _findings_learned(self) -> None:
+        """A verdict is an outcome: let the lesson service read it, without noise."""
+        if self.operation is None:
+            return
+        try:
+            self.lessons.extract(self.operation.id, self._memory_workspace())
+        except Exception:  # noqa: BLE001 - a lesson must never block the board
+            return
+
     def _finding_action(self, what: str, finding_id: str, call: Any) -> None:
         try:
             call()
@@ -240,6 +251,7 @@ class BoardController:
             self._write_line(f"[board] {exc}")
             return
         self._write_dim(self.translator.t("board.done", action=what, item=finding_id))
+        self._findings_learned()
         self._refresh_chrome()
 
     def _finding_validate(self, finding_id: str) -> None:
