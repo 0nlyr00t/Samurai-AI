@@ -70,6 +70,7 @@ from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
 from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
+from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import (
     ADD_CUSTOM_ID,
     REASONING_LEVELS,
@@ -353,6 +354,8 @@ class SamuraiApp(
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
         self._chat_history: list[Message] = []
+        self._progress = Stagnation()
+        self._last_turn_reason: TerminalReason | None = None
         self.chat_history = ChatHistoryService(
             ChatHistoryRepository(service.repository.database), SecretRedactor()
         )
