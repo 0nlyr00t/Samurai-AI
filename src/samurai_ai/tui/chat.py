@@ -42,6 +42,7 @@ from samurai_ai.domain.operations import Operation, OperationEvent, OperationMod
 from samurai_ai.domain.permission import classify_command
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
+from samurai_ai.domain.traffic import TrafficError
 from samurai_ai.i18n import Translator
 from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.graph import GraphService
@@ -120,6 +121,7 @@ class ChatController:
         graph: GraphService
         lessons: Any
         constraints: Any
+        traffic: Any
         _graph_used: bool
         _steer_queue: list[str]
         _chat_busy: bool
@@ -281,6 +283,26 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="record_traffic",
+            description=(
+                "Save one HTTP request/response pair as evidence for the operation. "
+                "Bodies are clipped, not trusted to be small. Bind it to a finding "
+                "afterwards with the board."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "minLength": 1, "maxLength": 16},
+                    "url": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "status": {"type": "integer"},
+                    "request_body": {"type": "string"},
+                    "response_body": {"type": "string"},
+                },
+                "required": ["method", "url", "status"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="propose_finding",
             description=(
                 "Register a finding that one recorded fact proves. The fact must carry "
@@ -347,6 +369,7 @@ class ChatController:
         "record_fact": "_run_record_fact_tool",
         "close_intent": "_run_close_intent_tool",
         "propose_finding": "_run_propose_finding_tool",
+        "record_traffic": "_run_record_traffic_tool",
     }
 
     #: Braille spinner, the way quiet harnesses show work in progress.
@@ -973,6 +996,30 @@ class ChatController:
             return Message(role="user", content=f"[tool close_intent] {exc}")
         self._write_dim(self.translator.t("graph.intent-closed", intent=intent.id, state=outcome))
         return Message(role="user", content=f"[tool close_intent] {intent.id} is {outcome}")
+
+    async def _run_record_traffic_tool(self, call: ToolCall) -> Message:
+        if self.operation is None:
+            return Message(role="user", content="[tool record_traffic] no operation open")
+        try:
+            pair = self.traffic.record(
+                self.operation.id,
+                str(call.arguments.get("method", "") or ""),
+                str(call.arguments.get("url", "") or ""),
+                int(call.arguments.get("status", 0) or 0),
+                str(call.arguments.get("request_body", "") or ""),
+                str(call.arguments.get("response_body", "") or ""),
+            )
+        except (TrafficError, ValueError) as exc:
+            return Message(role="user", content=f"[tool record_traffic] {exc}")
+        clipped = self.translator.t("traffic.clipped") if pair.truncated else ""
+        self._write_dim(self.translator.t("traffic.recorded", pair=pair.id, url=pair.url))
+        return Message(
+            role="user",
+            content=(
+                f"[tool record_traffic] {pair.id} {pair.method} {pair.url} -> "
+                f"{pair.status}{clipped}"
+            ),
+        )
 
     async def _run_propose_finding_tool(self, call: ToolCall) -> Message:
         fact_id = str(call.arguments.get("fact", "") or "").strip()

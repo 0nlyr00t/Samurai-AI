@@ -3464,6 +3464,42 @@ def test_exhausted_rounds_settle_the_graph_before_the_summary(tmp_path: Path) ->
     asyncio.run(exercise())
 
 
+def test_record_traffic_tool_and_bind_command(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="record_traffic",
+                    arguments={
+                        "method": "GET",
+                        "url": "https://x/user/2",
+                        "status": 200,
+                        "response_body": '{"email":"a@b"}',
+                    },
+                )
+            )
+            assert "record_traffic" in message.content
+            pair_id = message.content.split()[2]
+
+            app._handle_command(f"/traffic bind {pair_id} {finding.id} proof")
+            await pilot.pause()
+            bindings = app.traffic.bindings(finding.id)
+            assert [binding.role.value for binding in bindings] == ["proof"]
+            assert stack[1].kernel.get_finding(finding.id).evidence_version == 1
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_skills_gaps_report_lists_misses(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")

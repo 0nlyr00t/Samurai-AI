@@ -35,6 +35,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "constraint.added": "constraint recorded: {text}",
         "constraint.removed": "constraint {id} removed",
         "constraint.no-plan": "no plan yet — open the plan before constraining a task",
+        "traffic.empty": "no traffic captured in this operation",
+        "traffic.recorded": "traffic {pair}: {url}",
+        "traffic.bound": "traffic {pair} bound to {finding} as {role}",
+        "traffic.clipped": " (clipped)",
+        "help.traffic": "/traffic [bind <pair> <finding> <role>]  Captured request/response pairs",
         "help.constraint": (
             "/constraint [deny|allow|rm] <text|id>  Operator boundaries for the task"
         ),
