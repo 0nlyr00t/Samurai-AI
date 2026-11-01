@@ -31,6 +31,7 @@ from samurai_ai.i18n import Translator
 from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
@@ -97,6 +98,8 @@ class ChatController:
 
         def paint(self, style: str) -> str: ...
         _chat_history: list[Message]
+        _progress: Stagnation
+        _last_turn_reason: TerminalReason | None
         chat_history: ChatHistoryService
         _steer_queue: list[str]
         _chat_busy: bool
@@ -274,6 +277,50 @@ class ChatController:
         if not digest:
             return prompt
         return f"{prompt}\n\n{self.translator.t('chat.memory', digest=digest)}"
+
+    def _finding_count(self) -> int:
+        if self.operation is None:
+            return 0
+        try:
+            return len(self.kernel.kernel.list_findings(self.operation.id))
+        except Exception:  # noqa: BLE001 - a count must never break a turn
+            return 0
+
+    def _note_stagnation(self) -> None:
+        """Tell the model and the operator about a direction that stopped paying."""
+        shape = self._progress.last_stuck
+        if shape is None:
+            return
+        self._progress.last_stuck = None
+        self._write_dim(self.translator.t("chat.stagnant", direction=shape))
+        self._remember(
+            Message(role="user", content=self.translator.t("chat.stagnant-note", direction=shape))
+        )
+
+    def _carry_previous_reason(self) -> None:
+        """A failed previous turn tells the next one what to do differently."""
+        last = self._last_turn_reason
+        self._last_turn_reason = None
+        if last is None or last is TerminalReason.COMPLETED:
+            return
+        self._remember(
+            Message(
+                role="user",
+                content=self.translator.t(f"chat.prev-{last.value}"),
+            )
+        )
+
+    def _end_turn(self, reason: TerminalReason) -> None:
+        self._last_turn_reason = reason
+        if self.operation is None:
+            return
+        self.service.repository.append_event(
+            OperationEvent(
+                operation_id=self.operation.id,
+                event_type="chat.turn.end",
+                payload={"reason": reason.value},
+            )
+        )
 
     def _restore_chat(self) -> None:
         """Bring the operation's earlier turns back into the context and the journal."""
@@ -456,6 +503,7 @@ class ChatController:
             self._shell_running = ""
             return
         prefix = "[bg] " if self._shell_background else ""
+        self._progress.last_stuck = self._progress.record(command)
         self._expandable.append((f"!{command}", result.run.exit_code, result.stdout, result.stderr))
         self._write_dim(
             prefix
@@ -481,9 +529,11 @@ class ChatController:
 
     async def _chat(self, text: str, model_id: str, approval_id: str | None) -> None:
         self._chat_busy = True
+        reason = TerminalReason.CANCELLED
         try:
-            await self._chat_loop(text, model_id, approval_id)
+            reason = await self._chat_loop(text, model_id, approval_id)
         finally:
+            self._end_turn(reason)
             self._chat_busy = False
             self._shell_running = ""
             self._shell_background = False
@@ -538,8 +588,13 @@ class ChatController:
                 self._write_line("[deny] " + self.translator.t("access.denied", action=action))
                 return None
 
-    async def _chat_loop(self, text: str, model_id: str, approval_id: str | None) -> None:
+    async def _chat_loop(
+        self, text: str, model_id: str, approval_id: str | None
+    ) -> TerminalReason:
         del approval_id  # approvals are handled per call inside the loop
+        self._progress.reset()
+        findings_before = self._finding_count()
+        self._carry_previous_reason()
         reasoning = (
             self.settings.get_value(f"model.reasoning_effort.{model_id}")
             or self.models.default_reasoning_effort()
@@ -558,9 +613,9 @@ class ChatController:
                 )
             except Exception as exc:  # noqa: BLE001 - surfaced to the operator
                 self._write_line(f"[error] {exc}")
-                return
+                return TerminalReason.MODEL_ERROR
             if response is None:
-                return
+                return TerminalReason.DENIED
             self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
             if not response.tool_calls:
                 self._remember(Message(role="assistant", content=response.text))
@@ -572,12 +627,16 @@ class ChatController:
                 if self._steer_queue:
                     # the operator steered while this answer was in flight
                     continue
-                return
+                return TerminalReason.COMPLETED
             if response.text.strip():
                 self._remember(Message(role="assistant", content=response.text))
             for call in response.tool_calls:
                 self._remember(await self._run_chat_tool(call))
             self._trim_chat_history()
+            self._note_stagnation()
+            if self._finding_count() > findings_before:
+                findings_before = self._finding_count()
+                self._progress.finding_seen()
         # The tool rounds are exhausted: force a final summary call without
         # tools so the operator always gets a closing answer instead of
         # silence after the loop.
@@ -586,14 +645,15 @@ class ChatController:
             final = await self._request_chat_completion(operation_id, model_id, reasoning, ())
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self._write_line(f"[error] {exc}")
-            return
+            return TerminalReason.MODEL_ERROR
         if final is None:
-            return
+            return TerminalReason.DENIED
         self._ctx_tokens += final.usage.prompt_tokens + final.usage.completion_tokens
         self._remember(Message(role="assistant", content=final.text))
         self._trim_chat_history()
         if final.text.strip():
             self._write_ai_message(final)
+        return TerminalReason.ROUNDS
 
     def _chat_tool_read_only(self, name: str) -> bool:
         tool_id = self._CHAT_TOOL_IDS.get(name)
@@ -889,6 +949,7 @@ class ChatController:
             self._write_line(f"[error] {exc}")
             return Message(role="user", content=f"[tool {call.name}] error: {exc}")
         exit_code = result.run.exit_code
+        self._progress.last_stuck = self._progress.record(command)
         # Long tool output collapses under an arrow; /expand reveals it.
         self._expandable.append((command, exit_code, result.stdout, result.stderr))
         self._write_dim(

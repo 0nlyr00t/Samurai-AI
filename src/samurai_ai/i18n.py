@@ -274,6 +274,24 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.expand-empty": "nothing to expand yet — no tool output in this reply",
         "chat.empty-reply": "(empty model reply)",
+        "chat.stagnant": "no new findings: {direction} is repeating",
+        "chat.stagnant-note": (
+            "[progress] {direction} has now run three times without a finding. "
+            "Either narrow it or move to a different direction."
+        ),
+        "chat.prev-rounds": (
+            "[previous turn] the tool-round cap was hit; this turn starts narrow — "
+            "prefer one decisive command over a sweep"
+        ),
+        "chat.prev-model-error": (
+            "[previous turn] the model call failed; if it fails again check the model with /model"
+        ),
+        "chat.prev-denied": (
+            "[previous turn] an approval was denied; rephrase the command or loosen the mode"
+        ),
+        "chat.prev-cancelled": (
+            "[previous turn] the operator stopped the turn; continue from what was established"
+        ),
         "chat.restored": "restored {count} messages of this operation",
         "chat.restored-cut": (
             "older turns are left out — run /compact before restarting to keep a digest"
@@ -691,6 +709,24 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.expand-empty": "пока нечего раскрывать — в этом ответе нет вывода команд",
         "chat.empty-reply": "(пустой ответ модели)",
+        "chat.stagnant": "новых находок нет: {direction} повторяется",
+        "chat.stagnant-note": (
+            "[прогресс] {direction} отработал три раза без находки. "
+            "Либо сузь его, либо смени направление."
+        ),
+        "chat.prev-rounds": (
+            "[прошлый ход] упёрлись в лимит раундов инструментов; этот ход начинай узко — "
+            "один решающий вызов вместо веера"
+        ),
+        "chat.prev-model-error": (
+            "[прошлый ход] вызов модели упал; если упадёт снова — проверь модель через /model"
+        ),
+        "chat.prev-denied": (
+            "[прошлый ход] approval отклонён; переформулируй команду или ослабь режим"
+        ),
+        "chat.prev-cancelled": (
+            "[прошлый ход] оператор остановил ход; продолжай от уже установленного"
+        ),
         "copy.done": "скопировано символов: {chars}",
         "copy.empty": "пока нечего копировать — отправьте сообщение",
         "copy.code-empty": "в последнем ответе нет блока кода",

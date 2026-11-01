@@ -9,7 +9,7 @@ from rich.text import Text
 from textual.widgets import Button, ContentSwitcher, Input, OptionList, RichLog, Static, Tab, Tabs
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
-from samurai_ai.agents.provider import Message
+from samurai_ai.agents.provider import Message, ToolCall
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
@@ -3094,6 +3094,40 @@ def _vision_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
     stack[2].set_value("model.default", "openai/gpt-4o@v1")
     stack[2].set_value("tui.yolo", "1")
     return stack, provider, operation
+
+
+def test_repeating_one_direction_raises_a_stagnation_note(tmp_path: Path) -> None:
+    from samurai_ai.tui.progress import TerminalReason
+
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            for _ in range(3):
+                await app._run_chat_tool(
+                    ToolCall(id="1", name="shell_exec", arguments={"command": "nmap -sV x"})
+                )
+            app._note_stagnation()
+            await pilot.pause()
+            notes = [m.content for m in app._chat_history if m.content.startswith("[progress]")]
+            assert notes and "nmap" in notes[0]
+            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            assert any("repeating" in line for line in lines)
+            app._end_turn(TerminalReason.ROUNDS)
+            reasons = [
+                event.payload["reason"]
+                for event in app.service.repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["rounds"]
+            app._carry_previous_reason()
+            assert app._chat_history[-1].content.startswith("[previous turn]")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
 
 
 def test_read_image_returns_ocr_and_a_description(
