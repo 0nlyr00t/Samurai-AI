@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -82,6 +84,14 @@ def test_parser_rejects_bad_json_and_schema() -> None:
         parse_executor_output('{"commands": [{"type": "note"}]}')
     with pytest.raises(AgentOutputError, match="schema validation"):
         parse_planner_output('{"commands": []}')
+
+
+def test_parser_accepts_a_raw_newline_inside_a_string() -> None:
+    commands = parse_executor_output(
+        '{"commands": [{"type": "note", "key": "k", "value": "line one\nline two"}]}'
+    )
+
+    assert commands[0].value == "line one\nline two"  # type: ignore[union-attr]
 
 
 def test_parser_accepts_fenced_json() -> None:
@@ -183,3 +193,19 @@ def test_validate_note_key() -> None:
     for bad in ("", "a..b", "run.", "run.abc"):
         with pytest.raises(ValueError):
             validate_note_key(bad)
+
+
+def test_parser_turns_a_step_object_into_a_sentence() -> None:
+    steps = parse_planner_output('{"steps": ["recon", {"key": "surface", "value": "Page1"}]}')
+
+    assert steps.steps == ("recon", "key=surface, value=Page1")
+
+
+def test_parser_unwraps_a_command_pasted_into_tool_id() -> None:
+    inner = json.dumps({"type": "note", "key": "k", "value": "v"})
+    commands = parse_executor_output(
+        json.dumps({"commands": [{"type": "request_tool_run", "tool_id": inner}]})
+    )
+
+    assert commands[0].type == "note"
+    assert commands[0].key == "k"  # type: ignore[union-attr]

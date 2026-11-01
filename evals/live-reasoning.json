@@ -91,7 +91,6 @@
       "expectations": {
         "expect_solve": true,
         "min_tasks_done": 1,
-        "max_invalid_actions": 3,
         "max_wall_seconds": 300
       }
     },

@@ -325,8 +325,9 @@ def test_complete_task_without_required_artifact_rejected(
     fake.queue(
         '{"steps": ["finish"]}',
         '{"commands": [{"type": "complete_task"}]}',
-        # the refusal goes back to the model, which asks again and is refused,
-        # and the closing step does the same
+        # retry in the step, then two closing attempts, all refused for the
+        # same missing artifact
+        '{"commands": [{"type": "complete_task"}]}',
         '{"commands": [{"type": "complete_task"}]}',
         '{"commands": [{"type": "complete_task"}]}',
     )
@@ -600,3 +601,54 @@ def test_a_partly_accepted_step_is_not_asked_again(
     assert run.status is AgentRunStatus.COMPLETED
     # planner + one executor call, and the close-out never fires
     assert len(fake.requests) == 2
+
+
+def test_completing_an_already_done_task_is_not_a_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": ['
+        '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}},'
+        '{"type": "complete_task"}'
+        "]}",
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    assert run.status is AgentRunStatus.COMPLETED
+    reasons = [
+        event.payload["reason"]
+        for event in service.events(operation_id)
+        if event.event_type == "agent.command.rejected"
+    ]
+    assert reasons == ["tool not found: missing.tool"]
+
+
+def test_a_fail_next_to_a_tool_call_does_not_end_the_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": [{"type": "note", "key": "k", "value": "v"}]}',
+        # the closing answer blames a tool but the task itself is finished
+        '{"commands": ['
+        '{"type": "fail", "reason": "tool not found: completed_task"},'
+        '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}}'
+        "]}",
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    assert run.status is AgentRunStatus.COMPLETED
+    assert kernel.get_current_plan(operation_id).task_by_id("probe").status is (  # type: ignore[union-attr]
+        TaskStatus.DONE
+    )
