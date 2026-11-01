@@ -314,6 +314,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "graph.fact-bare": "fact recorded without an artifact",
         "graph.finding": "finding {finding}: {title}",
         "chat.frontier": "exploration graph (code-owned, above the heuristics):\n{block}",
+        "chat.constraints": "OPERATOR CONSTRAINTS — these beat everything below:\n{block}",
         "chat.stagnant": "no new findings: {direction} is repeating",
         "chat.stagnant-note": (
             "[progress] {direction} has now run three times without a finding. "
@@ -789,6 +790,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "graph.fact-bare": "факт записан без артефакта",
         "graph.finding": "находка {finding}: {title}",
         "chat.frontier": "граф исследования (принадлежит коду, выше эвристик):\n{block}",
+        "chat.constraints": "ОГРАНИЧЕНИЯ ОПЕРАТОРА — они важнее всего ниже:\n{block}",
         "chat.stagnant": "новых находок нет: {direction} повторяется",
         "chat.stagnant-note": (
             "[прогресс] {direction} отработал три раза без находки. "

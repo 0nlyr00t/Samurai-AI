@@ -12,6 +12,7 @@ from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message, ToolCall
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
+from samurai_ai.domain.constraints import ConstraintKind
 from samurai_ai.domain.ctf import FlagRecord, Hypothesis
 from samurai_ai.domain.kernel import (
     ArtifactKind,
@@ -3375,6 +3376,30 @@ def test_graph_board_reports_an_empty_graph(tmp_path: Path) -> None:
             await pilot.pause()
             assert app._graph_rows(False) == []
             await pilot.press("escape")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_constraints_reach_the_prompt_above_the_frontier(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            task_id, _root, _intent = _seed_graph(app, stack, operation)
+            app.constraints.add(
+                operation.id, task_id, ConstraintKind.DENY, "do not touch /admin"
+            )
+
+            prompt = app._chat_system_prompt()
+
+            assert "OPERATOR CONSTRAINTS" in prompt
+            assert "do not touch /admin" in prompt
+            assert prompt.index("OPERATOR CONSTRAINTS") < prompt.index("exploration graph")
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
