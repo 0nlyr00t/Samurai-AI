@@ -16,7 +16,13 @@ import time
 import urllib.parse
 from typing import Any
 
-from samurai_ai.agents.provider import ChatRequest, ChatResponse, ToolCall, Usage
+from samurai_ai.agents.provider import (
+    ChatRequest,
+    ChatResponse,
+    ImagePart,
+    ToolCall,
+    Usage,
+)
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
 from samurai_ai.domain.models import (
     ModelError,
@@ -39,6 +45,20 @@ def broker_for_base_url(base_url: str, verify_tls: bool = True) -> HttpEgressBro
     return HttpEgressBroker(ScopeContract(includes=(host,)), verify_tls=verify_tls)
 
 
+def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
+    """Fold images into the last user turn as content parts."""
+    for message in reversed(messages):
+        if message["role"] != "user":
+            continue
+        parts: list[dict[str, Any]] = [{"type": "text", "text": message["content"]}]
+        parts += [
+            {"type": "image_url", "image_url": {"url": f"data:{image.mime};base64,{image.data}"}}
+            for image in images
+        ]
+        message["content"] = parts
+        return
+
+
 def build_completion_payload(
     model_name: str, request: ChatRequest
 ) -> dict[str, Any]:
@@ -49,6 +69,8 @@ def build_completion_payload(
             for message in request.messages
         ],
     }
+    if request.images:
+        _attach_images(payload["messages"], request.images)
     if request.max_tokens is not None:
         payload["max_tokens"] = request.max_tokens
     if request.temperature is not None:

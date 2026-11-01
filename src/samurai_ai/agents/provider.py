@@ -41,11 +41,21 @@ class Usage(BaseModel):
         return self.prompt_tokens + self.completion_tokens
 
 
+class ImagePart(BaseModel):
+    """One image riding along with a request; the history stays textual."""
+
+    model_config = ConfigDict(frozen=True)
+
+    mime: str
+    data: str
+
+
 class ChatRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_id: str
     messages: tuple[Message, ...]
+    images: tuple[ImagePart, ...] = ()
     tools: tuple[ToolSpec, ...] = ()
     response_format: dict[str, Any] | None = None
     max_tokens: int | None = None

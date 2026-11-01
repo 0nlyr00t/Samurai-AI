@@ -17,7 +17,13 @@ from samurai_ai.agents.budgets import (
 from samurai_ai.agents.gemini import GeminiProvider
 from samurai_ai.agents.ollama import OllamaProvider
 from samurai_ai.agents.openai_compat import OpenAICompatProvider
-from samurai_ai.agents.provider import ChatRequest, ChatResponse, Message, ToolSpec
+from samurai_ai.agents.provider import (
+    ChatRequest,
+    ChatResponse,
+    ImagePart,
+    Message,
+    ToolSpec,
+)
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.agents.router import ModelRouter
 from samurai_ai.domain.execution import ApprovalRequiredError, ToolStateError
@@ -277,6 +283,7 @@ class ModelService:
         messages: tuple[Message, ...],
         *,
         tools: tuple[ToolSpec, ...] = (),
+        images: tuple[ImagePart, ...] = (),
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
         approval_id: str | None = None,
@@ -293,6 +300,7 @@ class ModelService:
         request = ChatRequest(
             model_id=model.id,
             messages=messages,
+            images=images,
             tools=tools,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort or self.default_reasoning_effort(),
@@ -308,6 +316,7 @@ class ModelService:
                 ChatRequest(
                     model_id=candidate_model.id,
                     messages=request.messages,
+                    images=request.images,
                     tools=request.tools,
                     max_tokens=request.max_tokens,
                     temperature=request.temperature,

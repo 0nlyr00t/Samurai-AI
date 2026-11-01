@@ -15,7 +15,13 @@ import time
 from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
-from samurai_ai.agents.provider import ChatRequest, ChatResponse, ToolCall, Usage
+from samurai_ai.agents.provider import (
+    ChatRequest,
+    ChatResponse,
+    ImagePart,
+    ToolCall,
+    Usage,
+)
 from samurai_ai.domain.execution import ToolExecutionError
 from samurai_ai.domain.models import (
     ApiFamily,
@@ -67,6 +73,14 @@ def model_definition_for(model_name: str) -> ModelDefinition:
     )
 
 
+def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
+    """Ollama takes raw base64 on the message itself."""
+    for message in reversed(messages):
+        if message["role"] == "user":
+            message["images"] = [image.data for image in images]
+            return
+
+
 def build_chat_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model_name,
@@ -76,6 +90,8 @@ def build_chat_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
             for message in request.messages
         ],
     }
+    if request.images:
+        _attach_images(payload["messages"], request.images)
     if request.tools:
         payload["tools"] = [
             {

@@ -15,7 +15,13 @@ import time
 from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
-from samurai_ai.agents.provider import ChatRequest, ChatResponse, ToolCall, Usage
+from samurai_ai.agents.provider import (
+    ChatRequest,
+    ChatResponse,
+    ImagePart,
+    ToolCall,
+    Usage,
+)
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
 from samurai_ai.domain.models import (
     ModelError,
@@ -29,6 +35,17 @@ DEFAULT_TIMEOUT = 60.0
 _MAX_ERROR_SNIPPET = 200
 
 
+def _attach_images(contents: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
+    """Fold images into the last user turn as inline data parts."""
+    for content in reversed(contents):
+        if content["role"] != "user":
+            continue
+        content["parts"] += [
+            {"inline_data": {"mime_type": image.mime, "data": image.data}} for image in images
+        ]
+        return
+
+
 def build_generate_content_payload(request: ChatRequest) -> dict[str, Any]:
     system_parts: list[str] = []
     contents: list[dict[str, Any]] = []
@@ -38,6 +55,8 @@ def build_generate_content_payload(request: ChatRequest) -> dict[str, Any]:
         else:
             role = "model" if message.role == "assistant" else "user"
             contents.append({"role": role, "parts": [{"text": message.content}]})
+    if request.images:
+        _attach_images(contents, request.images)
     payload: dict[str, Any] = {"contents": contents}
     if system_parts:
         payload["systemInstruction"] = {

@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from rich.text import Text
 from textual.widgets import Button, ContentSwitcher, Input, OptionList, RichLog, Static, Tab, Tabs
 
@@ -3073,6 +3074,154 @@ def test_subagent_digest_carries_blackboard_notes(tmp_path: Path) -> None:
             )
             digest = app._subagent_digest(run)
             assert "port 443" in digest
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def _png(tmp_path: Path, name: str = "shot.png", size: int = 2048) -> Path:
+    work = tmp_path / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    path = work / name
+    path.write_bytes(b"\x89PNG" + b"0" * size)
+    return path
+
+
+def _vision_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
+    """A stack on a vision-capable model, unattended (yolo)."""
+    stack, provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_value("model.default", "openai/gpt-4o@v1")
+    stack[2].set_value("tui.yolo", "1")
+    return stack, provider, operation
+
+
+def test_read_image_returns_ocr_and_a_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    path = _png(tmp_path)
+    monkeypatch.chdir(path.parent)
+    monkeypatch.setattr("samurai_ai.tui.chat._ocr", lambda _p: "hello from ocr")
+    stack, provider, operation = _vision_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="read_image", arguments={"path": "shot.png"})
+            )
+            assert "hello from ocr" in message.content
+            assert "ran it" in message.content  # the provider's description
+            assert provider.requests[-1].images  # the image really rode along
+            artifacts = [
+                a for a in stack[1].kernel.list_artifacts(operation.id) if a.kind.value == "other"
+            ]
+            assert artifacts and artifacts[0].summary == "image: shot.png"
+            assert artifacts[0].size_bytes > 0
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_read_image_refuses_a_path_outside_the_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    path = _png(tmp_path)
+    monkeypatch.chdir(path.parent)
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"\x89PNG")
+    monkeypatch.setattr("samurai_ai.tui.chat._ocr", lambda _p: "")
+    stack, _provider, operation = _vision_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="read_image", arguments={"path": str(outside)})
+            )
+            assert "outside the working directory" in message.content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_read_image_refuses_type_and_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    work = tmp_path / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "notes.txt").write_text("x")
+    big = work / "big.png"
+    big.write_bytes(b"\x89PNG" + b"0" * (8 * 1024 * 1024 + 1))
+    monkeypatch.chdir(work)
+    stack, _provider, operation = _vision_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            for name, expected in (("notes.txt", "unsupported type"), ("big.png", "limit")):
+                message = await app._run_chat_tool(
+                    ToolCall(id="1", name="read_image", arguments={"path": name})
+                )
+                assert expected in message.content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_read_image_without_vision_or_ocr_explains_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    path = _png(tmp_path)
+    monkeypatch.chdir(path.parent)
+    monkeypatch.setattr("samurai_ai.tui.chat._ocr", lambda _p: None)
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="read_image", arguments={"path": "shot.png"})
+            )
+            assert "tesseract" in message.content
+            assert "/model" in message.content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_read_image_needs_a_trusted_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    path = _png(tmp_path)
+    monkeypatch.chdir(path.parent)
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._dir_trusted = False
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="read_image", arguments={"path": "shot.png"})
+            )
+            assert "not trusted" in message.content
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
