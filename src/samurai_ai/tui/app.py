@@ -70,6 +70,7 @@ from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, find_command
+from samurai_ai.tui.graph_board import GraphBoardController
 from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
@@ -118,6 +119,7 @@ class SamuraiApp(
     ChatController,
     SessionController,
     BoardController,
+    GraphBoardController,
     ThemeController,
     KeyMapController,
     App[None],

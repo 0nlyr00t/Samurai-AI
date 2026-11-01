@@ -3266,6 +3266,121 @@ def test_repeating_intents_raise_the_stagnation_note(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def _seed_graph(app, stack, operation, intent: bool = True):  # type: ignore[no-untyped-def]
+    """A task with an origin, an intent and a fact — enough to fill a board."""
+    plan = stack[1].create_plan(
+        operation.id, "plan", [PlanTask(id="recon", title="Recon")], []
+    )
+    task_id = str(plan.tasks[0].id)
+    root = app.graph.origin(operation.id, task_id, "gate lab")
+    node = app.graph.open_intent(operation.id, task_id, "check /api/v1", root.id)
+    app.graph.start_intent(node.id)
+    return task_id, root, node
+
+
+def test_graph_board_lists_open_work_and_hints(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            task_id, _root, intent = _seed_graph(app, stack, operation)
+            app.graph.add_hint(operation.id, task_id, "do not touch /admin")
+
+            rows = app._graph_rows(False)
+            labels = [label for kind, _id, label in rows if kind == "item"]
+            assert any("check /api/v1" in label for label in labels)
+            assert any("do not touch /admin" in label for label in labels)
+            assert intent.id in [item_id for kind, item_id, _l in rows if kind == "item"]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_graph_board_hides_closed_nodes_until_filtered(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            _task, _root, intent = _seed_graph(app, stack, operation)
+            app.graph.close_intent(intent.id, "exhausted", "nothing there")
+
+            assert all(i != intent.id for _k, i, _l in app._graph_rows(False))
+            assert any(i == intent.id for _k, i, _l in app._graph_rows(True))
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_graph_board_stop_and_reset_actions(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            _task, _root, intent = _seed_graph(app, stack, operation)
+
+            app._graph_stop(intent.id)
+            await pilot.pause()
+            assert app.graph.get(intent.id).state.value == "blocked"
+
+            app._graph_reset(intent.id)
+            await pilot.pause()
+            assert app.graph.get(intent.id).state.value == "open"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_graph_detail_shows_the_lineage_to_the_origin(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            _task, root, intent = _seed_graph(app, stack, operation)
+
+            sections = app._graph_sections(app.graph.get(intent.id))
+            rendered = "\n".join(line for _heading, lines in sections for line in lines)
+            assert "gate lab" in rendered
+            assert root.id in rendered
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_graph_board_reports_an_empty_graph(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert app._graph_rows(False) == []
+            app._handle_command("/graph")
+            await pilot.pause()
+            assert app._graph_rows(False) == []
+            await pilot.press("escape")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_repeating_one_direction_raises_a_stagnation_note(tmp_path: Path) -> None:
     from samurai_ai.tui.progress import TerminalReason
 
