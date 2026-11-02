@@ -138,6 +138,8 @@ class _ScopedSandboxTool:
             stdout = "# summary\n" + "\n".join(summary_lines) + "\n\n# raw\n"
         stdout += result.stdout
         stderr = result.stderr
+        if self._notice is not None:
+            stderr = f"[allowlist] {self._notice}\n{stderr}"
         if result.timed_out:
             stderr += "\n[sandbox timed out]"
         if result.truncated:

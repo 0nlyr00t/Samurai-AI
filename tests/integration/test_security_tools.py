@@ -573,3 +573,21 @@ def test_dnsx_scope_and_param_contract(tmp_path: Path) -> None:
             approval_id=approval_id,
         )
     assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_re_signing_is_announced_in_the_run_output(tmp_path: Path) -> None:
+    # drop the signature: the adapter re-signs and says so on stderr
+    service, kernel, execution, _ = make_dnsx_stack(tmp_path, DNSX_JSONL)
+    (tmp_path / "sandbox-allowlist.sig").unlink()
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "recon.dnsx-resolve", RiskClass.R2)
+    result = execution.run_tool(
+        operation.id,
+        "recon.dnsx-resolve",
+        {"hosts": ["example.com"]},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    assert result.stderr.startswith("[allowlist] ")
+    assert "re-signed" in result.stderr
+    assert (tmp_path / "sandbox-allowlist.sig").exists()

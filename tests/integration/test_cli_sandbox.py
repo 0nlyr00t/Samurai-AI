@@ -146,3 +146,58 @@ def test_cli_sandbox_exec_rejects_disallowed_executable(
         == 2
     )
     assert "not in sandbox profile" in capsys.readouterr().err
+
+
+def test_cli_sandbox_verify_reports_status(sandbox_home: Path, capsys) -> None:
+    database = str(sandbox_home / "verify.db")
+    assert main(["--db", database, "sandbox", "verify"]) == 1
+    assert "signature is unsigned" in capsys.readouterr().err
+
+    assert main(["--db", database, "sandbox", "sign"]) == 0
+    capsys.readouterr()
+    assert main(["--db", database, "sandbox", "verify"]) == 0
+    assert "signature matches" in capsys.readouterr().out
+
+    # verify never writes: the file stays exactly as signed
+    signature_path = sandbox_home / "home" / "sandbox-allowlist.sig"
+    before = signature_path.read_text()
+    assert main(["--db", database, "sandbox", "verify"]) == 0
+    assert signature_path.read_text() == before
+
+
+def test_cli_sandbox_verify_flags_drift_in_json(sandbox_home: Path, capsys) -> None:
+    database = str(sandbox_home / "verify-json.db")
+    assert main(["--db", database, "sandbox", "sign"]) == 0
+    capsys.readouterr()
+    (sandbox_home / "home" / "sandbox-allowlist.sig").write_text("deadbeef\n")
+    assert main(["--db", database, "--json", "sandbox", "verify"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "invalid"
+    assert payload["ok"] is False
+
+
+def test_cli_sandbox_profiles_shows_the_last_resign(sandbox_home: Path, capsys) -> None:
+    database = str(sandbox_home / "resign.db")
+    assert main(["--db", database, "sandbox", "sign"]) == 0
+    capsys.readouterr()
+    (sandbox_home / "home" / "sandbox-allowlist.sig").unlink()
+    # one run with any profile re-signs and records why
+    operation_id = create_operation(database, capsys)
+    main(
+        [
+            "--db",
+            database,
+            "tool",
+            "run",
+            operation_id,
+            "sandbox.exec",
+            "--param",
+            "profile=sandbox.default@v1",
+            "--param",
+            "executable=echo",
+        ]
+    )
+    capsys.readouterr()
+    assert main(["--db", database, "sandbox", "profiles"]) == 0
+    out = capsys.readouterr().out
+    assert "resigned " in out and "(unsigned," in out
