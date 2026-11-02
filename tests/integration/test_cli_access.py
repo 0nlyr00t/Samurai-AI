@@ -5,11 +5,14 @@ from __future__ import annotations
 import base64
 import json
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from samurai_ai.cli import main
 
@@ -17,13 +20,50 @@ TEST_KEY = "cd" * 32
 CLAIMS = {"sub": "u-1", "email": "v@test", "groups": ["readers"]}
 
 
+KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+KID = "cli-kid"
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
 def _jwt(claims: dict) -> str:
-    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
-    return f"header.{body}.signature"
+    """A properly signed token: the service verifies it against the JWKS below."""
+    header = {"alg": "RS256", "kid": KID}
+    pairs = {
+        "iss": _IdpHandler.issuer,
+        "aud": "guest",
+        "exp": int(time.time()) + 3600,
+        **claims,
+    }
+    signed = f"{_b64(json.dumps(header).encode())}.{_b64(json.dumps(pairs).encode())}"
+    signature = KEY.sign(signed.encode(), padding.PKCS1v15(), hashes.SHA256())
+    return f"{signed}.{_b64(signature)}"
+
+
+def _jwks() -> dict:
+    numbers = KEY.public_key().public_numbers()
+    return {
+        "keys": [
+            {
+                "kty": "RSA",
+                "kid": KID,
+                "n": _b64(numbers.n.to_bytes(256, "big")),
+                "e": _b64(numbers.e.to_bytes(3, "big")),
+            }
+        ]
+    }
 
 
 class _IdpHandler(BaseHTTPRequestHandler):
     issued: list[dict] = []
+    issuer = ""
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/jwks.json":
+            return self._reply(200, _jwks())
+        return self._reply(404, {})
 
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
@@ -52,10 +92,11 @@ class _IdpHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def idp() -> Iterator[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _IdpHandler)
+    _IdpHandler.issuer = f"http://localhost:{server.server_port}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://localhost:{server.server_port}"
+        yield _IdpHandler.issuer
     finally:
         server.shutdown()
         server.server_close()
