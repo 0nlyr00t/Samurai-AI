@@ -288,7 +288,11 @@ async def _socks5_session(
             return result
         writer.write(payload)
         await writer.drain()
-        result["body"] = await reader.read(65536)
+        # the body may arrive in a later segment than the headers
+        chunks: list[bytes] = []
+        while chunk := await reader.read(65536):
+            chunks.append(chunk)
+        result["body"] = b"".join(chunks)
         return result
     finally:
         writer.close()
