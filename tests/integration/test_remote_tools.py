@@ -185,3 +185,18 @@ def test_adb_needs_an_argument_for_shell(tmp_path: Path, listener: int) -> None:
             approval_id=approval_id,
         )
     assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_the_tunnel_reports_volume_in_the_warning_line(tmp_path: Path, listener: int) -> None:
+    """The audit line must carry what flowed, not only the verdict."""
+    service, kernel, execution, manager = make_stack(tmp_path, (SmbListTool,))
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "remote.smb-list", RiskClass.R2)
+    result = execution.run_tool(
+        operation.id,
+        "remote.smb-list",
+        {"host": "127.0.0.1", "port": listener},
+        approval_id=approval_id,
+    )
+    assert "allowed;" in result.stderr
+    assert result.egress_events and result.egress_events[0]["verdict"] == "allowed"
