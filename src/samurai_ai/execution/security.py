@@ -25,6 +25,7 @@ from uuid import uuid4
 from samurai_ai.domain.execution import (
     NetworkAccess,
     ToolDefinition,
+    ToolExecutionError,
     ToolKind,
     ToolScopeError,
     ToolValidationError,
@@ -72,6 +73,10 @@ class _ScopedSandboxTool:
     ) -> tuple[dict[str, str], dict[str, str]]:
         """Plain env (value in argv) and secret env (name in argv only)."""
         return {}, {}
+
+    def build_stdin(self, params: dict[str, Any]) -> bytes | None:
+        """Payload for tools that read their targets from stdin."""
+        return None
 
     def summarize(self, stdout: str) -> list[str]:
         raise NotImplementedError
@@ -123,6 +128,7 @@ class _ScopedSandboxTool:
             scope,
             env=env,
             secret_env=secret_env,
+            stdin_data=self.build_stdin({**params, "targets": targets}),
         )
         result = outcome.result
         summary_lines = self.summarize(result.stdout)
@@ -571,4 +577,173 @@ class SubfinderPassiveTool(_ScopedSandboxTool):
         return lines
 
 
-__all__ = ["HttpxProbeTool", "NucleiScanTool", "SubfinderPassiveTool"]
+class DnsxResolveTool(_ScopedSandboxTool):
+    """Resolve in-scope names through the pinned DoH resolver over SOCKS5.
+
+    The resolver lives in the signed profile, so the model cannot redirect
+    lookups. A resolver that answers nothing while the run succeeded is
+    reported as a failure: otherwise "no names" and "dead resolver" would read
+    the same. `-rcode noerror,nxdomain` makes a live resolver answer once per
+    name, which is what tells the two apart.
+    """
+
+    profile_id = "sandbox.dnsx@v1"
+    executable = "dnsx"
+    max_targets = 50
+
+    _TYPE_FLAGS = {"A": "-a", "AAAA": "-aaaa", "CNAME": "-cname"}
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="recon.dnsx-resolve",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Resolve in-scope hosts through the pinned DoH resolver "
+            "(records per name, candidate assets for the ledger)",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=180,
+            output_limit_bytes=262144,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "hosts": _targets_schema(self.max_targets),
+                    "types": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": list(self._TYPE_FLAGS),
+                        },
+                        "minItems": 1,
+                        "maxItems": len(self._TYPE_FLAGS),
+                        "default": ["A"],
+                    },
+                },
+                "required": ["hosts"],
+                "additionalProperties": False,
+            },
+            capabilities=("recon", "dns-resolution"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_targets(
+        self, params: dict[str, Any], scope: ScopeContract
+    ) -> list[str]:
+        hosts = [str(host) for host in params["hosts"]]
+        if not 1 <= len(hosts) <= self.max_targets:
+            raise ToolValidationError(
+                f"{self.definition.id}: expected 1..{self.max_targets} hosts, "
+                f"got {len(hosts)}"
+            )
+        for host in hosts:
+            if not _NO_COMMA_OR_SPACE.fullmatch(host) or host.startswith("-"):
+                raise ToolValidationError(
+                    f"{self.definition.id}: host must be a bare name without "
+                    f"spaces, commas or a leading dash: {host!r}"
+                )
+            decision = scope.evaluate(host)
+            if not decision.allowed:
+                raise ToolScopeError(
+                    f"{self.definition.id}: host {host!r} is out of scope: "
+                    f"{decision.detail}"
+                )
+        return hosts
+
+    def _validated_types(self, params: dict[str, Any]) -> list[str]:
+        types = [str(item) for item in params.get("types") or ["A"]]
+        if not types:
+            raise ToolValidationError(f"{self.definition.id}: types must not be empty")
+        for item in types:
+            if item not in self._TYPE_FLAGS:
+                raise ToolValidationError(
+                    f"{self.definition.id}: unknown record type {item!r}"
+                )
+        return list(dict.fromkeys(types))
+
+    def _resolver(self) -> str:
+        resolver = get_profile(self.profile_id).resolver_url
+        if resolver is None:
+            raise ToolValidationError(
+                f"{self.definition.id}: sandbox profile {self.profile_id} pins no "
+                "resolver"
+            )
+        return resolver
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        # dnsx 1.2.2 has no -timeout flag: the profile timeout governs the run.
+        type_flags = [self._TYPE_FLAGS[item] for item in self._validated_types(params)]
+        return [
+            "-silent",
+            "-json",
+            "-omit-raw",
+            "-nc",
+            "-disable-update-check",
+            "-rcode",
+            "noerror,nxdomain",
+            "-r",
+            self._resolver(),
+            *type_flags,
+        ]
+
+    def build_stdin(self, params: dict[str, Any]) -> bytes:
+        # dnsx 1.2.2 ignores -l, so the host list goes through stdin.
+        return "".join(f"{str(host)}\n" for host in params["targets"]).encode("utf-8")
+
+    def summarize(self, stdout: str) -> list[str]:
+        lines: list[str] = []
+        with_records = False
+        for raw_line in stdout.splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                record = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            host = record.get("host") or record.get("input")
+            if not host:
+                continue
+            status = str(record.get("status_code", "?"))
+            found: list[str] = []
+            for record_type in ("a", "aaaa", "cname"):
+                values = record.get(record_type) or ()
+                if isinstance(values, str):
+                    values = [values]
+                if values:
+                    found.append(
+                        f"{record_type.upper()}={','.join(str(value) for value in values[:5])}"
+                    )
+            if found:
+                with_records = True
+            lines.append(f"{host}\t{status}\t{' '.join(found)}".rstrip())
+            if len(lines) >= _SUMMARY_LIMIT:
+                break
+        if lines and not with_records:
+            lines.append("no answers")
+        return lines
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        output = super().invoke(params, scope)
+        # Zero parsed lines on a successful exit means the resolver never
+        # answered — not that the names are dead.
+        if output.exit_code == 0 and not output.stdout.startswith("# summary\n"):
+            raise ToolExecutionError(
+                f"{self.definition.id}: resolver {self._resolver()} answered nothing "
+                f"(exit 0, no records, no NXDOMAIN)"
+            )
+        return output
+
+
+__all__ = [
+    "DnsxResolveTool",
+    "HttpxProbeTool",
+    "NucleiScanTool",
+    "SubfinderPassiveTool",
+]

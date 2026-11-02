@@ -7,6 +7,7 @@ import pytest
 
 from samurai_ai.domain.execution import (
     ApprovalRequiredError,
+    ToolExecutionError,
     ToolScopeError,
     ToolValidationError,
 )
@@ -17,6 +18,7 @@ from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.registry import ToolRegistry
 from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
 from samurai_ai.execution.security import (
+    DnsxResolveTool,
     HttpxProbeTool,
     NucleiScanTool,
     SubfinderPassiveTool,
@@ -51,13 +53,15 @@ class FakeManager:
         self.run_result = run_result
         self.calls: list[tuple[str, ...]] = []
         self.envs: list[dict[str, str] | None] = []
+        self.stdins: list[bytes | None] = []
 
     async def run(  # type: ignore[no-untyped-def]
-        self, argv, timeout_seconds=None, *, env=None
+        self, argv, timeout_seconds=None, *, env=None, stdin_data=None
     ):
         arguments = tuple(argv)
         self.calls.append(arguments)
         self.envs.append(dict(env) if env is not None else None)
+        self.stdins.append(stdin_data)
         if arguments[:2] == ("docker", "run"):
             return self.run_result
         return ProcessResult(exit_code=0, stdout="ok", stderr="")
@@ -440,3 +444,132 @@ def test_summary_is_bounded(tmp_path: Path) -> None:
     )
     tool = HttpxProbeTool()
     assert len(tool.summarize(flood)) == 100
+
+
+DNSX_JSONL = (
+    '{"host":"www.example.com","status_code":"NOERROR",'
+    '"a":["172.66.147.243"],"resolver":["https://cloudflare-dns.com/dns-query"]}\n'
+    '{"host":"api.example.com","status_code":"NOERROR","cname":["cb.example.net"]}\n'
+    '{"host":"ghost.example.com","status_code":"NXDOMAIN"}\n'
+)
+
+
+def make_dnsx_stack(
+    tmp_path: Path, stdout: str, exit_code: int = 0
+) -> tuple[OperationService, KernelService, ToolExecutionService, FakeManager]:
+    database_path = tmp_path / "dnsx.db"
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = FakeManager(ProcessResult(exit_code=exit_code, stdout=stdout, stderr=""))
+    database = Database(database_path)
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    runner = DockerSandboxRunner(
+        manager, tmp_path / "sandbox-allowlist.sig", lambda: MASTER_KEY
+    )
+    registry = ToolRegistry(adapters=(DnsxResolveTool(runner),))
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), registry=registry
+    )
+    return service, kernel, execution, manager
+
+
+def test_dnsx_resolves_through_the_pinned_resolver(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_dnsx_stack(tmp_path, DNSX_JSONL)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "recon.dnsx-resolve", RiskClass.R2)
+
+    result = execution.run_tool(
+        operation.id,
+        "recon.dnsx-resolve",
+        {"hosts": ["www.example.com", "api.example.com", "ghost.example.com"]},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+
+    argv = docker_run_argv(manager)
+    tool_args = tool_arguments(argv)
+    # resolver and proxy are pinned to the profile, not chosen by the model
+    assert tool_args[tool_args.index("-r") + 1] == "doh:https://cloudflare-dns.com/dns-query"
+    assert "-rcode" in tool_args
+    assert tool_args[tool_args.index("-rcode") + 1] == "noerror,nxdomain"
+    assert "-a" in tool_args
+    assert "-l" not in tool_args  # broken in the image, hosts go through stdin
+    proxy_url = tool_args[tool_args.index("-proxy") + 1]
+    assert proxy_url.startswith("socks5://samurai:")
+    assert manager.stdins[-1] == b"www.example.com\napi.example.com\nghost.example.com\n"
+
+    assert "www.example.com\tNOERROR\tA=172.66.147.243" in result.stdout
+    assert "api.example.com\tNOERROR\tCNAME=cb.example.net" in result.stdout
+    assert "ghost.example.com\tNXDOMAIN" in result.stdout
+    assert "no answers" not in result.stdout
+    # the run token travels in argv, so it must be redacted in the artifacts
+    token = proxy_url.split("://samurai:", 1)[1].split("@", 1)[0]
+    assert token not in result.stdout
+
+
+def test_dnsx_reports_no_answers_without_faking_success(tmp_path: Path) -> None:
+    only_nx = '{"host":"ghost.example.com","status_code":"NXDOMAIN"}\n'
+    service, kernel, execution, _ = make_dnsx_stack(tmp_path, only_nx)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "recon.dnsx-resolve", RiskClass.R2)
+    result = execution.run_tool(
+        operation.id,
+        "recon.dnsx-resolve",
+        {"hosts": ["ghost.example.com"]},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    assert "NXDOMAIN" in result.stdout
+    assert "\nno answers\n" in result.stdout
+
+
+def test_dnsx_silent_resolver_fails_the_run(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_dnsx_stack(tmp_path, "")
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "recon.dnsx-resolve", RiskClass.R2)
+    with pytest.raises(ToolExecutionError, match="answered nothing"):
+        execution.run_tool(
+            operation.id,
+            "recon.dnsx-resolve",
+            {"hosts": ["example.com"]},
+            approval_id=approval_id,
+        )
+    assert [call for call in manager.calls if call[:2] == ("docker", "run")]
+    assert execution.list_runs(operation.id)[0].status.value == "failed"
+
+
+def test_dnsx_scope_and_param_contract(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_dnsx_stack(tmp_path, DNSX_JSONL)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "recon.dnsx-resolve", RiskClass.R2)
+
+    with pytest.raises(ToolScopeError):
+        execution.run_tool(
+            operation.id,
+            "recon.dnsx-resolve",
+            {"hosts": ["evil-outside.com"]},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError):
+        execution.run_tool(
+            operation.id,
+            "recon.dnsx-resolve",
+            {"hosts": ["example.com"] * 51},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError, match="must be one of"):
+        execution.run_tool(
+            operation.id,
+            "recon.dnsx-resolve",
+            {"hosts": ["example.com"], "types": ["TXT"]},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError):
+        execution.run_tool(
+            operation.id,
+            "recon.dnsx-resolve",
+            {"hosts": ["example.com,evil.com"]},
+            approval_id=approval_id,
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
