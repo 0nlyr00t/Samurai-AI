@@ -573,6 +573,26 @@ class DockerSandboxRunner:
             )
         )
 
+    async def run_async(
+        self,
+        profile: SandboxProfile,
+        run_id: str,
+        executable: str,
+        args: list[str],
+        scope: ScopeContract | None,
+        *,
+        env: dict[str, str] | None = None,
+        secret_env: dict[str, str] | None = None,
+        stdin_data: bytes | None = None,
+    ) -> SandboxRunOutcome:
+        """Same as `run`, for callers that already own an event loop.
+
+        A tunnel or a watcher can then live in the same loop as the process.
+        """
+        return await self._run(
+            profile, run_id, executable, args, scope, env, secret_env, stdin_data
+        )
+
     async def _run(
         self,
         profile: SandboxProfile,

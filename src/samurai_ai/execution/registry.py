@@ -509,6 +509,12 @@ def _manifest_tools() -> tuple[Any, ...]:
 
 
 def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
+    from samurai_ai.execution.remote import (
+        AdbTool,
+        RdpCheckTool,
+        SmbListTool,
+        SshExecTool,
+    )
     from samurai_ai.execution.security import (
         DnsxResolveTool,
         FfufFuzzTool,
@@ -535,6 +541,10 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             FfufFuzzTool(),
             ResearchSearchTool(),
             ResearchReadTool(),
+            SshExecTool(),
+            SmbListTool(),
+            RdpCheckTool(),
+            AdbTool(),
             *_manifest_tools(),
         ),
         dynamic_resolver=dynamic_resolver,

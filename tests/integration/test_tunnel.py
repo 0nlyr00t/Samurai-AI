@@ -78,7 +78,8 @@ def test_a_tunnel_forwards_bytes_and_records_one_allowed_event(
     )
     assert b"tunnel-ok" in body
     assert verdicts == ["allowed"]
-    assert tunnel.events[0].bytes_sent > 0
+    # volume lands on the tunnel totals, the event is the audit line
+    assert tunnel.bytes_sent > 0
 
 
 def test_a_tunnel_refuses_out_of_scope_before_any_byte(http_server: str) -> None:

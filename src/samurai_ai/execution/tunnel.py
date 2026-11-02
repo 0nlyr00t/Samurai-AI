@@ -71,6 +71,8 @@ class ScopedTunnel:
         self.idle_timeout = idle_timeout
         self.on_event = on_event
         self.events: list[EgressEvent] = []
+        self.bytes_sent = 0
+        self.bytes_received = 0
         self._server: asyncio.Server | None = None
         self._semaphore = asyncio.Semaphore(max_connections)
 
@@ -140,22 +142,27 @@ class ScopedTunnel:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         async with self._semaphore:
-            sent = received = 0
             upstream: tuple[asyncio.StreamReader, asyncio.StreamWriter] | None = None
-            verdict = VERDICT_ALLOWED
             try:
                 addresses = self.resolver(self.target_host)
                 upstream = await asyncio.open_connection(
                     addresses[0], self.target_port
                 )
-                sent, received = await self._pump(reader, writer, *upstream)
             except (ToolExecutionError, OSError):
-                verdict = VERDICT_DENIED_SCOPE
+                self._emit(VERDICT_DENIED_SCOPE)
+                writer.close()
+                return
+            # the connection is up: audit it now, volume follows on the totals
+            self._emit(VERDICT_ALLOWED)
+            try:
+                sent, received = await self._pump(reader, writer, *upstream)
+                self.bytes_sent += sent
+                self.bytes_received += received
+            except (ToolExecutionError, OSError):
+                pass
             finally:
                 writer.close()
-                if upstream is not None:
-                    upstream[1].close()
-                self._emit(verdict, sent, received)
+                upstream[1].close()
 
     async def _pump(
         self,
@@ -172,9 +179,12 @@ class ScopedTunnel:
             key: str,
         ) -> None:
             while True:
-                chunk = await asyncio.wait_for(
-                    source.read(_READ_CHUNK), timeout=self.idle_timeout
-                )
+                try:
+                    chunk = await asyncio.wait_for(
+                        source.read(_READ_CHUNK), timeout=self.idle_timeout
+                    )
+                except TimeoutError:
+                    return  # idle: the tool is done with this connection
                 if not chunk:
                     return
                 target.write(chunk)
