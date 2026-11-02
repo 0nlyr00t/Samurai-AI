@@ -1004,7 +1004,7 @@ class FfufFuzzTool(_ScopedSandboxTool):
         self, params: dict[str, Any]
     ) -> tuple[dict[str, str], dict[str, str]]:
         # ffuf writes a scraper config under $HOME and the rootfs is read-only.
-        return {"HOME": "/tmp", "TMPDIR": "/tmp"}, {}
+        return {"HOME": "/tmp", "TMPDIR": "/tmp", "XDG_CACHE_HOME": "/root/.cache"}, {}
 
     def build_stdin(self, params: dict[str, Any]) -> bytes:
         return (_wordlist_dir() / self.WORDLIST).read_bytes()
@@ -1036,5 +1036,333 @@ __all__ = [
     "HttpxProbeTool",
     "NmapScanTool",
     "NucleiScanTool",
+    "SubfinderPassiveTool",
+]
+
+
+def _research_payload(stdout: str) -> dict[str, Any] | None:
+    """The adapter's JSON answer; the raw block below it is not parsed."""
+    text = stdout.split("# screenshot", 1)[0]
+    start = text.find("{")
+    if start < 0:
+        return None
+    try:
+        payload = json.loads(text[start:])
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+_PROXY_BOOTSTRAP = """
+import json, os, sys
+from urllib.parse import urlsplit
+from camoufox.sync_api import Camoufox
+
+raw = os.environ.get("HTTP_PROXY", "")
+opts = {"headless": True}
+if raw:
+    parts = urlsplit(raw)
+    opts["proxy"] = {
+        "server": "http://%s:%s" % (parts.hostname, parts.port),
+        "username": parts.username,
+        "password": parts.password,
+    }
+"""
+
+_READ_SCRIPT = _PROXY_BOOTSTRAP + """
+url, max_chars, want_shot = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
+with Camoufox(**opts) as browser:
+    page = browser.new_page()
+    response = page.goto(url, timeout=45000, wait_until="domcontentloaded")
+    status = response.status if response else 0
+    links = []
+    for anchor in page.query_selector_all("a")[:30]:
+        href = anchor.get_attribute("href") or ""
+        if href:
+            links.append(href)
+    shot = ""
+    if want_shot:
+        import base64
+        shot = base64.b64encode(page.screenshot(type="png")).decode()
+    print(json.dumps({
+        "url": url,
+        "status": status,
+        "title": page.title()[:200],
+        "text": page.inner_text("body")[:max_chars],
+        "links": links,
+        "screenshot": shot,
+    }))
+"""
+
+_SEARCH_SCRIPT = _PROXY_BOOTSTRAP + """
+query, count = sys.argv[1], int(sys.argv[2])
+search_url = "https://html.duckduckgo.com/html/?q=" + query.replace(" ", "+")
+results = []
+with Camoufox(**opts) as browser:
+    page = browser.new_page()
+    response = page.goto(search_url, timeout=45000, wait_until="domcontentloaded")
+    status = response.status if response else 0
+    for anchor in page.query_selector_all("a.result__a")[:count]:
+        results.append({"title": (anchor.inner_text() or "").strip()[:160],
+                        "url": anchor.get_attribute("href") or ""})
+print(json.dumps({"query": query, "search_url": search_url, "status": status,
+                  "results": results}))
+"""
+
+
+class ResearchReadTool(_ScopedSandboxTool):
+    """Render one URL in camoufox and bring back text, links and a citation.
+
+    The browser executes foreign JavaScript, so it runs in the sandbox and its
+    only way out is the scoped proxy. What it read is recorded as a traffic pair
+    — a citation that cannot be re-opened is indistinguishable from a guess.
+    """
+
+    profile_id = "sandbox.camoufox@v1"
+    executable = "python3"
+    max_targets = 1
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="research.read",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Render an in-scope URL in an anti-detect browser and "
+            "return its title, readable text and links",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=600,
+            output_limit_bytes=524288,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "minLength": 1},
+                    "max_chars": {"type": "integer", "default": 4000},
+                    "screenshot": {"type": "boolean", "default": False},
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            capabilities=("research", "browse"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_targets(
+        self, params: dict[str, Any], scope: ScopeContract
+    ) -> list[str]:
+        url = str(params["url"])
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ToolValidationError(
+                f"{self.definition.id}: url must be http(s) with a host: {url!r}"
+            )
+        decision = scope.evaluate(parts.hostname)
+        if not decision.allowed:
+            raise ToolScopeError(
+                f"{self.definition.id}: host {parts.hostname!r} is out of scope: "
+                f"{decision.detail}"
+            )
+        return [url]
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        targets = params.get("targets") or [params["url"]]
+        max_chars = int(params.get("max_chars", 4000))
+        if not 500 <= max_chars <= 20000:
+            raise ToolValidationError(
+                f"{self.definition.id}: max_chars must be 500..20000, got {max_chars}"
+            )
+        wants_shot = "1" if params.get("screenshot") else "0"
+        return ["-c", _READ_SCRIPT, str(targets[0]), str(max_chars), wants_shot]
+
+    def build_env(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        # The container runs as nobody (HOME=/nonexistent, read-only), so HOME
+        # moves to the tmpfs; the browser build stays in the image cache via
+        # XDG_CACHE_HOME, otherwise camoufox downloads 100+ MB per run.
+        return {"HOME": "/tmp", "TMPDIR": "/tmp", "XDG_CACHE_HOME": "/root/.cache"}, {}
+
+    def summarize(self, stdout: str) -> list[str]:
+        payload = _research_payload(stdout)
+        if payload is None:
+            return []
+        lines = [
+            f"url: {payload.get('url', '?')}",
+            f"status: {payload.get('status', '?')}",
+            f"title: {str(payload.get('title', ''))[:160]}",
+        ]
+        links = [str(link) for link in payload.get("links") or ()][:20]
+        lines.append(f"links: {len(links)}")
+        lines += [f"link: {link}" for link in links]
+        for raw_line in str(payload.get("text", "")).splitlines():
+            if raw_line.strip():
+                lines.append(raw_line.strip()[:200])
+            if len(lines) >= _SUMMARY_LIMIT:
+                break
+        return lines
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        output = super().invoke(params, scope)
+        payload = _research_payload(output.stdout)
+        if payload is None:
+            return output
+        screenshot = str(payload.get("screenshot") or "")
+        if screenshot:
+            output = ToolOutput(
+                stdout=f"{output.stdout}\n\n# screenshot (base64 png)\n{screenshot}\n",
+                stderr=output.stderr,
+                exit_code=output.exit_code,
+                timed_out=output.timed_out,
+                secrets=output.secrets,
+                egress_events=output.egress_events,
+                traffic=(
+                    {
+                        "method": "GET",
+                        "url": str(payload.get("url", "")),
+                        "status": int(payload.get("status") or 0),
+                        "response_body": str(payload.get("text", "")),
+                    },
+                ),
+            )
+            return output
+        return ToolOutput(
+            stdout=output.stdout,
+            stderr=output.stderr,
+            exit_code=output.exit_code,
+            timed_out=output.timed_out,
+            secrets=output.secrets,
+            egress_events=output.egress_events,
+            traffic=(
+                {
+                    "method": "GET",
+                    "url": str(payload.get("url", "")),
+                    "status": int(payload.get("status") or 0),
+                    "response_body": str(payload.get("text", "")),
+                },
+            ),
+        )
+
+
+class ResearchSearchTool(_ScopedSandboxTool):
+    """Ask DuckDuckGo through the same browser; no keys, no subscription."""
+
+    profile_id = "sandbox.camoufox@v1"
+    executable = "python3"
+    max_targets = 1
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="research.search",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Web search through DuckDuckGo in the sandbox browser "
+            "(result titles and links)",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=300,
+            output_limit_bytes=262144,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 2,
+                        "maxLength": 200,
+                    },
+                    "count": {"type": "integer", "default": 10},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            capabilities=("research", "search"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_targets(
+        self, params: dict[str, Any], scope: ScopeContract
+    ) -> list[str]:
+        query = str(params["query"]).strip()
+        if not query:
+            raise ToolValidationError(f"{self.definition.id}: query is empty")
+        if "\x00" in query:
+            raise ToolValidationError(f"{self.definition.id}: query contains NUL")
+        return [query]
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        query = (params.get("targets") or [params["query"]])[0]
+        count = int(params.get("count", 10))
+        if not 1 <= count <= 20:
+            raise ToolValidationError(
+                f"{self.definition.id}: count must be 1..20, got {count}"
+            )
+        return ["-c", _SEARCH_SCRIPT, str(query), str(count)]
+
+    def build_env(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        return {"HOME": "/tmp", "TMPDIR": "/tmp", "XDG_CACHE_HOME": "/root/.cache"}, {}
+
+    def summarize(self, stdout: str) -> list[str]:
+        payload = _research_payload(stdout)
+        if payload is None:
+            return []
+        lines = [f"query: {payload.get('query', '?')}"]
+        for result in (payload.get("results") or ())[: self.definition.version and 20]:
+            if not isinstance(result, dict):
+                continue
+            title = str(result.get("title", ""))[:120]
+            link = str(result.get("url", ""))[:200]
+            lines.append(f"{title}\t{link}")
+            if len(lines) >= _SUMMARY_LIMIT:
+                break
+        return lines or ["no results"]
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        output = super().invoke(params, scope)
+        payload = _research_payload(output.stdout)
+        if payload is None:
+            return output
+        lines = "; ".join(
+            str(result.get("url", ""))
+            for result in (payload.get("results") or ())[:10]
+            if isinstance(result, dict)
+        )
+        search_url = str(payload.get("search_url", ""))
+        return ToolOutput(
+            stdout=output.stdout,
+            stderr=output.stderr,
+            exit_code=output.exit_code,
+            timed_out=output.timed_out,
+            secrets=output.secrets,
+            egress_events=output.egress_events,
+            traffic=(
+                {
+                    "method": "GET",
+                    "url": search_url,
+                    "status": int(payload.get("status") or 0),
+                    "response_body": lines,
+                },
+            ),
+        )
+
+
+__all__ = [
+    "DnsxResolveTool",
+    "FfufFuzzTool",
+    "HttpxProbeTool",
+    "NmapScanTool",
+    "NucleiScanTool",
+    "ResearchReadTool",
+    "ResearchSearchTool",
     "SubfinderPassiveTool",
 ]

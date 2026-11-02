@@ -79,6 +79,7 @@ def _client_request(proxy_port: int, request: dict) -> None:
     connection.request("GET", request["target"], headers=headers)
     response = connection.getresponse()
     request["status"] = response.status
+    request["headers"] = " ".join(response.headers.get_all("Proxy-Authenticate") or [])
     request["body"] = response.read()
     connection.close()
 
@@ -125,6 +126,10 @@ def test_proxy_requires_token(http_server: str) -> None:
     }
     run_proxy(proxy, [request, wrong])
     assert request["status"] == 407
+    # Firefox only understands Basic and gives up without a challenge it can
+    # satisfy, so both schemes are advertised
+    headers = request["headers"]
+    assert "Basic" in headers and "Bearer" in headers
     assert wrong["status"] == 407
     assert [event.verdict for event in proxy.events] == ["denied-auth", "denied-auth"]
 

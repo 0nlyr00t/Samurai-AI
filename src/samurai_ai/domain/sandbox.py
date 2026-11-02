@@ -50,6 +50,9 @@ class SandboxProfile(BaseModel):
     timeout_seconds: int = Field(default=60, ge=1)
     max_output_bytes: int = Field(default=65536, ge=1)
     network_mode: str = "none"
+    #: container UID:GID; the default drops to nobody, a browser needs root to
+    #: reach the build cache under /root/.cache (mode 700 there).
+    user: str = "65534:65534"
     # Secret env variables this profile may receive; values never enter argv.
     env_names: tuple[str, ...] = ()
     # Flag through which the tool takes the egress proxy URL, e.g. "-proxy".
@@ -78,6 +81,13 @@ class SandboxProfile(BaseModel):
             raise SandboxProfileError(
                 f"sandbox image must be pinned by digest (repo@sha256:...): {value!r}"
             )
+        return value
+
+    @field_validator("user")
+    @classmethod
+    def validate_user(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{1,7}:\d{1,7}", value):
+            raise SandboxProfileError(f"sandbox user must look like 65534:65534: {value!r}")
         return value
 
     @field_validator("network_mode")
