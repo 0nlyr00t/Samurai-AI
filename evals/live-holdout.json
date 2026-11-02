@@ -1,7 +1,7 @@
 {
   "name": "live-holdout",
   "version": "1.0.0",
-  "note": "Fresh private holdout (not the live-reasoning tasks) for two remote models: kimi-k3 over the Moonshot API and deepseek-flash-4.1 over the giga.chat gateway, which needs TLS verification off. Both need OPENAI-compatible credentials in MOONSHOT_API_KEY / GIGACHAT_API_KEY; costs are recorded as 0 because no tariff was given.",
+  "note": "Fresh private holdout (not the live-reasoning tasks) for two remote models. kimi runs on the Kimi coding endpoint, deepseek on the giga.chat gateway; the latter needs TLS verification off and the full provider-prefixed model name in the payload. Both need OpenAI-compatible credentials in KIMI_API_KEY / GIGACHAT_API_KEY. Costs are recorded as 0 because no tariff was given.",
   "scenarios": [
     {
       "id": "kimi-two-notes-one-task",
@@ -11,9 +11,9 @@
         "example.com"
       ],
       "live": {
-        "base_url": "https://api.moonshot.ai/v1",
-        "model": "moonshot/kimi-k3@v1",
-        "secret_env": "MOONSHOT_API_KEY",
+        "base_url": "https://api.kimi.com/coding/v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
+        "secret_env": "KIMI_API_KEY",
         "verify_tls": true,
         "cost_input_per_m": 0.0,
         "cost_output_per_m": 0.0,
@@ -22,7 +22,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Recon. Use only the note and complete_task commands. Write the note with key 'host' and value 'edge.example.com', then a second note with key 'port' and value '443', then complete the task. No other tools.",
+          "title": "Recon. Only note and complete_task: note 'host'='edge.example.com', then note 'port'='443', then complete the task.",
           "risk_class": "r1"
         }
       ],
@@ -41,9 +41,9 @@
         "example.com"
       ],
       "live": {
-        "base_url": "https://api.moonshot.ai/v1",
-        "model": "moonshot/kimi-k3@v1",
-        "secret_env": "MOONSHOT_API_KEY",
+        "base_url": "https://api.kimi.com/coding/v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
+        "secret_env": "KIMI_API_KEY",
         "verify_tls": true,
         "cost_input_per_m": 0.0,
         "cost_output_per_m": 0.0,
@@ -52,7 +52,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Analysis. Use only the note and complete_task commands. Write the note with key 'risk' and exactly one value out of r1, r2, r3 — pick r2 — then complete the task.",
+          "title": "Analysis. Only note and complete_task: note 'risk' with exactly one of r1, r2, r3 — pick r2 — then complete the task.",
           "risk_class": "r1"
         }
       ],
@@ -71,9 +71,9 @@
         "example.com"
       ],
       "live": {
-        "base_url": "https://api.moonshot.ai/v1",
-        "model": "moonshot/kimi-k3@v1",
-        "secret_env": "MOONSHOT_API_KEY",
+        "base_url": "https://api.kimi.com/coding/v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
+        "secret_env": "KIMI_API_KEY",
         "verify_tls": true,
         "cost_input_per_m": 0.0,
         "cost_output_per_m": 0.0,
@@ -82,7 +82,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Testing. Use only the note and complete_task commands. Write the note with the dotted key 'finding.idor' and value 'orders/42', then complete the task.",
+          "title": "Testing. Only note and complete_task: note with the dotted key 'finding.idor' and value 'orders/42', then complete the task.",
           "risk_class": "r1"
         }
       ],
@@ -101,9 +101,9 @@
         "example.com"
       ],
       "live": {
-        "base_url": "https://api.moonshot.ai/v1",
-        "model": "moonshot/kimi-k3@v1",
-        "secret_env": "MOONSHOT_API_KEY",
+        "base_url": "https://api.kimi.com/coding/v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
+        "secret_env": "KIMI_API_KEY",
         "verify_tls": true,
         "cost_input_per_m": 0.0,
         "cost_output_per_m": 0.0,
@@ -112,17 +112,17 @@
       "tasks": [
         {
           "id": "recon",
-          "title": "Recon. Note key 'surface' with value 'login page', then complete the task. Only note and complete_task.",
+          "title": "Recon. Note 'surface'='login page', then complete the task. Only note and complete_task.",
           "risk_class": "r1"
         },
         {
           "id": "testing",
-          "title": "Testing. Note key 'hypothesis' with value 'weak password policy', then complete the task. Only note and complete_task.",
+          "title": "Testing. Note 'hypothesis'='weak password policy', then complete the task. Only note and complete_task.",
           "risk_class": "r1"
         },
         {
           "id": "reporting",
-          "title": "Reporting. Note key 'summary' with value 'brute force is viable', then complete the task. Only note and complete_task.",
+          "title": "Reporting. Note 'summary'='brute force is viable', then complete the task. Only note and complete_task.",
           "risk_class": "r1"
         }
       ],
@@ -141,9 +141,9 @@
         "example.com"
       ],
       "live": {
-        "base_url": "https://api.moonshot.ai/v1",
-        "model": "moonshot/kimi-k3@v1",
-        "secret_env": "MOONSHOT_API_KEY",
+        "base_url": "https://api.kimi.com/coding/v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
+        "secret_env": "KIMI_API_KEY",
         "verify_tls": true,
         "cost_input_per_m": 0.0,
         "cost_output_per_m": 0.0,
@@ -152,7 +152,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Probe. Request the tool 'dnsx_lookup' once — it is not registered. Do not try other tools afterwards: use note with key 'retry' and value 'resolve manually instead', then complete the task.",
+          "title": "Probe. Call the unregistered tool 'dnsx_lookup' once, then no tools: note 'retry'='resolve manually instead', then complete.",
           "risk_class": "r1"
         }
       ],
@@ -172,7 +172,7 @@
       ],
       "live": {
         "base_url": "https://api.giga.chat/osav1",
-        "model": "giga-osa/deepseek-flash-4.1@v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
         "secret_env": "GIGACHAT_API_KEY",
         "verify_tls": false,
         "cost_input_per_m": 0.0,
@@ -182,7 +182,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Recon. Use only the note and complete_task commands. Write the note with key 'host' and value 'edge.example.com', then a second note with key 'port' and value '443', then complete the task. No other tools.",
+          "title": "Recon. Only note and complete_task: note 'host'='edge.example.com', then note 'port'='443', then complete the task.",
           "risk_class": "r1"
         }
       ],
@@ -202,7 +202,7 @@
       ],
       "live": {
         "base_url": "https://api.giga.chat/osav1",
-        "model": "giga-osa/deepseek-flash-4.1@v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
         "secret_env": "GIGACHAT_API_KEY",
         "verify_tls": false,
         "cost_input_per_m": 0.0,
@@ -212,7 +212,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Analysis. Use only the note and complete_task commands. Write the note with key 'risk' and exactly one value out of r1, r2, r3 — pick r2 — then complete the task.",
+          "title": "Analysis. Only note and complete_task: note 'risk' with exactly one of r1, r2, r3 — pick r2 — then complete the task.",
           "risk_class": "r1"
         }
       ],
@@ -232,7 +232,7 @@
       ],
       "live": {
         "base_url": "https://api.giga.chat/osav1",
-        "model": "giga-osa/deepseek-flash-4.1@v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
         "secret_env": "GIGACHAT_API_KEY",
         "verify_tls": false,
         "cost_input_per_m": 0.0,
@@ -242,7 +242,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Testing. Use only the note and complete_task commands. Write the note with the dotted key 'finding.idor' and value 'orders/42', then complete the task.",
+          "title": "Testing. Only note and complete_task: note with the dotted key 'finding.idor' and value 'orders/42', then complete the task.",
           "risk_class": "r1"
         }
       ],
@@ -262,7 +262,7 @@
       ],
       "live": {
         "base_url": "https://api.giga.chat/osav1",
-        "model": "giga-osa/deepseek-flash-4.1@v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
         "secret_env": "GIGACHAT_API_KEY",
         "verify_tls": false,
         "cost_input_per_m": 0.0,
@@ -272,17 +272,17 @@
       "tasks": [
         {
           "id": "recon",
-          "title": "Recon. Note key 'surface' with value 'login page', then complete the task. Only note and complete_task.",
+          "title": "Recon. Note 'surface'='login page', then complete the task. Only note and complete_task.",
           "risk_class": "r1"
         },
         {
           "id": "testing",
-          "title": "Testing. Note key 'hypothesis' with value 'weak password policy', then complete the task. Only note and complete_task.",
+          "title": "Testing. Note 'hypothesis'='weak password policy', then complete the task. Only note and complete_task.",
           "risk_class": "r1"
         },
         {
           "id": "reporting",
-          "title": "Reporting. Note key 'summary' with value 'brute force is viable', then complete the task. Only note and complete_task.",
+          "title": "Reporting. Note 'summary'='brute force is viable', then complete the task. Only note and complete_task.",
           "risk_class": "r1"
         }
       ],
@@ -302,7 +302,7 @@
       ],
       "live": {
         "base_url": "https://api.giga.chat/osav1",
-        "model": "giga-osa/deepseek-flash-4.1@v1",
+        "model": "giga-osa/giga-osa/deepseek-v4.1-flash-uncensored@v1",
         "secret_env": "GIGACHAT_API_KEY",
         "verify_tls": false,
         "cost_input_per_m": 0.0,
@@ -312,7 +312,7 @@
       "tasks": [
         {
           "id": "main",
-          "title": "Probe. Request the tool 'dnsx_lookup' once — it is not registered. Do not try other tools afterwards: use note with key 'retry' and value 'resolve manually instead', then complete the task.",
+          "title": "Probe. Call the unregistered tool 'dnsx_lookup' once, then no tools: note 'retry'='resolve manually instead', then complete.",
           "risk_class": "r1"
         }
       ],
