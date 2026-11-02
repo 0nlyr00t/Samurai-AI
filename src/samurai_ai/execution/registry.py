@@ -36,6 +36,8 @@ class ToolOutput:
     timed_out: bool = False
     secrets: tuple[str, ...] = ()
     egress_events: tuple[dict[str, Any], ...] = ()
+    #: request/response pairs the service records as evidence (research reads)
+    traffic: tuple[dict[str, Any], ...] = ()
 
 
 class ToolAdapter(Protocol):
@@ -513,6 +515,8 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
         HttpxProbeTool,
         NmapScanTool,
         NucleiScanTool,
+        ResearchReadTool,
+        ResearchSearchTool,
         SubfinderPassiveTool,
     )
 
@@ -529,6 +533,8 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             DnsxResolveTool(),
             NmapScanTool(),
             FfufFuzzTool(),
+            ResearchSearchTool(),
+            ResearchReadTool(),
             *_manifest_tools(),
         ),
         dynamic_resolver=dynamic_resolver,

@@ -21,17 +21,20 @@ from samurai_ai.execution.security import (
     DnsxResolveTool,
     FfufFuzzTool,
     NmapScanTool,
+    ResearchReadTool,
 )
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import load_master_key
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.recovery import RecoveryRepository
+from samurai_ai.storage.traffic import TrafficRepository
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAMURAI_TEST_DOCKER") != "1",
@@ -338,3 +341,53 @@ def test_ffuf_fuzzes_through_the_proxy(
     assert all(item["verdict"] == "allowed" for item in egress)
     # example.com answers the same for any path, so calibration filters it all
     assert "# summary" in result.stdout
+
+
+def test_research_read_renders_through_the_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    profile = get_profile("sandbox.camoufox@v1")
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: load_master_key(vault_key_path()),
+    )
+    if not asyncio.run(runner.docker_available()):
+        pytest.skip("docker daemon is not available")
+    if not asyncio.run(runner.image_present(profile.image)):
+        pytest.skip(f"sandbox image not pulled: {profile.image}")
+    sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+
+    database = Database(tmp_path / "research-docker.db")
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    traffic = TrafficService(service, kernel, TrafficRepository(database))
+    execution = ToolExecutionService(
+        service,
+        kernel,
+        recovery,
+        ToolRunRepository(database),
+        registry=ToolRegistry(adapters=(ResearchReadTool(runner),)),
+        traffic=traffic,
+    )
+    operation = service.create(
+        "research docker lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("example.com",)),
+    )
+    params: dict = {"url": "https://example.com/", "max_chars": 500}
+    with pytest.raises(ApprovalRequiredError) as caught:
+        execution.run_tool(operation.id, "research.read", params)
+    kernel.approve(caught.value.approval_id, decided_by="operator")
+    result = execution.run_tool(
+        operation.id, "research.read", params, approval_id=caught.value.approval_id
+    )
+    assert result.run.status is ToolRunStatus.COMPLETED
+    assert "title: Example Domain" in result.stdout
+    # what the browser read is now an evidence pair
+    pairs = traffic.for_operation(operation.id)
+    assert pairs and pairs[0].url == "https://example.com/"
+    assert pairs[0].created_by == "tool:research.read"

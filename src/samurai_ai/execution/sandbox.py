@@ -241,6 +241,32 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         network_mode="scoped",
         proxy_flag="-x",
     ),
+    SandboxProfile(
+        id="sandbox.camoufox@v1",
+        description="Anti-detect Firefox (camoufox) driven by an inline python "
+        "script; the only network path is the scoped proxy",
+        image=(
+            "etriasnl/camoufox@sha256:"
+            "f9d586d5e4c9f6a826afa8479a61dbbd42eedb69d522718fbe2ce64fc008e5a9"
+        ),
+        allowed_executables=("python3",),
+        cpu_limit="2.0",
+        memory_mb=1024,
+        pids_limit=512,
+        timeout_seconds=600,
+        max_output_bytes=524288,
+        network_mode="scoped",
+        # the browser build lives under /root/.cache (mode 700)
+        user="0:0",
+        # camoufox checks its release and does a geoip lookup when a proxy is set
+        egress_hosts=(
+            "html.duckduckgo.com",
+            "duckduckgo.com",
+            "raw.githubusercontent.com",
+            "api.github.com",
+            "github.com",
+        ),
+    ),
 )
 
 
@@ -390,7 +416,7 @@ class DockerSandboxRunner:
             "--security-opt",
             "no-new-privileges",
             "--user",
-            "65534:65534",
+            profile.user,
             "--cpus",
             profile.cpu_limit,
             "--memory",

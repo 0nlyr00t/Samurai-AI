@@ -101,6 +101,7 @@ from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.swarm import SwarmService
 from samurai_ai.services.teamwork import TeamworkService
+from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.access import AccessRepository
 from samurai_ai.storage.agents import AgentRunRepository
@@ -127,6 +128,7 @@ from samurai_ai.storage.skill_gaps import SkillGapRepository
 from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.teamwork import TeamworkRepository
+from samurai_ai.storage.traffic import TrafficRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
@@ -635,6 +637,7 @@ def _make_services(
         recovery_repository,
         custom_models=custom_models,
     )
+    traffic_service = TrafficService(operations, kernel, TrafficRepository(database))
     execution = ToolExecutionService(
         operations,
         kernel,
@@ -642,6 +645,7 @@ def _make_services(
         ToolRunRepository(database),
         registry=default_registry(mcp.resolver()),
         vault=vault,
+        traffic=traffic_service,
     )
     memory_service = CampaignMemoryService(MemoryRepository(database), vault)
     skill_service = SkillService(

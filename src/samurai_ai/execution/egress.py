@@ -261,7 +261,11 @@ class EgressProxy:
         if not check_proxy_authorization(headers.get("proxy-authorization"), self.token):
             writer.write(
                 b"HTTP/1.1 407 Proxy Authentication Required\r\n"
+                # Both schemes are offered: curl/wget answer Bearer, Firefox only
+                # understands Basic proxy auth and gives up without a challenge
+                # it can satisfy.
                 b"Proxy-Authenticate: Bearer realm=samurai-egress\r\n"
+                b"Proxy-Authenticate: Basic realm=samurai-egress\r\n"
                 b"Content-Length: 0\r\nConnection: close\r\n\r\n"
             )
             await writer.drain()
