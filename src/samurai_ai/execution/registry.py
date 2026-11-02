@@ -509,6 +509,11 @@ def _manifest_tools() -> tuple[Any, ...]:
 
 
 def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
+    from samurai_ai.execution.exploits import (
+        ExploitAnalyzeTool,
+        ExploitBuildTool,
+        ExploitRunTool,
+    )
     from samurai_ai.execution.remote import (
         AdbTool,
         RdpCheckTool,
@@ -548,6 +553,9 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             AdbTool(),
             VmControlTool(),
             VmDiskTool(),
+            ExploitAnalyzeTool(),
+            ExploitBuildTool(),
+            ExploitRunTool(),
             *_manifest_tools(),
         ),
         dynamic_resolver=dynamic_resolver,
