@@ -1,5 +1,6 @@
 import asyncio
 import http.client
+import ipaddress
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -10,7 +11,11 @@ import pytest
 from samurai_ai.domain.execution import ApprovalRequiredError, ToolRunStatus
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
-from samurai_ai.execution.egress import EgressProxy, generate_proxy_token
+from samurai_ai.execution.egress import (
+    EgressProxy,
+    generate_proxy_token,
+    parse_request_target,
+)
 from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.registry import SandboxExecTool, ToolRegistry
 from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
@@ -243,6 +248,179 @@ def test_proxy_connect_tunnel(http_server: str) -> None:
     assert proxy.events[0].bytes_received > 0
 
 
+async def _socks5_session(
+    proxy_port: int,
+    address: str,
+    address_type: int,
+    port: int,
+    *,
+    token: str = TOKEN,
+    username: bytes = b"samurai",
+    command: int = 1,
+    payload: bytes | None = None,
+    offer_auth: bool = True,
+) -> dict:
+    reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
+    result: dict = {}
+    try:
+        methods = b"\x00\x02" if offer_auth else b"\x00"
+        writer.write(bytes([5, len(methods)]) + methods)
+        await writer.drain()
+        result["method"] = await reader.readexactly(2)
+        if result["method"][1] != 2:
+            return result
+        writer.write(bytes([1, len(username)]) + username)
+        writer.write(bytes([len(token)]) + token.encode())
+        await writer.drain()
+        result["auth"] = await reader.readexactly(2)
+        if result["auth"][1] != 0:
+            return result
+        if address_type == 3:
+            encoded = bytes([len(address)]) + address.encode("ascii")
+        else:
+            encoded = ipaddress.ip_address(address).packed
+        writer.write(
+            bytes([5, command, 0, address_type]) + encoded + port.to_bytes(2, "big")
+        )
+        await writer.drain()
+        result["reply"] = await reader.readexactly(10)
+        if result["reply"][1] != 0 or payload is None:
+            return result
+        writer.write(payload)
+        await writer.drain()
+        result["body"] = await reader.read(65536)
+        return result
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+def run_socks5(proxy: EgressProxy, **kwargs: object) -> dict:  # type: ignore[no-untyped-def]
+    async def scenario() -> dict:
+        _, port = await proxy.start()
+        try:
+            return await _socks5_session(port, **kwargs)  # type: ignore[arg-type]
+        finally:
+            await proxy.stop()
+
+    return asyncio.run(scenario())
+
+
+def test_socks5_tunnels_to_an_allowed_host(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("127.0.0.1",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+    )
+    # domain address type, the way a tool hands a host over
+    payload = (
+        f"GET {http_server}/data HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode()
+    result = run_socks5(
+        proxy, address="127.0.0.1", address_type=3, port=port, payload=payload
+    )
+    assert result["method"] == b"\x05\x02"
+    assert result["auth"] == b"\x01\x00"
+    assert result["reply"][:2] == b"\x05\x00"
+    assert b"egress-ok" in result["body"]
+    events = [event for event in proxy.events if event.verdict == "allowed"]
+    assert len(events) == 1
+    assert events[0].host == "127.0.0.1"
+    assert events[0].port == port
+    assert events[0].bytes_sent > 0
+
+
+def test_socks5_rejects_a_wrong_token(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("127.0.0.1",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+    )
+    result = run_socks5(
+        proxy, address="127.0.0.1", address_type=3, port=port, token="wrong-token"
+    )
+    assert result["auth"] == b"\x01\x01"
+    assert [event.verdict for event in proxy.events] == ["denied-auth"]
+
+
+def test_socks5_requires_the_userpass_method(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("127.0.0.1",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+    )
+    result = run_socks5(
+        proxy, address="127.0.0.1", address_type=3, port=port, offer_auth=False
+    )
+    assert result["method"] == b"\x05\xff"
+    assert [event.verdict for event in proxy.events] == ["denied-auth"]
+
+
+def test_socks5_denies_out_of_scope_and_foreign_port(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("example.com",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+    )
+    outside = run_socks5(proxy, address="127.0.0.1", address_type=3, port=port)
+    assert outside["reply"][:2] == b"\x05\x02"
+    wrong_port = run_socks5(
+        proxy, address="127.0.0.1", address_type=1, port=port + 1
+    )
+    assert wrong_port["reply"][:2] == b"\x05\x02"
+    assert [event.verdict for event in proxy.events] == [
+        "denied-scope",
+        "denied-port",
+    ]
+
+
+def test_socks5_accepts_extra_hosts(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("example.com",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+        extra_hosts=frozenset({"127.0.0.1"}),
+    )
+    result = run_socks5(proxy, address="127.0.0.1", address_type=1, port=port)
+    assert result["reply"][:2] == b"\x05\x00"
+
+
+def test_socks5_rejects_an_unsupported_command(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("127.0.0.1",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+    )
+    # only CONNECT is implemented, BIND (2) and UDP ASSOCIATE (3) are not
+    result = run_socks5(
+        proxy, address="127.0.0.1", address_type=1, port=port, command=3
+    )
+    assert result["reply"][:2] == b"\x05\x07"
+    assert [event.verdict for event in proxy.events] == ["denied-protocol"]
+
+
+def test_socks5_accepts_ipv6_address_type(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("::1",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+        resolver=lambda host: ("127.0.0.1",),
+    )
+    result = run_socks5(
+        proxy, address="::1", address_type=4, port=port
+    )
+    assert result["reply"][:2] == b"\x05\x00"
+    assert proxy.events[0].host == "::1"
+
+
 def test_proxy_stopped_after_use(http_server: str) -> None:
     port = int(http_server.rsplit(":", 1)[1])
     proxy = EgressProxy(
@@ -354,3 +532,15 @@ def test_scoped_sandbox_run_logs_egress_events(
 
 def test_generate_token_unique() -> None:
     assert generate_proxy_token() != generate_proxy_token()
+
+def test_socks5_ipv6_target_is_scope_checked_with_brackets() -> None:
+    proxy = EgressProxy(
+        ScopeContract(includes=("::1",)), TOKEN, allowed_ports=frozenset({443})
+    )
+    assert proxy._verdict("::1", 443, "https") == "allowed"
+    assert proxy._verdict("::2", 443, "https") == "denied-scope"
+
+
+def test_connect_target_accepts_a_bracketed_ipv6_literal() -> None:
+    scheme, host, port, _ = parse_request_target("CONNECT", "[::1]:443")
+    assert (scheme, host, port) == ("https", "::1", 443)
