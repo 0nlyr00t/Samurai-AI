@@ -83,6 +83,7 @@ from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.exports import IntegrationExportService
 from samurai_ai.services.goals import GoalNotFoundError, GoalService
+from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
 from samurai_ai.services.memory import CampaignMemoryService
@@ -349,7 +350,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if recovery_result is not None:
             return recovery_result
-        kernel_result = handle_kernel_command(args, kernel_service)
+        impact_service = ImpactService(operation_service, kernel_service)
+        kernel_result = handle_kernel_command(args, kernel_service, impact_service)
         if kernel_result is not None:
             return kernel_result
         execution_result = handle_execution_command(args, execution_service, settings_service)
