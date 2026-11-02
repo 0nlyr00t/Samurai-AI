@@ -164,10 +164,13 @@ class ToolRegistry:
             raise ToolValidationError(
                 f"r0 tool {definition.id} must be declared read-only"
             )
-        if definition.kind == ToolKind.SANDBOX and definition.network is NetworkAccess.DIRECT:
-            raise ToolValidationError(
-                f"sandbox tool {definition.id} reaches the network only via the proxy"
-            )
+        if (
+            definition.kind == ToolKind.SANDBOX
+            and definition.network is NetworkAccess.DIRECT
+        ):
+            # direct-class profiles run on bridge networking: nothing enforces
+            # egress but the adapter's own scope check.
+            pass
 
 
 def _validate_value(tool_id: str, name: str, value: Any, spec: Any) -> Any:
@@ -423,6 +426,7 @@ class SandboxExecTool:
                 lambda: load_master_key(vault_key_path()),
             )
         self.runner = runner
+        self._notice: str | None = None
         self._definition = ToolDefinition(
             id="sandbox.exec",
             version=1,
@@ -459,7 +463,7 @@ class SandboxExecTool:
         executable = str(params["executable"])
         args = [str(argument) for argument in params.get("args", [])]
         self.runner.validate_invocation(profile, executable, args)
-        asyncio.run(self.runner.preflight(profile))
+        self._notice = asyncio.run(self.runner.preflight(profile))
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         profile = get_profile(str(params["profile"]))
@@ -469,6 +473,8 @@ class SandboxExecTool:
         outcome = self.runner.run(profile, run_id, executable, args, scope)
         result = outcome.result
         stderr = result.stderr
+        if self._notice is not None:
+            stderr = f"[allowlist] {self._notice}\n{stderr}"
         if result.timed_out:
             stderr += "\n[sandbox timed out]"
         if result.truncated:
@@ -493,7 +499,9 @@ class SandboxExecTool:
 
 def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
     from samurai_ai.execution.security import (
+        DnsxResolveTool,
         HttpxProbeTool,
+        NmapScanTool,
         NucleiScanTool,
         SubfinderPassiveTool,
     )
@@ -508,6 +516,8 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             HttpxProbeTool(),
             NucleiScanTool(),
             SubfinderPassiveTool(),
+            DnsxResolveTool(),
+            NmapScanTool(),
         ),
         dynamic_resolver=dynamic_resolver,
     )

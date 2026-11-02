@@ -17,6 +17,7 @@ from samurai_ai.execution.sandbox import (
     get_profile,
     sign_allowlist,
 )
+from samurai_ai.execution.security import DnsxResolveTool, NmapScanTool
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -178,3 +179,104 @@ def test_scoped_sandbox_egress_through_proxy(
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_dnsx_resolves_through_socks5_and_doh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    profile = get_profile("sandbox.dnsx@v1")
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: load_master_key(vault_key_path()),
+    )
+    if not asyncio.run(runner.docker_available()):
+        pytest.skip("docker daemon is not available")
+    if not asyncio.run(runner.image_present(profile.image)):
+        pytest.skip(f"sandbox image not pulled: {profile.image}")
+    sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+
+    database = Database(tmp_path / "dnsx-docker.db")
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    execution = ToolExecutionService(
+        service,
+        kernel,
+        recovery,
+        ToolRunRepository(database),
+        registry=ToolRegistry(adapters=(DnsxResolveTool(runner),)),
+    )
+    operation = service.create(
+        "DNS docker lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("example.com", "*.example.com")),
+    )
+    params: dict = {"hosts": ["example.com", "www.example.com"]}
+    with pytest.raises(ApprovalRequiredError) as caught:
+        execution.run_tool(operation.id, "recon.dnsx-resolve", params)
+    kernel.approve(caught.value.approval_id, decided_by="operator")
+    result = execution.run_tool(
+        operation.id,
+        "recon.dnsx-resolve",
+        params,
+        approval_id=caught.value.approval_id,
+    )
+    assert result.run.status is ToolRunStatus.COMPLETED
+    assert "NOERROR" in result.stdout
+    assert "A=" in result.stdout
+    completed = [
+        event
+        for event in service.events(operation.id)
+        if event.event_type == "tool.run.completed"
+    ]
+    egress = completed[0].payload.get("egress", [])
+    assert egress and all(item["host"] == "cloudflare-dns.com" for item in egress)
+    assert all(item["verdict"] == "allowed" for item in egress)
+
+
+def test_nmap_scan_finds_an_open_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    profile = get_profile("sandbox.nmap@v1")
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: load_master_key(vault_key_path()),
+    )
+    if not asyncio.run(runner.docker_available()):
+        pytest.skip("docker daemon is not available")
+    if not asyncio.run(runner.image_present(profile.image)):
+        pytest.skip(f"sandbox image not pulled: {profile.image}")
+    sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+
+    database = Database(tmp_path / "nmap-docker.db")
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    execution = ToolExecutionService(
+        service,
+        kernel,
+        recovery,
+        ToolRunRepository(database),
+        registry=ToolRegistry(adapters=(NmapScanTool(runner),)),
+    )
+    operation = service.create(
+        "nmap docker lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("example.com",)),
+    )
+    params: dict = {"targets": ["example.com"], "ports": "443"}
+    with pytest.raises(ApprovalRequiredError) as caught:
+        execution.run_tool(operation.id, "scan.nmap", params)
+    kernel.approve(caught.value.approval_id, decided_by="operator")
+    result = execution.run_tool(
+        operation.id, "scan.nmap", params, approval_id=caught.value.approval_id
+    )
+    assert result.run.status is ToolRunStatus.COMPLETED
+    summary = result.stdout.split("# raw")[0]
+    assert ":443/tcp open" in summary

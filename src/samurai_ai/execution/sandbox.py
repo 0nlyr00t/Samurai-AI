@@ -9,9 +9,11 @@ must carry a valid HMAC signature derived from the vault master key.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -182,6 +184,46 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
             "WINDVANE_API_KEY",
         ),
     ),
+    SandboxProfile(
+        id="sandbox.dnsx@v1",
+        description="DNS resolver (projectdiscovery/dnsx) pinned to a DoH "
+        "resolver and reached only through the SOCKS5 egress entrance",
+        image=(
+            "projectdiscovery/dnsx@sha256:"
+            "8fced0bedf3655e06c9f1805f6277d60d4988a4b13209e24b3d7cde7baa656ec"
+        ),
+        allowed_executables=("dnsx",),
+        cpu_limit="1.0",
+        memory_mb=256,
+        pids_limit=64,
+        timeout_seconds=180,
+        max_output_bytes=262144,
+        network_mode="scoped",
+        proxy_flag="-proxy",
+        proxy_scheme="socks5",
+        # The resolver is part of the signature: the model cannot point the
+        # lookups at a DoH endpoint of its choosing.
+        resolver_url="doh:https://cloudflare-dns.com/dns-query",
+        egress_hosts=("cloudflare-dns.com",),
+    ),
+    SandboxProfile(
+        id="sandbox.nmap@v1",
+        description="Port scanner (nmap) on plain bridge networking: a direct "
+        "class where only the adapter's scope check stands in front",
+        image=(
+            "instrumentisto/nmap@sha256:"
+            "96f6ed194519b62421a1a1c57809e65a7f94d2aa1c8c25676f247e5e148c0827"
+        ),
+        allowed_executables=("nmap",),
+        cpu_limit="2.0",
+        memory_mb=512,
+        pids_limit=256,
+        timeout_seconds=600,
+        max_output_bytes=524288,
+        # nmap's own --proxies covers only -sV/NSE and takes no credentials, and
+        # port scanning ignores it entirely — so the proxy is left out.
+        network_mode="direct",
+    ),
 )
 
 
@@ -205,6 +247,9 @@ class DockerSandboxRunner:
     ) -> None:
         self.manager = manager
         self.signature_path = signature_path
+        # Sidecar with the last automatic re-sign: reason and time survive the
+        # stderr scroll-back and `sandbox profiles` shows them.
+        self.resign_journal_path = signature_path.with_suffix(".reason")
         self.master_key_loader = master_key_loader
         self.egress_allowed_ports = egress_allowed_ports
 
@@ -262,6 +307,9 @@ class DockerSandboxRunner:
             DOCKER_EXECUTABLE,
             "run",
             "--rm",
+            # docker only forwards our stdin into the container with -i; the
+            # process stdin is always closed, so a tool sees EOF either way.
+            "--interactive",
         ]
         if profile.network_mode == "scoped":
             if proxy_url is None:
@@ -282,8 +330,9 @@ class DockerSandboxRunner:
                 "--env",
                 "NO_PROXY=",
             ]
-        else:
+        elif profile.network_mode == "none":
             argv += ["--network", "none"]
+        # "direct": bridge networking as-is, no proxy of ours in the path.
         for name, value in (env or {}).items():
             argv += ["--env", f"{name}={value}"]
         for name in (secret_env or {}):
@@ -316,18 +365,68 @@ class DockerSandboxRunner:
         ]
         return argv
 
-    def verify_allowlist_signature(self) -> None:
+    def allowlist_status(self) -> str:
+        """``signed`` / ``unsigned`` / ``invalid`` — without writing anything."""
         if not self.signature_path.exists():
-            raise SandboxSignatureError(
-                f"sandbox allowlist signature is missing: {self.signature_path}; "
-                "create it with 'samurai sandbox sign'"
-            )
+            return "unsigned"
+        try:
+            master_key = self.master_key_loader()
+        except Exception:
+            return "unknown"
         signature = self.signature_path.read_text(encoding="utf-8")
-        if not verify_profiles(self.master_key_loader(), SANDBOX_PROFILES, signature):
+        return (
+            "signed"
+            if verify_profiles(master_key, SANDBOX_PROFILES, signature)
+            else "invalid"
+        )
+
+    def verify_allowlist_signature(self) -> str | None:
+        """Keep the allowlist signed; re-sign on drift and say so.
+
+        The signature lives next to the state, so its key is as reachable as the
+        project code is: what it buys is pinned digests in one artifact and a
+        visible drift, not authenticity against a local writer. Re-signing on
+        drift therefore beats refusing on every upgrade — as long as it is
+        announced and recorded.
+        """
+        status = self.allowlist_status()
+        if status == "signed":
+            return None
+        if status == "unknown":
             raise SandboxSignatureError(
-                "sandbox allowlist signature is invalid; "
-                "re-create it with 'samurai sandbox sign'"
+                "sandbox allowlist signature cannot be checked: the vault master "
+                "key is unavailable"
             )
+        master_key = self.master_key_loader()
+        sign_allowlist(self.signature_path, master_key)
+        self._record_resign(status)
+        return (
+            f"allowlist signature was {status}; re-signed {len(SANDBOX_PROFILES)} "
+            f"profile(s) after a profile change"
+        )
+
+    def _record_resign(self, reason: str) -> None:
+        payload = {
+            "resigned_at": datetime.now(UTC).isoformat(),
+            "reason": reason,
+            "profiles": len(SANDBOX_PROFILES),
+        }
+        descriptor = os.open(
+            self.resign_journal_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        try:
+            os.write(descriptor, (json.dumps(payload) + "\n").encode("utf-8"))
+        finally:
+            os.close(descriptor)
+
+    def resign_record(self) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(self.resign_journal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
 
     async def docker_available(self) -> bool:
         try:
@@ -349,8 +448,8 @@ class DockerSandboxRunner:
             return False
         return result.exit_code == 0
 
-    async def preflight(self, profile: SandboxProfile) -> None:
-        self.verify_allowlist_signature()
+    async def preflight(self, profile: SandboxProfile) -> str | None:
+        notice = self.verify_allowlist_signature()
         if not await self.docker_available():
             raise SandboxError(
                 "docker is not available; sandbox.exec requires a running Docker daemon"
@@ -360,6 +459,7 @@ class DockerSandboxRunner:
                 f"sandbox image is not present locally: {profile.image}; "
                 "pull it manually as a trusted operator action (auto-pull is disabled)"
             )
+        return notice
 
     def run(
         self,
@@ -371,9 +471,12 @@ class DockerSandboxRunner:
         *,
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
+        stdin_data: bytes | None = None,
     ) -> SandboxRunOutcome:
         return asyncio.run(
-            self._run(profile, run_id, executable, args, scope, env, secret_env)
+            self._run(
+                profile, run_id, executable, args, scope, env, secret_env, stdin_data
+            )
         )
 
     async def _run(
@@ -385,6 +488,7 @@ class DockerSandboxRunner:
         scope: ScopeContract | None,
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
+        stdin_data: bytes | None = None,
     ) -> SandboxRunOutcome:
         proxy: EgressProxy | None = None
         proxy_url: str | None = None
@@ -401,7 +505,10 @@ class DockerSandboxRunner:
                 extra_hosts=frozenset(profile.egress_hosts),
             )
             _, proxy_port = await proxy.start()
-            proxy_url = f"http://samurai:{token}@host.docker.internal:{proxy_port}"
+            proxy_url = (
+                f"{profile.proxy_scheme}://samurai:{token}"
+                f"@host.docker.internal:{proxy_port}"
+            )
         if proxy_url is not None and profile.proxy_flag is not None:
             args = [*args, profile.proxy_flag, proxy_url]
         argv = self.build_argv(
@@ -409,11 +516,16 @@ class DockerSandboxRunner:
         )
         await self.preflight(profile)
         child_env = {**(env or {}), **(secret_env or {})} or None
+        extra: dict[str, Any] = {}
+        if child_env:
+            extra["env"] = child_env
+        if stdin_data is not None:
+            extra["stdin_data"] = stdin_data
         try:
             result = await self.manager.run(
                 argv,
                 timeout_seconds=profile.timeout_seconds + _TIMEOUT_GRACE_SECONDS,
-                **({"env": child_env} if child_env else {}),
+                **extra,
             )
         finally:
             if proxy is not None:

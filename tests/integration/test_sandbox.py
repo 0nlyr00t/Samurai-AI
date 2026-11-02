@@ -5,7 +5,7 @@ import pytest
 from samurai_ai.domain.execution import ApprovalRequiredError, ToolRunStatus
 from samurai_ai.domain.kernel import ArtifactKind
 from samurai_ai.domain.operations import Operation, OperationMode
-from samurai_ai.domain.sandbox import SandboxError, SandboxSignatureError
+from samurai_ai.domain.sandbox import SandboxError
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.registry import SandboxExecTool, ToolRegistry
@@ -66,18 +66,20 @@ def make_operation(service: OperationService) -> Operation:
     )
 
 
-def test_sandbox_exec_fail_closed_without_signature(tmp_path: Path) -> None:
+def test_sandbox_exec_signs_a_missing_allowlist(tmp_path: Path) -> None:
     manager = FakeManager()
     service, _, execution = make_stack(tmp_path / "unsigned.db", manager)
     operation = make_operation(service)
-    with pytest.raises(SandboxSignatureError, match="signature is missing"):
+    with pytest.raises(ApprovalRequiredError):
         execution.run_tool(
             operation.id,
             "sandbox.exec",
             {"profile": PROFILE_ID, "executable": "echo"},
         )
+    # the run gets past the signature check and stops at the approval prompt
+    assert (tmp_path / "sandbox-allowlist.sig").exists()
     assert execution.list_runs(operation.id) == []
-    assert manager.calls == []
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
 
 
 def test_sandbox_exec_fail_closed_when_docker_unavailable(tmp_path: Path) -> None:

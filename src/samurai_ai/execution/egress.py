@@ -6,6 +6,12 @@ an ephemeral port. Sandboxed containers reach it via the host gateway
 ``Proxy-Authorization: Bearer <token>`` (or Basic with the token as the
 password, which is what curl/wget send for proxy URLs with userinfo).
 
+Two entrances share one policy: HTTP (plain forwarding and CONNECT tunnels)
+and SOCKS5 CONNECT-only (RFC 1928/1929, username ``samurai``, password = the
+per-run token) for tools that take nothing but a SOCKS URL. SOCKS5 is
+recognized by its 0x05 greeting byte; it runs the same ``_verdict`` and emits
+the same EgressEvents, and UDP ASSOCIATE is not implemented.
+
 Policy is deterministic from the operation ScopeContract: the target host is
 evaluated against domain/wildcard/URL/IP rules, the hostname is resolved once
 and every resolved address is checked against exclusions, and the upstream
@@ -21,6 +27,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hmac
+import ipaddress
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -41,6 +49,23 @@ VERDICT_DENIED_AUTH = "denied-auth"
 VERDICT_DENIED_SCOPE = "denied-scope"
 VERDICT_DENIED_PORT = "denied-port"
 VERDICT_DENIED_PROTOCOL = "denied-protocol"
+
+_SOCKS5_VERSION = 5
+_SOCKS5_AUTH_VERSION = 1
+_SOCKS5_METHOD_NO_AUTH = 0
+_SOCKS5_METHOD_USERPASS = 2
+_SOCKS5_METHOD_NONE_ACCEPTABLE = 0xFF
+_SOCKS5_CMD_CONNECT = 1
+_SOCKS5_ATYP_IPV4 = 1
+_SOCKS5_ATYP_DOMAIN = 3
+_SOCKS5_ATYP_IPV6 = 4
+_SOCKS5_REP_SUCCESS = 0
+_SOCKS5_REP_NOT_ALLOWED = 2
+_SOCKS5_REP_UNREACHABLE = 3
+_SOCKS5_REP_REFUSED = 5
+_SOCKS5_REP_CMD_UNSUPPORTED = 7
+_SOCKS5_REP_ATYP_UNSUPPORTED = 8
+_SOCKS5_USERNAME = "samurai"
 
 
 @dataclass(frozen=True)
@@ -77,7 +102,13 @@ def parse_request_target(
 ) -> tuple[str, str, int, str]:
     """Return (scheme, host, port, path) for CONNECT and absolute-URI forms."""
     if method == "CONNECT":
-        host, separator, raw_port = target.partition(":")
+        if target.startswith("["):
+            host, separator, rest = target[1:].partition("]")
+            if not separator or not rest.startswith(":"):
+                raise ToolExecutionError(f"invalid CONNECT target: {target!r}")
+            raw_port = rest[1:]
+        else:
+            host, separator, raw_port = target.partition(":")
         if not separator or not host:
             raise ToolExecutionError(f"invalid CONNECT target: {target!r}")
         try:
@@ -182,7 +213,7 @@ class EgressProxy:
             except ToolExecutionError:
                 return VERDICT_DENIED_SCOPE
             return VERDICT_ALLOWED
-        decision = self.scope.evaluate(f"{scheme}://{host}/")
+        decision = self.scope.evaluate(_scope_url(host, scheme))
         if not decision.allowed:
             return VERDICT_DENIED_SCOPE
         try:
@@ -212,7 +243,11 @@ class EgressProxy:
     async def _dispatch(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        request = await reader.readuntil(b"\r\n\r\n")
+        first = await reader.readexactly(1)
+        if first[0] == _SOCKS5_VERSION:
+            await self._dispatch_socks5(reader, writer)
+            return
+        request = first + await reader.readuntil(b"\r\n\r\n")
         if len(request) > _MAX_HEADER_BYTES:
             raise ToolExecutionError("proxy request headers too large")
         try:
@@ -288,6 +323,91 @@ class EgressProxy:
                 bytes_sent=counters.sent,
                 bytes_received=counters.received,
             )
+        )
+
+    async def _dispatch_socks5(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        method_count = (await reader.readexactly(1))[0]
+        methods = await reader.readexactly(method_count) if method_count else b""
+        if _SOCKS5_METHOD_USERPASS not in methods:
+            writer.write(bytes([_SOCKS5_VERSION, _SOCKS5_METHOD_NONE_ACCEPTABLE]))
+            await writer.drain()
+            self._emit(EgressEvent(host="", port=0, verdict=VERDICT_DENIED_AUTH))
+            return
+        writer.write(bytes([_SOCKS5_VERSION, _SOCKS5_METHOD_USERPASS]))
+        await writer.drain()
+
+        version = (await reader.readexactly(1))[0]
+        if version != _SOCKS5_AUTH_VERSION:
+            raise ToolExecutionError("unsupported SOCKS5 auth version")
+        username = await _read_socks5_field(reader)
+        password = await _read_socks5_field(reader)
+        if not self._check_socks5_credentials(username, password):
+            writer.write(bytes([_SOCKS5_AUTH_VERSION, 0x01]))
+            await writer.drain()
+            self._emit(EgressEvent(host="", port=0, verdict=VERDICT_DENIED_AUTH))
+            return
+        writer.write(bytes([_SOCKS5_AUTH_VERSION, 0x00]))
+        await writer.drain()
+
+        version, command, _, address_type = await reader.readexactly(4)
+        if version != _SOCKS5_VERSION:
+            raise ToolExecutionError("unsupported SOCKS5 request version")
+        try:
+            host = await _read_socks5_address(reader, address_type)
+        except ToolExecutionError:
+            await _socks5_reply(writer, _SOCKS5_REP_ATYP_UNSUPPORTED)
+            self._emit(
+                EgressEvent(host="", port=0, verdict=VERDICT_DENIED_PROTOCOL)
+            )
+            return
+        port = int.from_bytes(await reader.readexactly(2), "big")
+        if command != _SOCKS5_CMD_CONNECT:
+            await _socks5_reply(writer, _SOCKS5_REP_CMD_UNSUPPORTED)
+            self._emit(
+                EgressEvent(host=host, port=port, verdict=VERDICT_DENIED_PROTOCOL)
+            )
+            return
+
+        verdict = self._verdict(host, port, "https")
+        if verdict != VERDICT_ALLOWED:
+            self._emit(EgressEvent(host=host, port=port, verdict=verdict))
+            await _socks5_reply(writer, _SOCKS5_REP_NOT_ALLOWED)
+            return
+
+        counters = _Counters()
+        try:
+            addresses = self.resolver(host)
+            upstream_reader, upstream_writer = await asyncio.open_connection(
+                addresses[0], port
+            )
+        except (ToolExecutionError, OSError):
+            self._emit(EgressEvent(host=host, port=port, verdict=VERDICT_DENIED_SCOPE))
+            await _socks5_reply(writer, _SOCKS5_REP_REFUSED)
+            return
+        try:
+            await _socks5_reply(writer, _SOCKS5_REP_SUCCESS)
+            await self._tunnel(reader, writer, upstream_reader, upstream_writer, counters)
+        finally:
+            upstream_writer.close()
+            try:
+                await upstream_writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
+        self._emit(
+            EgressEvent(
+                host=host,
+                port=port,
+                verdict=VERDICT_ALLOWED,
+                bytes_sent=counters.sent,
+                bytes_received=counters.received,
+            )
+        )
+
+    def _check_socks5_credentials(self, username: bytes, password: bytes) -> bool:
+        return username.decode("utf-8", "replace") == _SOCKS5_USERNAME and hmac.compare_digest(
+            password.decode("utf-8", "replace"), self.token
         )
 
     async def _tunnel(
@@ -397,6 +517,41 @@ def _parse_headers(lines: list[str]) -> dict[str, str]:
             raise ToolExecutionError(f"invalid proxy header line: {line!r}")
         headers[name.strip().lower()] = value.strip()
     return headers
+
+
+async def _read_socks5_field(reader: asyncio.StreamReader) -> bytes:
+    length = (await reader.readexactly(1))[0]
+    return await reader.readexactly(length) if length else b""
+
+
+async def _read_socks5_address(
+    reader: asyncio.StreamReader, address_type: int
+) -> str:
+    if address_type == _SOCKS5_ATYP_IPV4:
+        return str(ipaddress.IPv4Address(await reader.readexactly(4)))
+    if address_type == _SOCKS5_ATYP_IPV6:
+        return str(ipaddress.IPv6Address(await reader.readexactly(16)))
+    if address_type == _SOCKS5_ATYP_DOMAIN:
+        host = (await _read_socks5_field(reader)).decode("ascii", "replace")
+        if not host:
+            raise ToolExecutionError("empty SOCKS5 domain")
+        return host
+    raise ToolExecutionError(f"unsupported SOCKS5 address type: {address_type}")
+
+
+async def _socks5_reply(writer: asyncio.StreamWriter, code: int) -> None:
+    writer.write(
+        bytes([_SOCKS5_VERSION, code, 0x00, _SOCKS5_ATYP_IPV4])
+        + b"\x00\x00\x00\x00"
+        + b"\x00\x00"
+    )
+    await writer.drain()
+
+
+def _scope_url(host: str, scheme: str) -> str:
+    """Scope targets need an IPv6 literal in brackets."""
+    literal = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"{scheme}://{literal}/"
 
 
 def _safe_port(raw: str) -> int:
