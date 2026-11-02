@@ -14,6 +14,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -80,15 +81,23 @@ class ProcessManager:
     def reset_circuit_breaker(self) -> None:
         self._consecutive_failures = 0
 
-    async def start(self, argv: builtins.list[str] | tuple[str, ...]) -> ManagedProcess:
+    async def start(
+        self,
+        argv: builtins.list[str] | tuple[str, ...],
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> ManagedProcess:
         arguments = tuple(argv)
         self._validate_argv(arguments)
+        self._validate_env(env)
+        child_env = {**os.environ, **env} if env else None
         try:
             process = await asyncio.create_subprocess_exec(
                 *arguments,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=child_env,
                 start_new_session=True,
             )
         except OSError as exc:
@@ -148,9 +157,13 @@ class ProcessManager:
         )
 
     async def run(
-        self, argv: builtins.list[str] | tuple[str, ...], timeout_seconds: float | None = None
+        self,
+        argv: builtins.list[str] | tuple[str, ...],
+        timeout_seconds: float | None = None,
+        *,
+        env: Mapping[str, str] | None = None,
     ) -> ProcessResult:
-        handle = await self.start(argv)
+        handle = await self.start(argv, env=env)
         return await self.wait(handle.id, timeout_seconds=timeout_seconds)
 
     def _validate_argv(self, argv: tuple[str, ...]) -> None:
@@ -169,6 +182,18 @@ class ProcessManager:
             )
         if any("\x00" in argument for argument in argv):
             raise ToolValidationError("argv entries cannot contain NUL bytes")
+
+    def _validate_env(self, env: Mapping[str, str] | None) -> None:
+        """The child env is additive: validate only what can break the spawn."""
+        if env is None:
+            return
+        for name, value in env.items():
+            if not name:
+                raise ToolValidationError("env variable name must not be empty")
+            if "\x00" in name or "\x00" in value:
+                raise ToolValidationError(
+                    f"env variable {name!r} cannot contain NUL bytes"
+                )
 
     async def _pump(
         self,

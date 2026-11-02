@@ -73,6 +73,9 @@ def _show_profiles(runner: DockerSandboxRunner, json_output: bool) -> int:
                 "timeout_seconds": profile.timeout_seconds,
                 "max_output_bytes": profile.max_output_bytes,
                 "allowed_executables": list(profile.allowed_executables),
+                "env_names": list(profile.env_names),
+                "proxy_flag": profile.proxy_flag,
+                "egress_hosts": list(profile.egress_hosts),
                 "signature": signature_status,
                 "docker": "available" if docker_ok else "unavailable",
                 "image_present": image_ok,
@@ -90,6 +93,12 @@ def _show_profiles(runner: DockerSandboxRunner, json_output: bool) -> int:
         )
         print(f"  image: {row['image']}")
         print(f"  executables: {executables}")
+        if row["proxy_flag"]:
+            print(f"  proxy flag: {row['proxy_flag']}")
+        if row["env_names"]:
+            print(f"  secret env names: {', '.join(str(name) for name in row['env_names'])}")
+        if row["egress_hosts"]:
+            print(f"  egress hosts: {', '.join(str(host) for host in row['egress_hosts'])}")
     return 0
 
 

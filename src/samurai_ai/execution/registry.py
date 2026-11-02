@@ -492,7 +492,11 @@ class SandboxExecTool:
 
 
 def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
-    from samurai_ai.execution.security import HttpxProbeTool, NucleiScanTool
+    from samurai_ai.execution.security import (
+        HttpxProbeTool,
+        NucleiScanTool,
+        SubfinderPassiveTool,
+    )
 
     return ToolRegistry(
         adapters=(
@@ -503,6 +507,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             SandboxExecTool(),
             HttpxProbeTool(),
             NucleiScanTool(),
+            SubfinderPassiveTool(),
         ),
         dynamic_resolver=dynamic_resolver,
     )

@@ -11,6 +11,14 @@ from samurai_ai.domain.execution import ToolExecutionError
 
 _PROFILE_ID = re.compile(r"sandbox\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?@v[1-9][0-9]*\Z")
 _PINNED_IMAGE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/-]*@sha256:[0-9a-f]{64}\Z")
+_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
+_PROXY_FLAG = re.compile(r"-[a-z][a-z-]{0,31}\Z")
+_EGRESS_HOST = re.compile(
+    r"(?:\*\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\Z"
+)
+MAX_ENV_NAMES = 16
+MAX_EGRESS_HOSTS = 64
 SIGNING_INFO = b"samurai-sandbox-profiles-v1"
 
 
@@ -39,6 +47,13 @@ class SandboxProfile(BaseModel):
     timeout_seconds: int = Field(default=60, ge=1)
     max_output_bytes: int = Field(default=65536, ge=1)
     network_mode: str = "none"
+    # Secret env variables this profile may receive; values never enter argv.
+    env_names: tuple[str, ...] = ()
+    # Flag through which the tool takes the egress proxy URL, e.g. "-proxy".
+    proxy_flag: str | None = None
+    # Third-party hosts the tool may reach besides the operation scope
+    # (passive sources); "*.example.com" also matches the apex.
+    egress_hosts: tuple[str, ...] = ()
 
     @field_validator("id")
     @classmethod
@@ -65,6 +80,49 @@ class SandboxProfile(BaseModel):
             raise SandboxProfileError(
                 f"sandbox network_mode must be 'none' or 'scoped': {value!r}"
             )
+        return value
+
+    @field_validator("env_names")
+    @classmethod
+    def validate_env_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) > MAX_ENV_NAMES:
+            raise SandboxProfileError(
+                f"sandbox profile accepts at most {MAX_ENV_NAMES} env names"
+            )
+        if len(set(value)) != len(value):
+            raise SandboxProfileError("sandbox profile env names must be unique")
+        for name in value:
+            if not _ENV_NAME.fullmatch(name):
+                raise SandboxProfileError(
+                    f"sandbox env name must look like SHODAN_API_KEY: {name!r}"
+                )
+        return value
+
+    @field_validator("proxy_flag")
+    @classmethod
+    def validate_proxy_flag(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _PROXY_FLAG.fullmatch(value):
+            raise SandboxProfileError(
+                f"sandbox proxy flag must look like '-proxy': {value!r}"
+            )
+        return value
+
+    @field_validator("egress_hosts")
+    @classmethod
+    def validate_egress_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) > MAX_EGRESS_HOSTS:
+            raise SandboxProfileError(
+                f"sandbox profile allows at most {MAX_EGRESS_HOSTS} egress hosts"
+            )
+        if len(set(value)) != len(value):
+            raise SandboxProfileError("sandbox egress hosts must be unique")
+        for host in value:
+            if not _EGRESS_HOST.fullmatch(host):
+                raise SandboxProfileError(
+                    f"sandbox egress host must be a lowercase host or *.suffix: {host!r}"
+                )
         return value
 
 

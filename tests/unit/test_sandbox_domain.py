@@ -39,12 +39,18 @@ class FakeManager:
     def __init__(self, results: dict[tuple[str, ...], ProcessResult] | None = None) -> None:
         self.results = results or {}
         self.calls: list[tuple[str, ...]] = []
+        self.envs: list[dict[str, str] | None] = []
 
     async def run(
-        self, argv: list[str] | tuple[str, ...], timeout_seconds: float | None = None
+        self,
+        argv: list[str] | tuple[str, ...],
+        timeout_seconds: float | None = None,
+        *,
+        env: dict[str, str] | None = None,
     ) -> ProcessResult:
         arguments = tuple(argv)
         self.calls.append(arguments)
+        self.envs.append(dict(env) if env is not None else None)
         if arguments[:2] == ("docker", "version"):
             return self.results.get(
                 ("docker", "version"), ProcessResult(exit_code=0, stdout="27.0.0", stderr="")
@@ -140,7 +146,7 @@ def test_runner_builds_hardened_argv(tmp_path: Path) -> None:
     assert argv[argv.index("--security-opt") + 1] == "no-new-privileges"
     assert argv[argv.index("--user") + 1] == "65534:65534"
     assert argv[argv.index("--name") + 1] == "samurai-run_abc123"
-    assert argv[-3:] == [profile.image, "echo", "hi there"]
+    assert argv[-4:] == ["--entrypoint", "echo", profile.image, "hi there"]
 
 
 def test_runner_rejects_executable_outside_profile_allowlist(tmp_path: Path) -> None:
@@ -155,6 +161,110 @@ def test_runner_rejects_executable_outside_profile_allowlist(tmp_path: Path) -> 
 def test_unknown_profile_rejected(tmp_path: Path) -> None:
     with pytest.raises(ToolValidationError, match="unknown sandbox profile"):
         get_profile("sandbox.missing@v9")
+
+
+def test_profile_validates_env_channel() -> None:
+    with pytest.raises(ValidationError, match="SHODAN_API_KEY"):
+        make_profile(env_names=("shodan_key",))
+    with pytest.raises(ValidationError, match="unique"):
+        make_profile(env_names=("A_KEY", "A_KEY"))
+    with pytest.raises(ValidationError, match="at most"):
+        make_profile(env_names=tuple(f"K{index}_API_KEY" for index in range(17)))
+    with pytest.raises(ValidationError, match="proxy flag"):
+        make_profile(proxy_flag="proxy")
+    assert make_profile(env_names=("A_KEY",), proxy_flag="-proxy").env_names == (
+        "A_KEY",
+    )
+
+
+def test_profile_validates_egress_hosts() -> None:
+    assert make_profile(egress_hosts=("crt.sh", "*.commoncrawl.org")).egress_hosts == (
+        "crt.sh",
+        "*.commoncrawl.org",
+    )
+    with pytest.raises(ValidationError, match="lowercase host"):
+        make_profile(egress_hosts=("CRT.SH",))
+    with pytest.raises(ValidationError, match="lowercase host"):
+        make_profile(egress_hosts=("https://crt.sh",))
+    with pytest.raises(ValidationError, match="unique"):
+        make_profile(egress_hosts=("crt.sh", "crt.sh"))
+    with pytest.raises(ValidationError, match="at most"):
+        make_profile(egress_hosts=tuple(f"h{index}.example.org" for index in range(65)))
+
+
+def test_runner_puts_secret_env_as_name_only(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = get_profile("sandbox.subfinder@v1")
+    secret = "shodan-key-123"
+    argv = runner.build_argv(
+        profile,
+        "run_1",
+        "subfinder",
+        ["-d", "example.com"],
+        "http://samurai:tok@host.docker.internal:9",
+        {"HOME": "/tmp"},
+        {"SHODAN_API_KEY": secret},
+    )
+    assert argv[argv.index("SHODAN_API_KEY") - 1] == "--env"
+    assert "SHODAN_API_KEY" in argv and f"SHODAN_API_KEY={secret}" not in argv
+    assert secret not in " ".join(argv)
+    # non-secret env keeps its value on the command line
+    assert "HOME=/tmp" in argv
+
+
+def test_runner_rejects_env_outside_profile_declaration(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = get_profile("sandbox.subfinder@v1")
+    with pytest.raises(ToolValidationError, match="not declared"):
+        runner.build_argv(
+            profile,
+            "run_1",
+            "subfinder",
+            ["-d", "example.com"],
+            "http://tok@host:9",
+            None,
+            {"EXFIL_API_KEY": "v"},
+        )
+    with pytest.raises(ToolValidationError, match="empty"):
+        runner.build_argv(
+            profile,
+            "run_1",
+            "subfinder",
+            ["-d", "example.com"],
+            "http://tok@host:9",
+            None,
+            {"SHODAN_API_KEY": ""},
+        )
+    with pytest.raises(ToolValidationError, match="single line"):
+        runner.build_argv(
+            profile,
+            "run_1",
+            "subfinder",
+            ["-d", "example.com"],
+            "http://tok@host:9",
+            None,
+            {"SHODAN_API_KEY": "a\nb"},
+        )
+
+
+def test_run_appends_proxy_flag_and_forwards_child_env(tmp_path: Path) -> None:
+    runner, fake = make_runner(tmp_path)
+    sign_default(tmp_path)
+    profile = get_profile("sandbox.subfinder@v1")
+    outcome = runner.run(
+        profile,
+        "run_1",
+        "subfinder",
+        ["-d", "example.com"],
+        ScopeContract(includes=("example.com",)),
+        env={"HOME": "/tmp"},
+        secret_env={"SHODAN_API_KEY": "k"},
+    )
+    assert outcome.result.stdout == "hello"
+    docker_run = fake.calls[-1]
+    assert docker_run[docker_run.index("-proxy") - 1] == "example.com"
+    assert docker_run[docker_run.index("-proxy") + 1].startswith("http://samurai:")
+    assert fake.envs[-1] == {"HOME": "/tmp", "SHODAN_API_KEY": "k"}
 
 
 def test_preflight_fails_without_signature(tmp_path: Path) -> None:
@@ -208,7 +318,7 @@ def test_run_executes_full_argv_via_manager(tmp_path: Path) -> None:
     assert outcome.egress_events == ()
     run_calls = [call for call in fake.calls if call[:2] == ("docker", "run")]
     assert len(run_calls) == 1
-    assert run_calls[0][-2:] == ("echo", "hello sandbox")
+    assert run_calls[0][-4:] == ("--entrypoint", "echo", profile.image, "hello sandbox")
 
 
 def test_run_enforces_profile_output_limit(tmp_path: Path) -> None:
@@ -245,7 +355,7 @@ def test_scoped_profile_builds_proxy_argv(tmp_path: Path) -> None:
     assert "HTTP_PROXY=http://samurai:token123@host.docker.internal:8080" in env_values
     assert "HTTPS_PROXY=http://samurai:token123@host.docker.internal:8080" in env_values
     assert "NO_PROXY=" in env_values
-    assert argv[-2:] == ["wget", "http://example.com/"]
+    assert argv[-4:] == ["--entrypoint", "wget", profile.image, "http://example.com/"]
 
 
 def test_scoped_profile_argv_requires_proxy_url(tmp_path: Path) -> None:
