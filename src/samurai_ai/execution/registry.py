@@ -525,6 +525,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
         ResearchSearchTool,
         SubfinderPassiveTool,
     )
+    from samurai_ai.execution.virtualization import VmControlTool, VmDiskTool
 
     return ToolRegistry(
         adapters=(
@@ -545,6 +546,8 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             SmbListTool(),
             RdpCheckTool(),
             AdbTool(),
+            VmControlTool(),
+            VmDiskTool(),
             *_manifest_tools(),
         ),
         dynamic_resolver=dynamic_resolver,
