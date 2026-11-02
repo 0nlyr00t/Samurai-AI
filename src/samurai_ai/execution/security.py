@@ -1,11 +1,12 @@
-"""Governed adapters for external security tools (threat-review waves 1-2).
+"""Governed adapters for external security tools (threat-review waves 1-4).
 
-Each adapter wraps a scoped-sandbox profile with a fixed argv template:
-the model picks values from validated parameters, the adapter builds the
-command line itself. Targets are scope-checked before the container spawns;
-network egress goes only through the scoped, token-authenticated egress
-proxy; tool stdout is parsed into a bounded structured summary while the
-raw output stays in the artifact.
+Each adapter wraps a sandbox profile with a fixed argv template: the model
+picks values from validated parameters, the adapter builds the command line
+itself. Targets are scope-checked before the container spawns. Egress goes
+through the scoped, token-authenticated proxy except on `direct`-class
+profiles, where the adapter's scope check is the only gate (see
+md/threat-review-security-tools.md 2.7). Tool stdout is parsed into a bounded
+structured summary while the raw output stays in the artifact.
 
 Secrets never enter argv: provider keys are passed as env names and the
 value comes from the docker client environment (see
