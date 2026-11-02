@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from samurai_ai.domain.eval import (
     ComparisonResult,
     EvalExpectations,
+    EvalLiveTarget,
     EvalScenario,
     EvalScenarioStatus,
     EvalSuite,
@@ -312,3 +313,40 @@ def test_build_aggregate_rates_and_totals() -> None:
     assert aggregate.solve_rate == pytest.approx(1 / 3, rel=1e-3)
     assert aggregate.validation_rate == pytest.approx(0.75)
     assert aggregate.total_cost_usd == pytest.approx(0.75)
+
+
+def test_a_live_target_can_turn_off_tls_verification() -> None:
+    live = {
+        "base_url": "https://gateway.example/v1",
+        "model": "gateway/m@v1",
+        "secret_env": "KEY",
+    }
+    base = {
+        "id": "tls",
+        "title": "TLS",
+        "scope_includes": ["example.com"],
+        "tasks": [{"id": "t1", "title": "T1"}],
+    }
+    assert EvalLiveTarget.model_validate(live).verify_tls is True
+    scenario = EvalScenario.model_validate(
+        {**base, "live": {**live, "verify_tls": False}}
+    )
+    assert scenario.live is not None
+    assert scenario.live.verify_tls is False
+
+
+def test_the_live_stack_carries_verify_tls_into_the_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.services.eval import _ScenarioStack
+
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    stack = _ScenarioStack(
+        tmp_path / "tls",
+        "https://gateway.example/v1",
+        "gateway/m@v1",
+        api_key="k",
+        verify_tls=False,
+    )
+    provider = stack.models.registry.get_provider("gateway")
+    assert provider.verify_tls is False
