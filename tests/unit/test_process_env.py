@@ -46,3 +46,24 @@ def test_nul_bytes_in_env_are_rejected() -> None:
     with pytest.raises(ToolValidationError, match="NUL"):
         asyncio.run(manager.run(("env",), env={"A\x00B": "c"}))
     manager.reset_circuit_breaker()
+
+
+def test_stdin_data_reaches_the_child_and_closes() -> None:
+    manager = ProcessManager(allowed_executables=frozenset({"cat"}))
+    result = asyncio.run(manager.run(("cat",), stdin_data=b"example.com\nwww.example.com\n"))
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == ["example.com", "www.example.com"]
+
+
+def test_stdin_without_data_is_devnull() -> None:
+    manager = ProcessManager(allowed_executables=frozenset({"cat"}))
+    result = asyncio.run(manager.run(("cat",)))
+    assert result.exit_code == 0
+    assert result.stdout == ""
+
+
+def test_oversized_stdin_is_rejected() -> None:
+    manager = ProcessManager(allowed_executables=frozenset({"cat"}))
+    with pytest.raises(ToolValidationError, match="stdin payload exceeds"):
+        asyncio.run(manager.run(("cat",), stdin_data=b"x" * 70000))
+    manager.reset_circuit_breaker()
