@@ -360,3 +360,19 @@ def test_a_broken_manifest_is_refused(
     _isolated_home(monkeypatch, tmp_path)
     assert _install_manifest(tmp_path, capsys, overrides) == 2
     assert message in capsys.readouterr().err
+
+
+def test_an_edited_manifest_shows_up_as_tampered(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    _isolated_home(monkeypatch, tmp_path)
+    database = str(tmp_path / "tamper.db")
+    path = tmp_path / "tool.json"
+    path.write_text(json.dumps(NIKTO_MANIFEST))
+    assert main(["--db", database, "tool", "install", str(path), "--trusted"]) == 0
+    capsys.readouterr()
+
+    installed = tmp_path / "home" / "tools" / "scan.nikto.json"
+    installed.write_text(json.dumps({**NIKTO_MANIFEST, "title": "Edited after review"}))
+    assert main(["--db", database, "tool", "manifests"]) == 0
+    assert "tampered" in capsys.readouterr().out

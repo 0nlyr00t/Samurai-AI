@@ -18,7 +18,7 @@ from samurai_ai.domain.execution import ToolDefinition, ToolScopeError
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.tool_manifest import ManifestError, ParamSpec, ToolManifest
 from samurai_ai.execution.registry import ToolOutput
-from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
+from samurai_ai.execution.sandbox import DockerSandboxRunner
 
 _PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
 _UNSAFE = re.compile(r"[\s\x00]")
@@ -219,7 +219,7 @@ class ManifestTool:
         # Validate the render without spawning: a bad value must fail before
         # the operator is asked for an approval.
         render_argv(self.manifest, params)
-        profile = get_profile(self.manifest.profile_id)
+        profile = self.manifest.profile()
         self.runner.validate_invocation(profile, self.manifest.executable, ["-h"])
         self._notice = self.runner.verify_allowlist_signature()
 
@@ -235,7 +235,7 @@ class ManifestTool:
                 else targets
             )
         argv = render_argv(self.manifest, resolved)
-        profile = get_profile(self.manifest.profile_id)
+        profile = self.manifest.profile()
         run_id = uuid4().hex[:12]
         outcome = self.runner.run(
             profile,
