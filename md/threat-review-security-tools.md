@@ -82,6 +82,14 @@ argv, значение — в окружение клиента `docker`, отк
 7. Образы projectdiscovery объявляют свой entrypoint, поэтому исполняемый
    файл едет на `--entrypoint`: иначе имя дублировалось и инструмент падал
    с «no input list provided».
+8. Инструмент, которому нужен только SOCKS (`dnsx -proxy`), получает второй
+   вход прокси — SOCKS5 CONNECT-only (RFC 1928/1929, имя `samurai`, пароль =
+   per-run токен). Вердикт, resolver и события те же, что у CONNECT; BIND и
+   UDP ASSOCIATE отвечают `REP=7`. Схема прокси и DoH-резолвер — поля
+   профиля (`proxy_scheme`, `resolver_url`), то есть в подписи.
+9. Токен в этом случае неизбежно уезжает в argv (`-proxy socks5://samurai:<t>@…`),
+   потому что env-пути у инструмента нет; токен регистрируется в редаторе и
+   режется в выводе и артефактах.
 
 Остаточный риск: окружение процесса `docker` читается тем же пользователем
 (`ps e`), а на Docker Desktop for Mac scoped sandbox остаётся soft
@@ -130,7 +138,7 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 | Инструмент | Решение | Risk | Сеть | Обязательные контроли |
 |---|---|---|---|---|
 | httpx (probe) | **реализован** (`recon.httpx-probe`) | R2 | scoped egress | target через scope.evaluate; флаги из enum; JSON output; rate cap |
-| dnsx | dedicated adapter | R2 | scoped egress | как у httpx; resolver pinned через proxy |
+| dnsx | **реализован** (`recon.dnsx-resolve`) | R2 | scoped egress (SOCKS5) | resolver закреплён в подписи профиля (`doh:`), имена через stdin, `-rcode noerror,nxdomain`, молчащий резолвер = failed |
 | subfinder | **реализован** (`recon.subfinder-passive`) | R2 | scoped egress | domain через scope.evaluate; закрытый enum источников; ключи только по имени через env-канал; `-proxy` из профиля; JSON output; без `-all` |
 | amass | defer | — | — | перекрывается subfinder; вернуться при необходимости |
 | nmap | defer (блокер) | — | — | raw TCP/SYN сканер архитектурно несовместим с HTTP CONNECT egress proxy; ждёт TCP-level enforcement (Linux internal network harness) |
@@ -180,6 +188,23 @@ vault placeholders.
   proxy — принятое ослабление, а не регрессия.
 - после добавления профиля набор sandbox-профилей меняется: существующие
   установки переподписывают allowlist (`samurai sandbox sign`).
+
+### `recon.dnsx-resolve` v1 (R2, scoped egress через SOCKS5) — реализован
+
+- params: `hosts: array<string>` (1..50, каждый — scope.check), `types: array<enum
+  [A,AAAA,CNAME]>` (default `[A]`).
+- резолвер в argv не выбирается: он из профиля (`resolver_url =
+  doh:https://cloudflare-dns.com/dns-query`, хост в `egress_hosts`), имена уезжают
+  в stdin (флаг `-l` в образе 1.2.2 молча не работает).
+- шаблон: `dnsx -silent -json -omit-raw -nc -disable-update-check -rcode
+  noerror,nxdomain [-a|-aaaa|-cname] -r <resolver>`; `-proxy` и env
+  подставляет раннер профиля `sandbox.dnsx@v1`.
+- output: JSONL → строки `host<TAB>STATUS<TAB>записи` (кандидаты для
+  `asset add`); NXDOMAIN остаётся строкой со статусом, все-без-записей даёт
+  `no answers`. Ноль разобранных строк при exit 0 — failed с именем резолвера
+  (различение «имён нет» и «резолвер молчит»).
+- ограничение: у инструмента нет env-пути для прокси, токен виден в argv;
+  UDP ASSOCIATE не поддерживается — только DoH-over-TCP.
 
 ### `scan.nmap` v1 (R3) — deferred: raw TCP/SYN несовместим с CONNECT-proxy
 
