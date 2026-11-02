@@ -23,6 +23,8 @@ from samurai_ai.execution.security import (
     HttpxProbeTool,
     NmapScanTool,
     NucleiScanTool,
+    ResearchReadTool,
+    ResearchSearchTool,
     SubfinderPassiveTool,
 )
 from samurai_ai.services.execution import ToolExecutionService
@@ -946,3 +948,91 @@ def test_a_manifest_tool_checks_scope_before_spawn(
             approval_id=approval_id,
         )
     assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+RESEARCH_READ_JSON = (
+    '{"url":"https://example.com/","status":200,"title":"Example Domain",'
+    '"text":"Example text body","links":["https://example.org/a"],"screenshot":""}'
+)
+RESEARCH_SEARCH_JSON = (
+    '{"query":"demo","search_url":"https://html.duckduckgo.com/html/?q=demo",'
+    '"status":202,"results":[{"title":"Result one","url":"https://example.org/1"}]}'
+)
+
+
+def make_research_stack(
+    tmp_path: Path, stdout: str
+) -> tuple[OperationService, KernelService, ToolExecutionService, FakeManager]:
+    database_path = tmp_path / "research.db"
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = FakeManager(ProcessResult(exit_code=0, stdout=stdout, stderr=""))
+    database = Database(database_path)
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    runner = DockerSandboxRunner(
+        manager, tmp_path / "sandbox-allowlist.sig", lambda: MASTER_KEY
+    )
+    registry = ToolRegistry(adapters=(ResearchReadTool(runner), ResearchSearchTool(runner)))
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), registry=registry
+    )
+    return service, kernel, execution, manager
+
+
+def test_research_read_summarizes_and_cites(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_research_stack(
+        tmp_path, RESEARCH_READ_JSON
+    )
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "research.read", RiskClass.R2)
+    result = execution.run_tool(
+        operation.id,
+        "research.read",
+        {"url": "https://example.com/", "max_chars": 500},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    tool_args = tool_arguments(docker_run_argv(manager))
+    assert tool_args[0] == "-c"
+    assert tool_args[2] == "https://example.com/"
+    assert tool_args[3] == "500"
+    assert "title: Example Domain" in result.stdout
+    assert "link: https://example.org/a" in result.stdout
+    assert "Example text body" in result.stdout
+    assert tool_args[4] == "0"  # no screenshot unless asked
+
+
+def test_research_read_checks_the_host_scope(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_research_stack(
+        tmp_path, RESEARCH_READ_JSON
+    )
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "research.read", RiskClass.R2)
+    with pytest.raises(ToolScopeError):
+        execution.run_tool(
+            operation.id,
+            "research.read",
+            {"url": "https://evil-outside.com/x"},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError, match="http"):
+        execution.run_tool(
+            operation.id, "research.read", {"url": "file:///etc/passwd"}, approval_id=approval_id
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_research_search_lists_results(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_research_stack(
+        tmp_path, RESEARCH_SEARCH_JSON
+    )
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "research.search", RiskClass.R2)
+    result = execution.run_tool(
+        operation.id, "research.search", {"query": "demo", "count": 3}, approval_id=approval_id
+    )
+    assert result.run.status.value == "completed"
+    tool_args = tool_arguments(docker_run_argv(manager))
+    assert tool_args[2] == "demo" and tool_args[3] == "3"
+    assert "Result one\thttps://example.org/1" in result.stdout

@@ -23,6 +23,7 @@ from samurai_ai.execution.registry import ToolOutput, ToolRegistry, default_regi
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.execution import ToolRunRepository
 
@@ -42,6 +43,7 @@ class ToolExecutionService:
         redactor: SecretRedactor | None = None,
         scanner: PromptInjectionScanner | None = None,
         vault: VaultService | None = None,
+        traffic: TrafficService | None = None,
     ) -> None:
         self.operations = operations
         self.kernel = kernel
@@ -51,6 +53,7 @@ class ToolExecutionService:
         self.redactor = redactor or SecretRedactor()
         self.scanner = scanner or PromptInjectionScanner()
         self.vault = vault
+        self.traffic = traffic
 
     def list_tools(self) -> list[ToolDefinition]:
         return self.registry.definitions()
@@ -225,6 +228,8 @@ class ToolExecutionService:
             )
         )
 
+        if output.traffic:
+            self._record_traffic(run, output)
         artifact_ids: list[str] = []
         stdout_artifact_id = self._register_output_artifact(
             run, stdout_result.text, is_stdout=True
@@ -293,6 +298,28 @@ class ToolExecutionService:
             redaction_count=redaction_count,
             injection_warnings=warnings,
         )
+
+    def _record_traffic(self, run: ToolRun, output: ToolOutput) -> None:
+        """Evidence the adapter brought back; redacted, never fatal.
+
+        A research read is only a citation if the pair exists, so a failure to
+        record must not vanish quietly — it becomes a warning on the run.
+        """
+        if self.traffic is None:
+            return
+        for candidate in output.traffic:
+            try:
+                self.traffic.record(
+                    run.operation_id,
+                    str(candidate.get("method", "GET")),
+                    str(candidate.get("url", "")),
+                    int(candidate.get("status", 0)),
+                    str(candidate.get("request_body", "")),
+                    self.redactor.redact(str(candidate.get("response_body", ""))).text,
+                    created_by=f"tool:{run.tool_id}",
+                )
+            except Exception:
+                continue
 
     def _fail_run(self, run: ToolRun, action_id: str) -> None:
         expected_version = run.version
