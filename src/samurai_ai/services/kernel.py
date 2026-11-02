@@ -587,6 +587,10 @@ class KernelService:
             raise ApprovalNotFoundError(f"approval not found: {approval_id}")
         return approval
 
+    def get_finding_by_id(self, finding_id: str) -> Finding:
+        """Public lookup that fails loudly, for services outside the kernel."""
+        return self._get_finding(finding_id)
+
     def _get_finding(self, finding_id: str) -> Finding:
         finding = self.kernel.get_finding(finding_id)
         if finding is None:

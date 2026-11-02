@@ -15,6 +15,7 @@ from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
 from samurai_ai.cli_eval import handle_eval_command, register_eval_commands
 from samurai_ai.cli_events import handle_events_command, register_events_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
+from samurai_ai.cli_genes import handle_gene_command, register_gene_commands
 from samurai_ai.cli_goals import handle_goal_command, register_goal_commands
 from samurai_ai.cli_headless import handle_headless_command, register_headless_commands
 from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_commands
@@ -276,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_headless_commands(subcommands)
     register_eval_commands(subcommands)
     register_rules_commands(subcommands)
+    register_gene_commands(subcommands)
     return parser
 
 
@@ -336,6 +338,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         rules_result = handle_rules_command(args, settings_service)
         if rules_result is not None:
             return rules_result
+        gene_result = handle_gene_command(args)
+        if gene_result is not None:
+            return gene_result
         recovery_result = handle_recovery_command(
             args,
             recovery_service,

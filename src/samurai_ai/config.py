@@ -44,6 +44,11 @@ def sandbox_allowlist_path() -> Path:
     return config_directory() / "sandbox-allowlist.sig"
 
 
+def genes_path() -> Path:
+    """The evolving prompt/policy pool (data, versioned by the service)."""
+    return config_directory() / "genes.json"
+
+
 def tools_directory() -> Path:
     """Installed tool manifests (data, reviewed and sha256-pinned)."""
     return config_directory() / "tools"

@@ -67,3 +67,39 @@ def test_oversized_stdin_is_rejected() -> None:
     with pytest.raises(ToolValidationError, match="stdin payload exceeds"):
         asyncio.run(manager.run(("cat",), stdin_data=b"x" * 70000))
     manager.reset_circuit_breaker()
+
+
+def test_a_stalled_process_is_killed_and_flagged() -> None:
+    manager = ProcessManager(
+        allowed_executables=frozenset({"sh"}), stall_seconds=0.3
+    )
+    result = asyncio.run(manager.run(("sh", "-c", "sleep 30")))
+    assert result.stalled is True
+    assert result.timed_out is False
+
+
+def test_a_talking_process_survives_the_stall_watchdog() -> None:
+    manager = ProcessManager(
+        allowed_executables=frozenset({"sh"}), stall_seconds=0.5
+    )
+    result = asyncio.run(
+        manager.run(("sh", "-c", "for i in 1 2 3 4 5; do echo $i; sleep 0.2; done"))
+    )
+    assert result.stalled is False
+    assert result.stdout.split() == ["1", "2", "3", "4", "5"]
+
+
+def test_the_deadline_caps_a_per_run_timeout() -> None:
+    manager = ProcessManager(allowed_executables=frozenset({"sh"}), stall_seconds=0)
+    manager.set_deadline(0.3)
+    result = asyncio.run(manager.run(("sh", "-c", "sleep 30"), timeout_seconds=30))
+    assert result.timed_out is True
+    assert manager.remaining_seconds() == 0.0
+
+
+def test_a_deadline_does_not_extend_a_short_timeout() -> None:
+    manager = ProcessManager(allowed_executables=frozenset({"sh"}), stall_seconds=0)
+    manager.set_deadline(30)
+    result = asyncio.run(manager.run(("sh", "-c", "sleep 30"), timeout_seconds=0.2))
+    assert result.timed_out is True
+    assert manager.remaining_seconds() is not None

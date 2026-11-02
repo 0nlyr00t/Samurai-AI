@@ -652,3 +652,56 @@ def test_a_fail_next_to_a_tool_call_does_not_end_the_task(
     assert kernel.get_current_plan(operation_id).task_by_id("probe").status is (  # type: ignore[union-attr]
         TaskStatus.DONE
     )
+
+
+def test_a_third_identical_call_earns_a_repeat_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    same = (
+        '{"commands": ['
+        '{"type": "request_tool_run", "tool_id": "local.echo", "params": {"text": "again"}},'
+        '{"type": "note", "key": "shared.same", "value": "same"},'
+        '{"type": "complete_task"}'
+        "]}"
+    )
+    fake.queue(
+        '{"steps": ["one", "two", "three", "four"]}', same, same, same,
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+    orchestrator.run_task(operation_id, "probe", [MODEL_ID], max_steps=4)
+
+    events = service.events(operation_id)
+    repeated = [event for event in events if event.event_type == "agent.command.repeated"]
+    assert repeated and repeated[0].payload["times"] == 3
+    # the nudge reached the model on the following step
+    prompts = [
+        message.content for message in fake.requests[-1].messages if message.role == "user"
+    ]
+    assert any("[repeats]" in prompt for prompt in prompts)
+
+
+def test_the_wall_deadline_ends_a_slow_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["one", "two"]}',
+        '{"commands": [{"type": "request_tool_run", "tool_id": "local.echo", '
+        '"params": {"text": "x"}}]}',
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+    run = orchestrator.run_task(
+        operation_id, "probe", [MODEL_ID], max_steps=2, max_wall_seconds=0.0
+    )
+    assert run.status.value == "failed"
+    finished = [
+        event.payload
+        for event in service.events(operation_id)
+        if event.event_type == "agent.run.finish"
+    ]
+    assert finished and "deadline" in finished[-1]["reason"]

@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from samurai_ai.domain.execution import ToolExecutionError
 
 _PROFILE_ID = re.compile(r"sandbox\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?@v[1-9][0-9]*\Z")
-_PINNED_IMAGE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/-]*@sha256:[0-9a-f]{64}\Z")
+#: repo@sha256:<digest> from a registry, or a bare local image id (a locally
+#: built toolbelt has no registry to pull from until it is pushed).
+_PINNED_IMAGE = re.compile(
+    r"(?:[a-zA-Z0-9][a-zA-Z0-9._/-]*@|)sha256:[0-9a-f]{64}\Z"
+)
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _PROXY_FLAG = re.compile(r"-[a-z][a-z-]{0,31}\Z")
 _EGRESS_HOST = re.compile(
@@ -79,7 +83,8 @@ class SandboxProfile(BaseModel):
     def validate_image(cls, value: str) -> str:
         if not _PINNED_IMAGE.fullmatch(value):
             raise SandboxProfileError(
-                f"sandbox image must be pinned by digest (repo@sha256:...): {value!r}"
+                "sandbox image must be pinned by digest "
+                f"(repo@sha256:... or sha256:...): {value!r}"
             )
         return value
 

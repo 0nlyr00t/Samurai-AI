@@ -174,6 +174,15 @@ def test_default_registry_contains_stage2_tools() -> None:
         "fuzz.ffuf",
         "research.search",
         "research.read",
+        "remote.ssh-exec",
+        "remote.smb-list",
+        "remote.rdp-check",
+        "remote.adb",
+        "vm.control",
+        "vm.disk",
+        "exploit.analyze",
+        "exploit.build",
+        "exploit.run",
     } <= set(definitions)
     assert definitions["local.echo"].risk_class == RiskClass.R0
     assert definitions["process.exec"].risk_class == RiskClass.R1

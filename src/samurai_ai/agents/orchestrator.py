@@ -14,6 +14,7 @@ not implemented).
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
@@ -70,6 +71,8 @@ _T = TypeVar("_T")
 DEFAULT_MAX_STEPS = 8
 DEFAULT_MAX_DEPTH = 1
 MAX_CONSECUTIVE_REJECTS = 3
+#: the same command repeated this often in one run earns a model note
+REPEAT_THRESHOLD = 3
 _MAX_BLACKBOARD_ITEMS = 20
 _CLOSE_OUT_ATTEMPTS = 2
 _CLOSE_OUT_STEP = (
@@ -94,6 +97,12 @@ _EXECUTOR_INSTRUCTION = (
     '"artifact_ids":[...]}, complete_task {"type":"complete_task"}, fail '
     '{"type":"fail","reason":...}. No prose.'
 )
+
+
+def _repeat_block(notes: list[str]) -> str:
+    """A nudge when the run keeps making the same call."""
+    listed = "; ".join(dict.fromkeys(notes))
+    return f"[repeats] same call again: {listed}\n"
 
 
 def _rejection_block(reasons: list[str]) -> str:
@@ -172,6 +181,7 @@ class AgentOrchestrator:
         candidates: list[str],
         *,
         max_steps: int = DEFAULT_MAX_STEPS,
+        max_wall_seconds: float | None = None,
         parent_run_id: str | None = None,
         max_depth: int = DEFAULT_MAX_DEPTH,
         approval_id: str | None = None,
@@ -278,6 +288,7 @@ class AgentOrchestrator:
                 read_only_only=read_only_only,
                 approval_resolver=approval_resolver,
                 model_approvals=model_approvals,
+                max_wall_seconds=max_wall_seconds,
             )
             succeeded = run.status is AgentRunStatus.RUNNING
             if succeeded:
@@ -384,6 +395,12 @@ class AgentOrchestrator:
         self._finish_failed(run, AgentRunStatus.FAILED, "cancelled by the operator")
         return True
 
+    def _deadline_hit(self, run: AgentRun, deadline_at: float | None) -> bool:
+        if deadline_at is None or time.monotonic() <= deadline_at:
+            return False
+        self._finish_failed(run, AgentRunStatus.FAILED, "wall deadline reached")
+        return True
+
     def _execute_steps(
         self,
         operation_id: str,
@@ -396,13 +413,23 @@ class AgentOrchestrator:
         read_only_only: bool = False,
         approval_resolver: Callable[[str], bool] | None = None,
         model_approvals: dict[str, str] | None = None,
+        max_wall_seconds: float | None = None,
     ) -> None:
         consecutive_rejects = 0
+        deadline_at = (
+            None if max_wall_seconds is None else time.monotonic() + max_wall_seconds
+        )
+        repeat_counts: dict[str, int] = {}
+        repeat_notes: list[str] = []
         for index, step in enumerate(steps):
             if run.status is not AgentRunStatus.RUNNING:
                 return
-            if self._stop_requested(run, stop_event):
+            if self._stop_requested(run, stop_event) or self._deadline_hit(
+                run, deadline_at
+            ):
                 return
+            if repeat_notes:
+                extra_context = _repeat_block(repeat_notes) + extra_context
             commands = self._execute_step_prompt(
                 operation_id,
                 run,
@@ -422,6 +449,8 @@ class AgentOrchestrator:
                 read_only_only=read_only_only,
                 approval_resolver=approval_resolver,
                 stop_event=stop_event,
+                repeat_counts=repeat_counts,
+                repeat_notes=repeat_notes,
             )
             if run.status is not AgentRunStatus.RUNNING:
                 return
@@ -448,6 +477,8 @@ class AgentOrchestrator:
                     read_only_only=read_only_only,
                     approval_resolver=approval_resolver,
                     stop_event=stop_event,
+                    repeat_counts=repeat_counts,
+                    repeat_notes=repeat_notes,
                 )
                 if run.status is not AgentRunStatus.RUNNING:
                     return
@@ -475,12 +506,16 @@ class AgentOrchestrator:
         read_only_only: bool,
         approval_resolver: Callable[[str], bool] | None,
         stop_event: threading.Event | None,
+        repeat_counts: dict[str, int] | None = None,
+        repeat_notes: list[str] | None = None,
     ) -> tuple[list[str], int]:
         rejects: list[str] = []
         applied = 0
         for command in commands:
             if self._stop_requested(run, stop_event):
                 return rejects, consecutive_rejects
+            if repeat_counts is not None:
+                self._note_repeat(run, command, repeat_counts, repeat_notes)
             reason = self._apply_command(
                 operation_id,
                 run,
@@ -504,6 +539,32 @@ class AgentOrchestrator:
             # a step that got something done does not need re-asking
             return [], consecutive_rejects
         return rejects, consecutive_rejects
+
+    def _note_repeat(
+        self,
+        run: AgentRun,
+        command: AgentCommand,
+        counts: dict[str, int],
+        notes: list[str] | None,
+    ) -> None:
+        """The same tool call over and over earns a note, once per command."""
+        key = f"{command.type}:{repr(sorted(command.model_dump().items()))}"
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] != REPEAT_THRESHOLD:
+            return
+        described = command.model_dump().get("tool_id") or command.type
+        self.operations.repository.append_event(
+            OperationEvent(
+                operation_id=run.operation_id,
+                event_type="agent.command.repeated",
+                payload={"run_id": run.id, "command": described, "times": counts[key]},
+            )
+        )
+        if notes is not None:
+            notes.append(
+                f"{described} уже вызывался {counts[key]} раза с теми же "
+                "параметрами — смени параметры или инструмент"
+            )
 
     def _task_done(self, operation_id: str, task_id: str) -> bool:
         plan = self.kernel.get_current_plan(operation_id)
