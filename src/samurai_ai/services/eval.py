@@ -243,6 +243,7 @@ class _ScenarioStack:
         cost_input_per_m: float = 1.0,
         cost_output_per_m: float = 2.0,
         timeout_seconds: float | None = None,
+        verify_tls: bool = True,
     ) -> None:
         workdir.mkdir(parents=True, exist_ok=True)
         self.database = Database(workdir / "samurai.db")
@@ -279,6 +280,7 @@ class _ScenarioStack:
                     api_family=api_family,
                     base_url=base_url,
                     secret_name="eval-key",
+                    verify_tls=verify_tls,
                 ),
             ),
             models=(
@@ -492,6 +494,7 @@ class EvalService:
             cost_input_per_m=target.cost_input_per_m,
             cost_output_per_m=target.cost_output_per_m,
             timeout_seconds=target.timeout_seconds,
+            verify_tls=target.verify_tls,
         )
         operation = stack.operations.create(
             f"eval:{scenario.id}", scenario.mode, ScopeContract(includes=scenario.scope_includes)
