@@ -17,6 +17,7 @@ from typing import Any
 
 from samurai_ai.domain.execution import ToolValidationError
 from samurai_ai.domain.sandbox import (
+    MAX_ENV_NAMES,
     SandboxError,
     SandboxProfile,
     SandboxSignatureError,
@@ -34,6 +35,7 @@ from samurai_ai.execution.process import ProcessManager, ProcessResult
 DOCKER_EXECUTABLE = "docker"
 _DOCKER_PROBE_TIMEOUT = 5.0
 _TIMEOUT_GRACE_SECONDS = 10.0
+_MAX_SECRET_ENV_BYTES = 8192
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         timeout_seconds=30,
         max_output_bytes=65536,
         network_mode="scoped",
+        env_names=("SAMURAI_TEST_SECRET",),
     ),
     SandboxProfile(
         id="sandbox.httpx@v1",
@@ -105,7 +108,83 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         timeout_seconds=600,
         max_output_bytes=524288,
         network_mode="scoped",
+        proxy_flag="-proxy",
     ),
+    SandboxProfile(
+        id="sandbox.subfinder@v1",
+        description="Passive subdomain enumeration (projectdiscovery/subfinder) "
+        "behind the scoped egress proxy; API keys arrive only by name",
+        image=(
+            "projectdiscovery/subfinder@sha256:"
+            "2f5ddea311db2a8b848e40f1b669fc655d0eb78b74a74ead93d3850e372b12bf"
+        ),
+        allowed_executables=("subfinder",),
+        cpu_limit="1.0",
+        memory_mb=512,
+        pids_limit=128,
+        timeout_seconds=300,
+        max_output_bytes=262144,
+        network_mode="scoped",
+        proxy_flag="-proxy",
+        # Passive sources are third parties, not targets: their API hosts are
+        # part of the signed profile and are allowed besides the operation
+        # scope. A miss shows up as a denied host in the egress audit.
+        egress_hosts=(
+            # keyless sources
+            "crt.sh",
+            "anubisdb.com",
+            "web.archive.org",
+            "archive.org",
+            "index.commoncrawl.org",
+            "*.commoncrawl.org",
+            "www.sitedossier.com",
+            "ci-www.threatcrowd.org",
+            "rapiddns.io",
+            "api.hackertarget.com",
+            "api.subdomain.center",
+            # keyed sources
+            "api.shodan.io",
+            "www.virustotal.com",
+            "api.securitytrails.com",
+            "api.github.com",
+            "api.platform.censys.io",
+            "urlscan.io",
+            "dns.projectdiscovery.io",
+            "api.c99.nl",
+            "api.certspotter.com",
+            "api.dnsdumpster.com",
+            "quake.360.net",
+            "2.intelx.io",
+            "api.digitalyama.com",
+            "fofa.info",
+            "api.zoomeye.org",
+            "windvane.lichoin.com",
+        ),
+        # Axes the provider keys: subfinder reads "{SOURCE}_API_KEY" from env.
+        env_names=(
+            "SHODAN_API_KEY",
+            "VIRUSTOTAL_API_KEY",
+            "SECURITYTRAILS_API_KEY",
+            "GITHUB_API_KEY",
+            "CENSYS_API_KEY",
+            "URLSCAN_API_KEY",
+            "CHAOS_API_KEY",
+            "C99_API_KEY",
+            "CERTSPOTTER_API_KEY",
+            "DNSDUMPSTER_API_KEY",
+            "QUAKE_API_KEY",
+            "INTELX_API_KEY",
+            "DIGITALYAMA_API_KEY",
+            "FOFA_API_KEY",
+            "ZOOMEYEAPI_API_KEY",
+            "WINDVANE_API_KEY",
+        ),
+    ),
+)
+
+
+SECRET_ENV_NAMES = frozenset(
+    name for profile in SANDBOX_PROFILES for name in profile.env_names
 )
 
 
@@ -143,6 +222,32 @@ class DockerSandboxRunner:
         if any("\x00" in argument for argument in args):
             raise ToolValidationError("sandbox args cannot contain NUL bytes")
 
+    def validate_secret_env(
+        self, profile: SandboxProfile, secret_env: dict[str, str]
+    ) -> None:
+        """Secret values stay out of argv: only declared names may be passed."""
+        if len(secret_env) > MAX_ENV_NAMES:
+            raise ToolValidationError(
+                f"at most {MAX_ENV_NAMES} secret env variables per run"
+            )
+        for name, value in secret_env.items():
+            if name not in profile.env_names:
+                raise ToolValidationError(
+                    f"env variable {name!r} is not declared by sandbox profile "
+                    f"{profile.id} ({', '.join(profile.env_names) or 'none'})"
+                )
+            if not value:
+                raise ToolValidationError(f"secret env variable {name!r} is empty")
+            if "\n" in value or "\r" in value:
+                raise ToolValidationError(
+                    f"secret env variable {name!r} must be a single line"
+                )
+            if len(value.encode("utf-8")) > _MAX_SECRET_ENV_BYTES:
+                raise ToolValidationError(
+                    f"secret env variable {name!r} exceeds "
+                    f"{_MAX_SECRET_ENV_BYTES} bytes"
+                )
+
     def build_argv(
         self,
         profile: SandboxProfile,
@@ -150,8 +255,12 @@ class DockerSandboxRunner:
         executable: str,
         args: list[str],
         proxy_url: str | None = None,
+        env: dict[str, str] | None = None,
+        secret_env: dict[str, str] | None = None,
     ) -> list[str]:
         self.validate_invocation(profile, executable, args)
+        if secret_env:
+            self.validate_secret_env(profile, secret_env)
         argv = [
             DOCKER_EXECUTABLE,
             "run",
@@ -178,6 +287,11 @@ class DockerSandboxRunner:
             ]
         else:
             argv += ["--network", "none"]
+        for name, value in (env or {}).items():
+            argv += ["--env", f"{name}={value}"]
+        for name in (secret_env or {}):
+            # Value comes from the docker CLI environment, so it stays out of argv.
+            argv += ["--env", name]
         argv += [
             "--read-only",
             "--tmpfs",
@@ -196,8 +310,11 @@ class DockerSandboxRunner:
             str(profile.pids_limit),
             "--name",
             f"samurai-{run_id}",
-            profile.image,
+            # The executable rides on --entrypoint: the images set their own
+            # entrypoint, so repeating the name as a command would double it.
+            "--entrypoint",
             executable,
+            profile.image,
             *args,
         ]
         return argv
@@ -254,8 +371,13 @@ class DockerSandboxRunner:
         executable: str,
         args: list[str],
         scope: ScopeContract | None = None,
+        *,
+        env: dict[str, str] | None = None,
+        secret_env: dict[str, str] | None = None,
     ) -> SandboxRunOutcome:
-        return asyncio.run(self._run(profile, run_id, executable, args, scope))
+        return asyncio.run(
+            self._run(profile, run_id, executable, args, scope, env, secret_env)
+        )
 
     async def _run(
         self,
@@ -264,6 +386,8 @@ class DockerSandboxRunner:
         executable: str,
         args: list[str],
         scope: ScopeContract | None,
+        env: dict[str, str] | None = None,
+        secret_env: dict[str, str] | None = None,
     ) -> SandboxRunOutcome:
         proxy: EgressProxy | None = None
         proxy_url: str | None = None
@@ -274,15 +398,25 @@ class DockerSandboxRunner:
                 )
             token = generate_proxy_token()
             proxy = EgressProxy(
-                scope, token, allowed_ports=self.egress_allowed_ports
+                scope,
+                token,
+                allowed_ports=self.egress_allowed_ports,
+                extra_hosts=frozenset(profile.egress_hosts),
             )
             _, proxy_port = await proxy.start()
             proxy_url = f"http://samurai:{token}@host.docker.internal:{proxy_port}"
-        argv = self.build_argv(profile, run_id, executable, args, proxy_url)
+        if proxy_url is not None and profile.proxy_flag is not None:
+            args = [*args, profile.proxy_flag, proxy_url]
+        argv = self.build_argv(
+            profile, run_id, executable, args, proxy_url, env, secret_env
+        )
         await self.preflight(profile)
+        child_env = {**(env or {}), **(secret_env or {})} or None
         try:
             result = await self.manager.run(
-                argv, timeout_seconds=profile.timeout_seconds + _TIMEOUT_GRACE_SECONDS
+                argv,
+                timeout_seconds=profile.timeout_seconds + _TIMEOUT_GRACE_SECONDS,
+                **({"env": child_env} if child_env else {}),
             )
         finally:
             if proxy is not None:
@@ -338,6 +472,7 @@ def sign_allowlist(signature_path: Path, master_key: bytes) -> str:
 __all__ = [
     "DOCKER_EXECUTABLE",
     "SANDBOX_PROFILES",
+    "SECRET_ENV_NAMES",
     "DockerSandboxRunner",
     "SandboxRunOutcome",
     "get_profile",
