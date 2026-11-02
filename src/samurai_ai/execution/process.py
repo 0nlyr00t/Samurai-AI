@@ -24,6 +24,9 @@ from samurai_ai.domain.execution import ToolExecutionError, ToolValidationError
 DEFAULT_ALLOWED_EXECUTABLES: frozenset[str] = frozenset({"echo"})
 _READ_CHUNK = 65536
 _MAX_STDIN_BYTES = 65536
+#: no new output for this long means the tool is stuck (0 disables)
+DEFAULT_STALL_SECONDS = 120.0
+_STALL_POLL_SECONDS = 1.0
 
 
 class CircuitBreakerOpenError(ToolExecutionError):
@@ -49,6 +52,8 @@ class ProcessResult:
     timed_out: bool = False
     cancelled: bool = False
     truncated: bool = False
+    #: killed because it produced nothing for a while
+    stalled: bool = False
 
 
 @dataclass
@@ -58,6 +63,8 @@ class _RunningProcess:
     stdout_chunks: list[bytes] = field(default_factory=list)
     stderr_chunks: list[bytes] = field(default_factory=list)
     truncated: bool = False
+    last_output_at: float = field(default_factory=time.monotonic)
+    stalled: bool = False
 
 
 class ProcessManager:
@@ -67,12 +74,15 @@ class ProcessManager:
         allowed_executables: frozenset[str] = DEFAULT_ALLOWED_EXECUTABLES,
         output_limit_bytes: int = 65536,
         circuit_breaker_threshold: int = 3,
+        stall_seconds: float = DEFAULT_STALL_SECONDS,
     ) -> None:
         if circuit_breaker_threshold < 1:
             raise ValueError("circuit breaker threshold must be >= 1")
         self.allowed_executables = allowed_executables
         self.output_limit_bytes = output_limit_bytes
         self.circuit_breaker_threshold = circuit_breaker_threshold
+        self.stall_seconds = stall_seconds
+        self._deadline_at: float | None = None
         self._running: dict[str, _RunningProcess] = {}
         self._consecutive_failures = 0
 
@@ -81,6 +91,19 @@ class ProcessManager:
 
     def reset_circuit_breaker(self) -> None:
         self._consecutive_failures = 0
+
+    def set_deadline(self, seconds: float | None) -> None:
+        """A hard brake for every later run; ``None`` removes it.
+
+        Per-run timeouts stay, this one caps their sum: a tool that keeps
+        talking cannot outlive the deadline.
+        """
+        self._deadline_at = None if seconds is None else time.monotonic() + seconds
+
+    def remaining_seconds(self) -> float | None:
+        if self._deadline_at is None:
+            return None
+        return max(0.0, self._deadline_at - time.monotonic())
 
     async def start(
         self,
@@ -128,10 +151,18 @@ class ProcessManager:
         entry = self._running.get(handle_id)
         if entry is None:
             raise ProcessNotFoundError(f"process not found: {handle_id}")
+        remaining = self.remaining_seconds()
+        if remaining is not None:
+            timeout_seconds = (
+                remaining
+                if timeout_seconds is None
+                else min(timeout_seconds, remaining)
+            )
         readers = asyncio.gather(
             self._pump(entry.process.stdout, entry.stdout_chunks, entry),
             self._pump(entry.process.stderr, entry.stderr_chunks, entry),
         )
+        watchdog = asyncio.create_task(self._watch_stall(entry))
         timed_out = False
         try:
             await asyncio.wait_for(entry.process.wait(), timeout=timeout_seconds)
@@ -141,6 +172,7 @@ class ProcessManager:
             readers.cancel()
             await self._terminate_group(entry.process)
         finally:
+            watchdog.cancel()
             self._running.pop(handle_id, None)
         result = ProcessResult(
             exit_code=entry.process.returncode,
@@ -148,6 +180,7 @@ class ProcessManager:
             stderr=b"".join(entry.stderr_chunks).decode("utf-8", errors="replace"),
             timed_out=timed_out,
             truncated=entry.truncated,
+            stalled=entry.stalled,
         )
         if timed_out or (result.exit_code not in (0, None)):
             self._record_failure()
@@ -236,6 +269,19 @@ class ProcessManager:
                 captured += len(chunk[:remaining])
             if len(chunk) > remaining:
                 entry.truncated = True
+            entry.last_output_at = time.monotonic()
+
+    async def _watch_stall(self, entry: _RunningProcess) -> None:
+        """Kill a tool that has gone quiet for `stall_seconds`."""
+        if self.stall_seconds <= 0:
+            return
+        while True:
+            await asyncio.sleep(_STALL_POLL_SECONDS)
+            if time.monotonic() - entry.last_output_at < self.stall_seconds:
+                continue
+            entry.stalled = True
+            await self._terminate_group(entry.process)
+            return
 
     async def _terminate_group(self, process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:

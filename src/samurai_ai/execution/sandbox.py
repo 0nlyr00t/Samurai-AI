@@ -242,6 +242,31 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         proxy_flag="-x",
     ),
     SandboxProfile(
+        id="sandbox.ops@v1",
+        description="Operational toolbelt (ssh, smbclient, impacket, xfreerdp, "
+        "adb, pwntools, gcc) behind the scoped proxy",
+        # locally built from packaging/sandbox/ops; a rebuild changes the id, so
+        # re-pin here after a rebuild
+        image="sha256:72181e934bb8c2f661919fdf20ae836075e06b999e43240ab33de341d1404702",
+        allowed_executables=(
+            "ssh",
+            "smbclient",
+            "xfreerdp",
+            "adb",
+            "python3",
+            "gcc",
+            "socat",
+            "nmap",
+            "curl",
+        ),
+        cpu_limit="2.0",
+        memory_mb=1024,
+        pids_limit=512,
+        timeout_seconds=900,
+        max_output_bytes=524288,
+        network_mode="scoped",
+    ),
+    SandboxProfile(
         id="sandbox.camoufox@v1",
         description="Anti-detect Firefox (camoufox) driven by an inline python "
         "script; the only network path is the scoped proxy",
@@ -546,6 +571,26 @@ class DockerSandboxRunner:
             self._run(
                 profile, run_id, executable, args, scope, env, secret_env, stdin_data
             )
+        )
+
+    async def run_async(
+        self,
+        profile: SandboxProfile,
+        run_id: str,
+        executable: str,
+        args: list[str],
+        scope: ScopeContract | None,
+        *,
+        env: dict[str, str] | None = None,
+        secret_env: dict[str, str] | None = None,
+        stdin_data: bytes | None = None,
+    ) -> SandboxRunOutcome:
+        """Same as `run`, for callers that already own an event loop.
+
+        A tunnel or a watcher can then live in the same loop as the process.
+        """
+        return await self._run(
+            profile, run_id, executable, args, scope, env, secret_env, stdin_data
         )
 
     async def _run(
