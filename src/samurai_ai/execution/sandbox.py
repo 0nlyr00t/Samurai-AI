@@ -182,6 +182,28 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
             "WINDVANE_API_KEY",
         ),
     ),
+    SandboxProfile(
+        id="sandbox.dnsx@v1",
+        description="DNS resolver (projectdiscovery/dnsx) pinned to a DoH "
+        "resolver and reached only through the SOCKS5 egress entrance",
+        image=(
+            "projectdiscovery/dnsx@sha256:"
+            "8fced0bedf3655e06c9f1805f6277d60d4988a4b13209e24b3d7cde7baa656ec"
+        ),
+        allowed_executables=("dnsx",),
+        cpu_limit="1.0",
+        memory_mb=256,
+        pids_limit=64,
+        timeout_seconds=180,
+        max_output_bytes=262144,
+        network_mode="scoped",
+        proxy_flag="-proxy",
+        proxy_scheme="socks5",
+        # The resolver is part of the signature: the model cannot point the
+        # lookups at a DoH endpoint of its choosing.
+        resolver_url="doh:https://cloudflare-dns.com/dns-query",
+        egress_hosts=("cloudflare-dns.com",),
+    ),
 )
 
 
@@ -262,6 +284,9 @@ class DockerSandboxRunner:
             DOCKER_EXECUTABLE,
             "run",
             "--rm",
+            # docker only forwards our stdin into the container with -i; the
+            # process stdin is always closed, so a tool sees EOF either way.
+            "--interactive",
         ]
         if profile.network_mode == "scoped":
             if proxy_url is None:
@@ -371,9 +396,12 @@ class DockerSandboxRunner:
         *,
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
+        stdin_data: bytes | None = None,
     ) -> SandboxRunOutcome:
         return asyncio.run(
-            self._run(profile, run_id, executable, args, scope, env, secret_env)
+            self._run(
+                profile, run_id, executable, args, scope, env, secret_env, stdin_data
+            )
         )
 
     async def _run(
@@ -385,6 +413,7 @@ class DockerSandboxRunner:
         scope: ScopeContract | None,
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
+        stdin_data: bytes | None = None,
     ) -> SandboxRunOutcome:
         proxy: EgressProxy | None = None
         proxy_url: str | None = None
@@ -401,7 +430,10 @@ class DockerSandboxRunner:
                 extra_hosts=frozenset(profile.egress_hosts),
             )
             _, proxy_port = await proxy.start()
-            proxy_url = f"http://samurai:{token}@host.docker.internal:{proxy_port}"
+            proxy_url = (
+                f"{profile.proxy_scheme}://samurai:{token}"
+                f"@host.docker.internal:{proxy_port}"
+            )
         if proxy_url is not None and profile.proxy_flag is not None:
             args = [*args, profile.proxy_flag, proxy_url]
         argv = self.build_argv(
@@ -409,11 +441,16 @@ class DockerSandboxRunner:
         )
         await self.preflight(profile)
         child_env = {**(env or {}), **(secret_env or {})} or None
+        extra: dict[str, Any] = {}
+        if child_env:
+            extra["env"] = child_env
+        if stdin_data is not None:
+            extra["stdin_data"] = stdin_data
         try:
             result = await self.manager.run(
                 argv,
                 timeout_seconds=profile.timeout_seconds + _TIMEOUT_GRACE_SECONDS,
-                **({"env": child_env} if child_env else {}),
+                **extra,
             )
         finally:
             if proxy is not None:

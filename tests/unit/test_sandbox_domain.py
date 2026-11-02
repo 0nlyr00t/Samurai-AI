@@ -387,3 +387,41 @@ def test_sign_allowlist_writes_signature_file(tmp_path: Path) -> None:
     path = tmp_path / "home" / "sandbox-allowlist.sig"
     assert path.read_text(encoding="ascii").strip() == signature
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_profile_validates_proxy_scheme_and_resolver() -> None:
+    assert make_profile().proxy_scheme == "http"
+    assert make_profile(proxy_scheme="socks5").proxy_scheme == "socks5"
+    with pytest.raises(ValidationError, match="proxy scheme"):
+        make_profile(proxy_scheme="socks4")
+    with pytest.raises(ValidationError, match="resolver must look like"):
+        make_profile(resolver_url="https://cloudflare-dns.com/dns-query")
+    profile = make_profile(
+        proxy_scheme="socks5",
+        resolver_url="doh:https://cloudflare-dns.com/dns-query",
+        egress_hosts=("cloudflare-dns.com",),
+    )
+    assert profile.resolver_host() == "cloudflare-dns.com"
+    assert make_profile().resolver_host() is None
+
+
+def test_run_uses_the_profile_proxy_scheme(tmp_path: Path) -> None:
+    runner, fake = make_runner(tmp_path)
+    sign_default(tmp_path)
+    profile = make_profile(
+        network_mode="scoped",
+        proxy_flag="-proxy",
+        proxy_scheme="socks5",
+        allowed_executables=("echo",),
+    )
+    runner.run(
+        profile,
+        "run_socks",
+        "echo",
+        ["hi"],
+        ScopeContract(includes=("example.com",)),
+    )
+    docker_run = fake.calls[-1]
+    assert docker_run[docker_run.index("-proxy") + 1].startswith(
+        "socks5://samurai:"
+    )

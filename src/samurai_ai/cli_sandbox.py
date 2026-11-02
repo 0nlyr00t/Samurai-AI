@@ -75,6 +75,8 @@ def _show_profiles(runner: DockerSandboxRunner, json_output: bool) -> int:
                 "allowed_executables": list(profile.allowed_executables),
                 "env_names": list(profile.env_names),
                 "proxy_flag": profile.proxy_flag,
+                "proxy_scheme": profile.proxy_scheme,
+                "resolver_url": profile.resolver_url,
                 "egress_hosts": list(profile.egress_hosts),
                 "signature": signature_status,
                 "docker": "available" if docker_ok else "unavailable",
@@ -94,7 +96,9 @@ def _show_profiles(runner: DockerSandboxRunner, json_output: bool) -> int:
         print(f"  image: {row['image']}")
         print(f"  executables: {executables}")
         if row["proxy_flag"]:
-            print(f"  proxy flag: {row['proxy_flag']}")
+            print(f"  proxy flag: {row['proxy_flag']} ({row['proxy_scheme']})")
+        if row["resolver_url"]:
+            print(f"  resolver: {row['resolver_url']}")
         if row["env_names"]:
             print(f"  secret env names: {', '.join(str(name) for name in row['env_names'])}")
         if row["egress_hosts"]:
