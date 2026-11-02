@@ -39,7 +39,7 @@ from samurai_ai.domain.kernel import (
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
 from samurai_ai.domain.models import ModelCapability
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
-from samurai_ai.domain.permission import classify_command
+from samurai_ai.domain.permission import classify_command, decide
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
@@ -636,9 +636,22 @@ class ChatController:
         badge = f"  [{risk.label()}]" if not risk.empty else ""
         self._write_dim(f"⚙ !{command}{badge}")
         mode = self._permission_mode
-        ask = mode.prompts_for_tools and (
-            not self._reusable_approval("shell.exec") or not risk.empty
+        decision = decide(
+            self.settings.permission_rules(),
+            "shell.exec",
+            command,
+            mode,
+            risk,
+            reusable=self._reusable_approval("shell.exec"),
         )
+        if decision.is_denied:
+            self._write_dim(self.translator.t("chat.tool-denied", command=command))
+            self._remember(
+                Message(role="user", content=f"[shell !{command}] denied by rule")
+            )
+            self._shell_running = ""
+            return
+        ask = decision.action == "ask"
         if ask:
             allowed = await self.push_screen_wait(
                 AccessPromptScreen(
@@ -1258,7 +1271,20 @@ class ChatController:
         # A tool already approved for this operation is not asked again, except
         # for a sensitive path or a destructive shape, which stay worth a look.
         mode = self._permission_mode
-        ask = mode.prompts_for_tools and (not self._reusable_approval(tool_id) or not risk.empty)
+        decision = decide(
+            self.settings.permission_rules(),
+            tool_id,
+            command,
+            mode,
+            risk,
+            reusable=self._reusable_approval(tool_id),
+        )
+        if decision.is_denied:
+            self._write_dim(self.translator.t("chat.tool-denied", command=command))
+            return Message(
+                role="user", content=f"[tool {call.name}] denied by rule"
+            )
+        ask = decision.action == "ask"
         if ask:
             allowed = await self.push_screen_wait(
                 AccessPromptScreen(
