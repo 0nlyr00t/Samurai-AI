@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from samurai_ai.domain.impact import ImpactBudget, ImpactBudgetError, ImpactError, ImpactLevel
+from samurai_ai.domain.impact import (
+    MAX_ATTEMPTS,
+    ImpactBudgetError,
+    ImpactError,
+    ImpactLevel,
+)
 from samurai_ai.domain.kernel import ArtifactKind
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
@@ -60,17 +65,21 @@ def test_levels_escalate_and_grade(tmp_path: Path) -> None:
     assert kernel.get_finding_by_id(finding_id).evidence_version == 2
 
 
-def test_the_budget_stops_the_ladder(tmp_path: Path) -> None:
+def test_the_budget_counts_every_recorded_attempt(tmp_path: Path) -> None:
     kernel, impact, finding_id = make_stack(tmp_path)
-    budget = ImpactBudget(max_attempts=1)
-    impact.state(finding_id)  # warm
-    impact.record(finding_id, ImpactLevel.READ, ("trf_1",))
-    with pytest.raises(ImpactBudgetError):
-        # a second attempt needs a fresh session budget with max_attempts=1
-        spent = ImpactBudget(max_attempts=1)
-        spent.spend()
-        spent.spend()
-    assert budget.remaining_attempts == 1
+    state = impact.record(finding_id, ImpactLevel.READ, ("trf_1",))
+    assert state.budget.attempts == 1
+    state = impact.record(finding_id, ImpactLevel.WRITE, ("trf_2",), rollback="undo")
+    assert state.budget.attempts == 2
+    assert state.budget.remaining_attempts == state.budget.max_attempts - 2
+
+
+def test_an_exhausted_budget_refuses_the_next_attempt(tmp_path: Path) -> None:
+    kernel, impact, finding_id = make_stack(tmp_path)
+    for index in range(MAX_ATTEMPTS):
+        impact.record(finding_id, ImpactLevel.READ, (f"trf_{index}",))
+    with pytest.raises(ImpactBudgetError, match="spent"):
+        impact.record(finding_id, ImpactLevel.RCE, ("trf_x",), rollback="undo")
 
 
 def test_grade_before_any_level_is_refused(tmp_path: Path) -> None:
