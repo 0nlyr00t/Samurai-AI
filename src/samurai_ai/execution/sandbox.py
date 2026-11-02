@@ -75,6 +75,8 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         timeout_seconds=30,
         max_output_bytes=65536,
         network_mode="scoped",
+        # The channel's own test target: `cat /proc/self/environ` in the opt-in
+        # docker test proves a value reaches the container without entering argv.
         env_names=("SAMURAI_TEST_SECRET",),
     ),
     SandboxProfile(
@@ -180,11 +182,6 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
             "WINDVANE_API_KEY",
         ),
     ),
-)
-
-
-SECRET_ENV_NAMES = frozenset(
-    name for profile in SANDBOX_PROFILES for name in profile.env_names
 )
 
 
@@ -472,7 +469,6 @@ def sign_allowlist(signature_path: Path, master_key: bytes) -> str:
 __all__ = [
     "DOCKER_EXECUTABLE",
     "SANDBOX_PROFILES",
-    "SECRET_ENV_NAMES",
     "DockerSandboxRunner",
     "SandboxRunOutcome",
     "get_profile",
