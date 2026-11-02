@@ -124,6 +124,58 @@ def test_proxy_requires_token(http_server: str) -> None:
     assert [event.verdict for event in proxy.events] == ["denied-auth", "denied-auth"]
 
 
+def test_extra_hosts_allow_a_third_party_besides_scope(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    # the scope names a host that is not 127.0.0.1: only the profile's extra
+    # hosts may open the way to the passive source
+    proxy = EgressProxy(
+        ScopeContract(includes=("example.com",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+        extra_hosts=frozenset({"127.0.0.1"}),
+    )
+    request: dict = {
+        "target": f"{http_server}/data",
+        "host_header": f"127.0.0.1:{port}",
+        "token": TOKEN,
+    }
+    run_proxy(proxy, [request])
+    assert request["status"] == 200
+    assert [event.verdict for event in proxy.events] == ["allowed"]
+
+
+def test_extra_hosts_still_reject_unlisted_hosts(http_server: str) -> None:
+    port = int(http_server.rsplit(":", 1)[1])
+    proxy = EgressProxy(
+        ScopeContract(includes=("example.com",)),
+        TOKEN,
+        allowed_ports=frozenset({port}),
+        extra_hosts=frozenset({"crt.sh"}),
+    )
+    request: dict = {
+        "target": f"{http_server}/data",
+        "host_header": f"127.0.0.1:{port}",
+        "token": TOKEN,
+    }
+    run_proxy(proxy, [request])
+    assert request["status"] == 403
+    assert [event.verdict for event in proxy.events] == ["denied-scope"]
+    assert not proxy._in_extra_hosts("127.0.0.1")
+
+
+def test_extra_hosts_wildcard_matches_apex_and_subdomain() -> None:
+    proxy = EgressProxy(
+        ScopeContract(includes=("example.com",)),
+        TOKEN,
+        extra_hosts=frozenset({"*.commoncrawl.org", "crt.sh"}),
+    )
+    assert proxy._in_extra_hosts("commoncrawl.org")
+    assert proxy._in_extra_hosts("index.commoncrawl.org")
+    assert proxy._in_extra_hosts("crt.sh")
+    assert not proxy._in_extra_hosts("notcommoncrawl.org")
+    assert not proxy._in_extra_hosts("crt.sh.evil.com")
+
+
 def test_proxy_denies_out_of_scope_and_port(http_server: str) -> None:
     port = int(http_server.rsplit(":", 1)[1])
     proxy = EgressProxy(

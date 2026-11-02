@@ -117,6 +117,7 @@ class EgressProxy:
         max_connections: int = _DEFAULT_MAX_CONNECTIONS,
         resolver: Resolver = default_resolver,
         on_event: Callable[[EgressEvent], None] | None = None,
+        extra_hosts: frozenset[str] = frozenset(),
     ) -> None:
         self.scope = scope
         self.token = token
@@ -127,6 +128,7 @@ class EgressProxy:
         self.timeout = timeout
         self.resolver = resolver
         self.on_event = on_event
+        self.extra_hosts = extra_hosts
         self.events: list[EgressEvent] = []
         self._server: asyncio.Server | None = None
         self._semaphore = asyncio.Semaphore(max_connections)
@@ -156,9 +158,30 @@ class EgressProxy:
         if self.on_event is not None:
             self.on_event(event)
 
+    def _in_extra_hosts(self, host: str) -> bool:
+        if not self.extra_hosts:
+            return False
+        candidate = host.lower().rstrip(".")
+        for entry in self.extra_hosts:
+            if entry.startswith("*."):
+                base = entry[2:]
+                if candidate == base or candidate.endswith(f".{base}"):
+                    return True
+            elif candidate == entry:
+                return True
+        return False
+
     def _verdict(self, host: str, port: int, scheme: str) -> str:
         if port not in self.allowed_ports:
             return VERDICT_DENIED_PORT
+        if self._in_extra_hosts(host):
+            # Third-party sources of a passive tool: allowed by the signed
+            # profile, still resolved through the pinned resolver and audited.
+            try:
+                self.resolver(host)
+            except ToolExecutionError:
+                return VERDICT_DENIED_SCOPE
+            return VERDICT_ALLOWED
         decision = self.scope.evaluate(f"{scheme}://{host}/")
         if not decision.allowed:
             return VERDICT_DENIED_SCOPE

@@ -167,6 +167,7 @@ def test_default_registry_contains_stage2_tools() -> None:
         "sandbox.exec",
         "recon.httpx-probe",
         "scan.nuclei",
+        "recon.subfinder-passive",
     }
     assert definitions["local.echo"].risk_class == RiskClass.R0
     assert definitions["process.exec"].risk_class == RiskClass.R1

@@ -20,7 +20,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## Текущее состояние
 
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами**, **Stage 6b — fault injection, prompt-injection containment, soak и migration/backup/restore suites** и **Stage 6c — standalone binary, воспроизводимые сборки, подписанные релизы и политика совместимости (`md/compatibility.md`)** и **Этап 7 (волна 1) — governed security tools adapters `recon.httpx-probe` и `scan.nuclei` по threat review** и **Этап 8 — TUI UX: стрелочная навигация (выбор языка, `/model` picker модели и reasoning), чёрная тема по умолчанию и цветной журнал** , **Stage 8+ — вкладки Журнал/План/Находки/Доступ, автодополнение slash-команд, выделение и копирование текста, режим `/yolo`, доверие к директории (`/trust`) и отображение cwd в статус-баре** и **Этап 9 — harness UX: режимы разрешений, plan mode, goal mode, steering, shell-режим, `/undo` и `/compact`**.
+Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами**, **Stage 6b — fault injection, prompt-injection containment, soak и migration/backup/restore suites** и **Stage 6c — standalone binary, воспроизводимые сборки, подписанные релизы и политика совместимости (`md/compatibility.md`)** и **Этап 7 (волна 1) — governed security tools adapters `recon.httpx-probe` и `scan.nuclei` по threat review**, **Этап 7 (волна 2) — env-канал секретов и `recon.subfinder-passive` (ключи уезжают именем, а не значением)** и **Этап 8 — TUI UX: стрелочная навигация (выбор языка, `/model` picker модели и reasoning), чёрная тема по умолчанию и цветной журнал** , **Stage 8+ — вкладки Журнал/План/Находки/Доступ, автодополнение slash-команд, выделение и копирование текста, режим `/yolo`, доверие к директории (`/trust`) и отображение cwd в статус-баре** и **Этап 9 — harness UX: режимы разрешений, plan mode, goal mode, steering, shell-режим, `/undo` и `/compact`**.
 
 Уже реализовано:
 
@@ -86,7 +86,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - 763 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
-CALDERA/VECTR (только export), security tools волны 2 (subfinder/nmap/ffuf —
+CALDERA/VECTR (только export), security tools волны 2 (nmap/ffuf —
 технические блокеры в `md/threat-review-security-tools.md`), LLM streaming,
 поаргументные permission-правила с doom-loop guard, shell-режим в фоне на уровне ОС, extension seams/плагины,
 web-поверхность операции, полный egress enforcement на

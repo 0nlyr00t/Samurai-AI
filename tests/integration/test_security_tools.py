@@ -16,7 +16,11 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.registry import ToolRegistry
 from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
-from samurai_ai.execution.security import HttpxProbeTool, NucleiScanTool
+from samurai_ai.execution.security import (
+    HttpxProbeTool,
+    NucleiScanTool,
+    SubfinderPassiveTool,
+)
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -46,10 +50,14 @@ class FakeManager:
     def __init__(self, run_result: ProcessResult) -> None:
         self.run_result = run_result
         self.calls: list[tuple[str, ...]] = []
+        self.envs: list[dict[str, str] | None] = []
 
-    async def run(self, argv, timeout_seconds=None):  # type: ignore[no-untyped-def]
+    async def run(  # type: ignore[no-untyped-def]
+        self, argv, timeout_seconds=None, *, env=None
+    ):
         arguments = tuple(argv)
         self.calls.append(arguments)
+        self.envs.append(dict(env) if env is not None else None)
         if arguments[:2] == ("docker", "run"):
             return self.run_result
         return ProcessResult(exit_code=0, stdout="ok", stderr="")
@@ -88,6 +96,11 @@ def approve(kernel: KernelService, operation_id: str, tool_id: str, risk: RiskCl
     return approval.id
 
 
+def tool_arguments(argv: tuple[str, ...]) -> list[str]:
+    """Tool args start after the image; the executable rides on --entrypoint."""
+    return list(argv[argv.index("--entrypoint") + 3:])
+
+
 def docker_run_argv(manager: FakeManager) -> tuple[str, ...]:
     runs = [call for call in manager.calls if call[:2] == ("docker", "run")]
     assert len(runs) == 1
@@ -113,7 +126,7 @@ def test_httpx_probe_template_scope_and_summary(tmp_path: Path) -> None:
     argv = docker_run_argv(manager)
     joined = " ".join(argv)
     assert " sandbox.httpx@v1" not in joined  # profile id is not a CLI arg
-    tool_args = argv[argv.index("httpx"):][1:]
+    tool_args = tool_arguments(argv)
     assert "-json" in tool_args and "-rate-limit" in tool_args
     assert tool_args[tool_args.index("-rate-limit") + 1] == "50"
     assert "-tech-detect" in tool_args
@@ -142,7 +155,7 @@ def test_nuclei_template_disables_updates_and_bounds(tmp_path: Path) -> None:
     )
     assert result.run.status.value == "completed"
     argv = docker_run_argv(manager)
-    tool_args = argv[argv.index("nuclei"):][1:]
+    tool_args = tool_arguments(argv)
     assert "-disable-update-check" in tool_args
     assert "-jsonl" in tool_args
     assert tool_args[tool_args.index("-severity") + 1] == "high,critical"
@@ -253,8 +266,170 @@ def test_tools_registered_in_default_registry() -> None:
     ids = {definition.id for definition in registry.definitions()}
     assert "recon.httpx-probe" in ids
     assert "scan.nuclei" in ids
+    assert "recon.subfinder-passive" in ids
     assert registry.get("recon.httpx-probe").definition.risk_class is RiskClass.R2
     assert registry.get("scan.nuclei").definition.risk_class is RiskClass.R3
+    assert (
+        registry.get("recon.subfinder-passive").definition.risk_class is RiskClass.R2
+    )
+
+
+SUBFINDER_JSONL = (
+    '{"host":"api.example.com","input":"example.com","source":"crtsh"}\n'
+    '{"host":"dev.example.com","input":"example.com","source":"shodan"}\n'
+)
+SUBFINDER_KEY = "shodan-key-1234567890"
+
+
+def make_subfinder_stack(
+    tmp_path: Path, stdout: str
+) -> tuple[OperationService, KernelService, ToolExecutionService, FakeManager]:
+    database_path = tmp_path / "subfinder.db"
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = FakeManager(ProcessResult(exit_code=0, stdout=stdout, stderr=""))
+    database = Database(database_path)
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    runner = DockerSandboxRunner(
+        manager, tmp_path / "sandbox-allowlist.sig", lambda: MASTER_KEY
+    )
+    registry = ToolRegistry(adapters=(SubfinderPassiveTool(runner),))
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), registry=registry
+    )
+    return service, kernel, execution, manager
+
+
+def test_subfinder_keeps_key_out_of_argv(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_subfinder_stack(
+        tmp_path, SUBFINDER_JSONL + f'{{"host":"{SUBFINDER_KEY}","source":"x"}}\n'
+    )
+    operation = make_operation(service)
+    approval_id = approve(
+        kernel, operation.id, "recon.subfinder-passive", RiskClass.R2
+    )
+
+    result = execution.run_tool(
+        operation.id,
+        "recon.subfinder-passive",
+        {"domain": "example.com", "keys": {"shodan": SUBFINDER_KEY}},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+
+    argv = docker_run_argv(manager)
+    joined = " ".join(argv)
+    # name in argv, value only in the docker client environment
+    assert "SHODAN_API_KEY" in argv
+    assert f"SHODAN_API_KEY={SUBFINDER_KEY}" not in joined
+    assert SUBFINDER_KEY not in joined
+    assert manager.envs[-1] == {
+        "HOME": "/tmp",
+        "TMPDIR": "/tmp",
+        "SHODAN_API_KEY": SUBFINDER_KEY,
+    }
+
+    tool_args = tool_arguments(argv)
+    assert "-json" in tool_args and "-disable-update-check" in tool_args
+    assert tool_args[tool_args.index("-d") + 1] == "example.com"
+    # scoped egress: the proxy URL reaches the tool, keyed source is selected
+    assert tool_args[tool_args.index("-proxy") + 1].startswith("http://samurai:")
+    sources = tool_args[tool_args.index("-s") + 1].split(",")
+    assert "shodan" in sources and "crtsh" in sources
+
+    assert "api.example.com" in result.stdout
+    assert "dev.example.com" in result.stdout
+    # the key never leaks into output or evidence
+    assert SUBFINDER_KEY not in result.stdout
+    assert SUBFINDER_KEY not in json.dumps(result.run.parameters)
+
+
+def test_subfinder_works_without_keys_on_free_sources(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_subfinder_stack(tmp_path, SUBFINDER_JSONL)
+    operation = make_operation(service)
+    approval_id = approve(
+        kernel, operation.id, "recon.subfinder-passive", RiskClass.R2
+    )
+    result = execution.run_tool(
+        operation.id,
+        "recon.subfinder-passive",
+        {"domain": "example.com"},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    argv = docker_run_argv(manager)
+    tool_args = tool_arguments(argv)
+    sources = tool_args[tool_args.index("-s") + 1].split(",")
+    assert "crtsh" in sources and "shodan" not in sources
+    assert "SHODAN_API_KEY" not in argv
+    assert manager.envs[-1] == {"HOME": "/tmp", "TMPDIR": "/tmp"}
+
+
+def test_subfinder_key_contract_is_fail_closed(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_subfinder_stack(tmp_path, "")
+    operation = make_operation(service)
+    approval_id = approve(
+        kernel, operation.id, "recon.subfinder-passive", RiskClass.R2
+    )
+
+    # keyed source without a key
+    with pytest.raises(ToolValidationError, match="need a key"):
+        execution.run_tool(
+            operation.id,
+            "recon.subfinder-passive",
+            {"domain": "example.com", "sources": ["virustotal"]},
+            approval_id=approval_id,
+        )
+    # a key on a keyless source
+    with pytest.raises(ToolValidationError, match="needs no key"):
+        execution.run_tool(
+            operation.id,
+            "recon.subfinder-passive",
+            {"domain": "example.com", "keys": {"crtsh": "x"}},
+            approval_id=approval_id,
+        )
+    # unknown source (the schema enum rejects it before the adapter runs)
+    with pytest.raises(ToolValidationError, match="must be one of"):
+        execution.run_tool(
+            operation.id,
+            "recon.subfinder-passive",
+            {"domain": "example.com", "sources": ["shodan2"]},
+            approval_id=approval_id,
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_subfinder_rejects_out_of_scope_domain(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_subfinder_stack(tmp_path, "")
+    operation = make_operation(service)
+    approval_id = approve(
+        kernel, operation.id, "recon.subfinder-passive", RiskClass.R2
+    )
+    with pytest.raises(ToolScopeError):
+        execution.run_tool(
+            operation.id,
+            "recon.subfinder-passive",
+            {"domain": "evil-outside.com"},
+            approval_id=approval_id,
+        )
+    # a flag-looking domain is rejected before scope evaluation reaches argv
+    with pytest.raises(ToolValidationError):
+        execution.run_tool(
+            operation.id,
+            "recon.subfinder-passive",
+            {"domain": "-config=/etc/passwd"},
+            approval_id=approval_id,
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_subfinder_summary_is_bounded() -> None:
+    flood = "".join(
+        json.dumps({"host": f"h{index}.example.com", "source": "crtsh"}) + "\n"
+        for index in range(400)
+    )
+    assert len(SubfinderPassiveTool().summarize(flood)) == 100
 
 
 def test_summary_is_bounded(tmp_path: Path) -> None:

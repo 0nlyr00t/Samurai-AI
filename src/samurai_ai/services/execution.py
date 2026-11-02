@@ -95,6 +95,13 @@ class ToolExecutionService:
         preflight = getattr(adapter, "preflight", None)
         if callable(preflight):
             preflight(resolved)
+        build_env = getattr(adapter, "build_env", None)
+        if callable(build_env):
+            # Register the secret values before the parameters are recorded, so
+            # evidence holds vault names (or REDACTED), never the plaintext.
+            _, secret_env = build_env(resolved)
+            for value in secret_env.values():
+                self.redactor.register(value)
         approval = self._resolve_approval(
             operation_id, definition, task_id, approval_id, approval_resolver
         )
