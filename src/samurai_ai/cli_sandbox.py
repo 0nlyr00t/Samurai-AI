@@ -9,8 +9,8 @@ from typing import Any
 from samurai_ai.config import sandbox_allowlist_path, vault_key_path
 from samurai_ai.execution.process import ProcessManager
 from samurai_ai.execution.sandbox import (
-    SANDBOX_PROFILES,
     DockerSandboxRunner,
+    all_profiles,
     sign_allowlist,
 )
 from samurai_ai.services.vault import load_master_key
@@ -39,14 +39,14 @@ def handle_sandbox_command(args: argparse.Namespace) -> int | None:
         if args.json_output:
             _print_json(
                 {
-                    "signed": len(SANDBOX_PROFILES),
+                    "signed": len(all_profiles()),
                     "signature": signature,
                     "path": str(runner.signature_path),
                 }
             )
         else:
             print(
-                f"signed {len(SANDBOX_PROFILES)} sandbox profile(s) -> "
+                f"signed {len(all_profiles())} sandbox profile(s) -> "
                 f"{runner.signature_path}"
             )
         return 0
@@ -67,7 +67,7 @@ def _show_profiles(runner: DockerSandboxRunner, json_output: bool) -> int:
     last_resign = _describe_resign(resign)
     docker_ok = asyncio.run(runner.docker_available())
     rows: list[dict[str, Any]] = []
-    for profile in SANDBOX_PROFILES:
+    for profile in all_profiles():
         image_ok = asyncio.run(runner.image_present(profile.image)) if docker_ok else False
         rows.append(
             {
@@ -120,10 +120,10 @@ def _verify_signature(runner: DockerSandboxRunner, json_output: bool) -> int:
     status = runner.allowlist_status()
     ok = status == "signed"
     if json_output:
-        _print_json({"status": status, "profiles": len(SANDBOX_PROFILES), "ok": ok})
+        _print_json({"status": status, "profiles": len(all_profiles()), "ok": ok})
         return 0 if ok else 1
     if ok:
-        print(f"signature matches {len(SANDBOX_PROFILES)} sandbox profile(s)")
+        print(f"signature matches {len(all_profiles())} sandbox profile(s)")
         return 0
     print(
         f"signature is {status}; run 'samurai sandbox sign' to re-create it",

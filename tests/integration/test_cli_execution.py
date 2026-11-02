@@ -276,3 +276,87 @@ def test_a_deny_rule_stops_before_execution(tmp_path: Path, capsys) -> None:
     assert main(["--db", database, "--json", "operation", "show", operation_id, "--events"]) == 0
     events = json.loads(capsys.readouterr().out)["events"]
     assert not [e for e in events if e["event_type"].startswith("tool.run")]
+
+
+NIKTO_MANIFEST = {
+    "id": "scan.nikto",
+    "title": "Nikto web server scan",
+    "image": "sullo/nikto@sha256:" + "0" * 64,
+    "executable": "nikto",
+    "risk_class": "r2",
+    "network": "scoped",
+    "proxy_flag": "-useproxy",
+    "params": {
+        "host": {"type": "string", "required": True, "pattern": "^[a-z0-9.-]+$"},
+        "tuning": {
+            "type": "array",
+            "items_enum": ["1", "2", "3"],
+            "max_items": 3,
+            "default": ["1", "2"],
+        },
+    },
+    "targets": {"param": "host", "kind": "host", "max": 1},
+    "argv": ["-h", "{host}", "-Tuning", "{tuning}", "-nointeractive"],
+    "parser": "text-lines",
+}
+
+
+def _isolated_home(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+
+
+def _install_manifest(tmp_path: Path, capsys, overrides: dict | None = None) -> int:
+    database = str(tmp_path / "manifest.db")
+    path = tmp_path / "tool.json"
+    path.write_text(json.dumps({**NIKTO_MANIFEST, **(overrides or {})}))
+    return main(["--db", database, "tool", "install", str(path), "--trusted"])
+
+
+def test_a_manifest_becomes_a_registered_tool(tmp_path: Path, capsys, monkeypatch) -> None:
+    _isolated_home(monkeypatch, tmp_path)
+    database = str(tmp_path / "manifest.db")
+    path = tmp_path / "tool.json"
+    path.write_text(json.dumps(NIKTO_MANIFEST))
+
+    # trust is required before anything lands
+    assert main(["--db", database, "tool", "install", str(path)]) == 2
+    assert "needs --trusted" in capsys.readouterr().err
+
+    assert main(["--db", database, "tool", "install", str(path), "--trusted"]) == 0
+    assert "installed\tscan.nikto" in capsys.readouterr().out
+    # a second install of the same id needs --replace
+    assert main(["--db", database, "tool", "install", str(path), "--trusted"]) == 2
+    capsys.readouterr()
+
+    assert main(["--db", database, "tool", "list"]) == 0
+    assert "scan.nikto" in capsys.readouterr().out
+    assert main(["--db", database, "tool", "manifests"]) == 0
+    assert "ok" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"image": "busybox:latest"}, "pinned by digest"),
+        ({"parser": "yaml"}, "parser"),
+        ({"argv": ["-h", "{nope}"]}, "unknown parameters"),
+        (
+            {
+                "argv": ["-h", "{host}"],
+                "params": {
+                    "host": {"type": "string", "required": True},
+                    "tuning": {"type": "array", "default": ["1"]},
+                },
+            },
+            "used nowhere",
+        ),
+        ({"network": "none"}, "cannot declare proxy"),
+        ({"risk_class": "r0", "read_only": False}, "read-only"),
+    ],
+)
+def test_a_broken_manifest_is_refused(
+    tmp_path: Path, capsys, monkeypatch, overrides: dict, message: str
+) -> None:
+    _isolated_home(monkeypatch, tmp_path)
+    assert _install_manifest(tmp_path, capsys, overrides) == 2
+    assert message in capsys.readouterr().err

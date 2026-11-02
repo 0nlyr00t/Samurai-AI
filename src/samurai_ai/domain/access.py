@@ -133,6 +133,8 @@ _MINIMUM: dict[str, Role] = {
     "swarm": Role.OPERATOR,
     "agent": Role.OPERATOR,
     "headless": Role.OPERATOR,
+    "tool.install": Role.ADMIN,
+    "tool.manifests": Role.VIEWER,
     "rules": Role.VIEWER,
     "rules.list": Role.VIEWER,
     "rules.add": Role.ADMIN,

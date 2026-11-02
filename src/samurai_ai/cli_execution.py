@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
+from samurai_ai.config import tools_directory
 from samurai_ai.domain.execution import (
     ApprovalRequiredError,
     ToolResult,
@@ -14,6 +16,7 @@ from samurai_ai.domain.execution import (
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.permission import Decision, classify_command, decide, parse_mode
 from samurai_ai.services.execution import ToolExecutionService
+from samurai_ai.services.manifests import ManifestStore, ManifestStoreError
 from samurai_ai.services.settings import SettingsService
 
 
@@ -42,6 +45,19 @@ def register_execution_commands(
 
     show = tool_commands.add_parser("show", help="Show a tool run")
     show.add_argument("run_id")
+
+    install = tool_commands.add_parser(
+        "install", help="Install a tool manifest (adds the tool to the registry)"
+    )
+    install.add_argument("path", type=Path)
+    install.add_argument(
+        "--trusted",
+        action="store_true",
+        help="required: you read the manifest and its image digest",
+    )
+    install.add_argument("--replace", action="store_true")
+
+    tool_commands.add_parser("manifests", help="List installed manifests")
 
 
 def _rule_decision(
@@ -96,6 +112,27 @@ def handle_execution_command(
                     f"{definition.id}\tv{definition.version}\t{definition.kind.value}\t"
                     f"{definition.risk_class.value}\t{network}\t{definition.description}"
                 )
+        return 0
+    if args.tool_command == "install":
+        store = ManifestStore(tools_directory())
+        try:
+            manifest = store.install(
+                args.path, trusted=args.trusted, replace=args.replace
+            )
+        except ManifestStoreError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"installed\t{manifest.id}\tv{manifest.version}\t{manifest.profile_id}")
+        return 0
+    if args.tool_command == "manifests":
+        store = ManifestStore(tools_directory())
+        manifests = store.load_all()
+        if not manifests:
+            print("no manifests installed")
+            return 0
+        for manifest in manifests:
+            tampered = "tampered" if store.is_tampered(manifest) else "ok"
+            print(f"{manifest.id}\tv{manifest.version}\t{manifest.parser}\t{tampered}")
         return 0
     if args.tool_command == "run":
         decision, params = _rule_decision(args, settings)
