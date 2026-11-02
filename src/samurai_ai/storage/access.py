@@ -50,6 +50,31 @@ class AccessRepository:
             )
             return cursor.rowcount or 0
 
+    def extend_session(self, session_id: str, expires_at: datetime) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE access_sessions SET access_expires_at = ? WHERE id = ?",
+                (expires_at.isoformat(), session_id),
+            )
+
+    def replace_principal(self, session_id: str, principal: Principal) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE access_sessions
+                SET subject = ?, email = ?, display = ?, role = ?, issuer = ?
+                WHERE id = ?
+                """,
+                (
+                    principal.subject,
+                    principal.email,
+                    principal.display,
+                    principal.role.value,
+                    principal.issuer,
+                    session_id,
+                ),
+            )
+
     def list_sessions(self) -> list[Session]:
         with self.database.connect() as connection:
             rows = connection.execute(
