@@ -17,7 +17,11 @@ from samurai_ai.execution.sandbox import (
     get_profile,
     sign_allowlist,
 )
-from samurai_ai.execution.security import DnsxResolveTool, NmapScanTool
+from samurai_ai.execution.security import (
+    DnsxResolveTool,
+    FfufFuzzTool,
+    NmapScanTool,
+)
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -280,3 +284,57 @@ def test_nmap_scan_finds_an_open_port(
     assert result.run.status is ToolRunStatus.COMPLETED
     summary = result.stdout.split("# raw")[0]
     assert ":443/tcp open" in summary
+
+
+def test_ffuf_fuzzes_through_the_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    profile = get_profile("sandbox.ffuf@v1")
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: load_master_key(vault_key_path()),
+    )
+    if not asyncio.run(runner.docker_available()):
+        pytest.skip("docker daemon is not available")
+    if not asyncio.run(runner.image_present(profile.image)):
+        pytest.skip(f"sandbox image not pulled: {profile.image}")
+    sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+
+    database = Database(tmp_path / "ffuf-docker.db")
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    execution = ToolExecutionService(
+        service,
+        kernel,
+        recovery,
+        ToolRunRepository(database),
+        registry=ToolRegistry(adapters=(FfufFuzzTool(runner),)),
+    )
+    operation = service.create(
+        "ffuf docker lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("example.com",)),
+    )
+    params: dict = {"url": "https://example.com/FUZZ"}
+    with pytest.raises(ApprovalRequiredError) as caught:
+        execution.run_tool(operation.id, "fuzz.ffuf", params)
+    kernel.approve(caught.value.approval_id, decided_by="operator")
+    result = execution.run_tool(
+        operation.id, "fuzz.ffuf", params, approval_id=caught.value.approval_id
+    )
+    assert result.run.status is ToolRunStatus.COMPLETED
+    # every request went through our proxy, none straight out
+    completed = [
+        event
+        for event in service.events(operation.id)
+        if event.event_type == "tool.run.completed"
+    ]
+    egress = completed[0].payload.get("egress", [])
+    assert egress and all(item["host"] == "example.com" for item in egress)
+    assert all(item["verdict"] == "allowed" for item in egress)
+    # example.com answers the same for any path, so calibration filters it all
+    assert "# summary" in result.stdout

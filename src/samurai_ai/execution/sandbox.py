@@ -224,6 +224,23 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         # port scanning ignores it entirely — so the proxy is left out.
         network_mode="direct",
     ),
+    SandboxProfile(
+        id="sandbox.ffuf@v1",
+        description="Path fuzzer (ffuf) behind the scoped egress proxy; the "
+        "wordlist arrives over stdin, so no host mount is needed",
+        image=(
+            "secsi/ffuf@sha256:"
+            "ee0390afbb0471c18cb6c0407191b424d86dc4ab30c04fb93b3908751a33bc5e"
+        ),
+        allowed_executables=("ffuf",),
+        cpu_limit="1.0",
+        memory_mb=256,
+        pids_limit=128,
+        timeout_seconds=300,
+        max_output_bytes=262144,
+        network_mode="scoped",
+        proxy_flag="-x",
+    ),
 )
 
 

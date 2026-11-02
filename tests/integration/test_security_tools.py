@@ -19,6 +19,7 @@ from samurai_ai.execution.registry import ToolRegistry
 from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
 from samurai_ai.execution.security import (
     DnsxResolveTool,
+    FfufFuzzTool,
     HttpxProbeTool,
     NmapScanTool,
     NucleiScanTool,
@@ -736,3 +737,131 @@ def test_nmap_summary_is_bounded() -> None:
         f"<ports>{ports}</ports></host></nmaprun>"
     )
     assert len(NmapScanTool().summarize(xml)) == 100
+
+
+FFUF_JSON = (
+    '{"commandline":"ffuf","results":['
+    '{"url":"https://example.com/admin","status":200,"length":1234,"words":12},'
+    '{"url":"https://example.com/.git/HEAD","status":200,"length":23,"words":2}'
+    ']}'
+)
+
+
+def make_ffuf_stack(
+    tmp_path: Path, stdout: str, exit_code: int = 0
+) -> tuple[OperationService, KernelService, ToolExecutionService, FakeManager]:
+    database_path = tmp_path / "ffuf.db"
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = FakeManager(ProcessResult(exit_code=exit_code, stdout=stdout, stderr=""))
+    database = Database(database_path)
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    runner = DockerSandboxRunner(
+        manager, tmp_path / "sandbox-allowlist.sig", lambda: MASTER_KEY
+    )
+    registry = ToolRegistry(adapters=(FfufFuzzTool(runner),))
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), registry=registry
+    )
+    return service, kernel, execution, manager
+
+
+def test_ffuf_fuzzes_a_path_with_a_stdin_wordlist(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_ffuf_stack(tmp_path, FFUF_JSON)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "fuzz.ffuf", RiskClass.R2)
+
+    result = execution.run_tool(
+        operation.id,
+        "fuzz.ffuf",
+        {"url": "https://example.com/FUZZ", "extensions": [".php", ".bak"]},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+
+    tool_args = tool_arguments(docker_run_argv(manager))
+    assert tool_args[tool_args.index("-w") + 1] == "/dev/stdin:FUZZ"
+    assert tool_args[tool_args.index("-u") + 1] == "https://example.com/FUZZ"
+    assert tool_args[tool_args.index("-ac")] == "-ac"
+    assert tool_args[tool_args.index("-rate") + 1] == "50"
+    assert tool_args[tool_args.index("-e") + 1] == ".php,.bak"
+    # the wordlist itself rides on stdin, not through a mount
+    assert manager.stdins[-1] and b"admin" in manager.stdins[-1]
+
+    assert "https://example.com/admin\tstatus=200" in result.stdout
+    assert "https://example.com/.git/HEAD" in result.stdout
+
+
+def test_ffuf_url_contract_is_fail_closed(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_ffuf_stack(tmp_path, FFUF_JSON)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "fuzz.ffuf", RiskClass.R2)
+
+    with pytest.raises(ToolValidationError, match="FUZZ keyword"):
+        execution.run_tool(
+            operation.id,
+            "fuzz.ffuf",
+            {"url": "https://example.com/admin"},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError, match="http"):
+        execution.run_tool(
+            operation.id,
+            "fuzz.ffuf",
+            {"url": "ftp://example.com/FUZZ"},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolScopeError):
+        execution.run_tool(
+            operation.id,
+            "fuzz.ffuf",
+            {"url": "https://evil-outside.com/FUZZ"},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError, match="must be one of"):
+        execution.run_tool(
+            operation.id,
+            "fuzz.ffuf",
+            {"url": "https://example.com/FUZZ", "extensions": [".jsp"]},
+            approval_id=approval_id,
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_ffuf_reports_no_matches(tmp_path: Path) -> None:
+    empty = '{"commandline":"ffuf","results":[]}'
+    service, kernel, execution, _ = make_ffuf_stack(tmp_path, empty)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "fuzz.ffuf", RiskClass.R2)
+    result = execution.run_tool(
+        operation.id,
+        "fuzz.ffuf",
+        {"url": "https://example.com/FUZZ"},
+        approval_id=approval_id,
+    )
+    assert "no matches" in result.stdout
+
+
+def test_ffuf_wordlist_is_the_pinned_one() -> None:
+    import hashlib
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[2]
+    payload = (root / "assets" / "wordlists" / FfufFuzzTool.WORDLIST).read_bytes()
+    assert hashlib.sha256(payload).hexdigest() == (
+        "47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a"
+    )
+    assert len(payload) < 64 * 1024  # must fit the stdin cap
+
+
+def test_wordlist_resolution_follows_a_frozen_bundle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from samurai_ai.execution import security
+
+    bundled = tmp_path / "assets" / "wordlists"
+    bundled.mkdir(parents=True)
+    (bundled / FfufFuzzTool.WORDLIST).write_bytes(b"from-bundle\n")
+    monkeypatch.setattr(security.sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert FfufFuzzTool().build_stdin({}) == b"from-bundle\n"
