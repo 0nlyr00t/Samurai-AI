@@ -88,7 +88,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), secondary-источники вне матрицы (
 технические блокеры в `md/threat-review-security-tools.md`), LLM streaming,
-поаргументные permission-правила с doom-loop guard, shell-режим в фоне на уровне ОС, extension seams/плагины,
+doom-loop guard для авторазрешённых петель, shell-режим в фоне на уровне ОС, extension seams/плагины,
 web-поверхность операции, полный egress enforcement на
 Docker Desktop for Mac и OS-пакеты installers (есть bare standalone binary).
 

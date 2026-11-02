@@ -1,5 +1,7 @@
 """Operator rules: parsing, matching order, and the old behaviour without them."""
 
+from pathlib import Path
+
 import pytest
 
 from samurai_ai.domain.permission import (
@@ -97,3 +99,46 @@ def test_the_deciding_rule_is_reported_for_the_journal() -> None:
     decision = decide((rule_obj,), "shell.exec", "rm -rf /", PermissionMode.YOLO, CommandRisk())
     assert decision.is_denied
     assert decision.rule is rule_obj
+
+
+def test_settings_round_trip_and_broken_lines_are_skipped(tmp_path: Path) -> None:
+    from samurai_ai.services.settings import SettingsService
+    from samurai_ai.storage.database import Database
+    from samurai_ai.storage.recovery import RecoveryRepository
+
+    settings = SettingsService(RecoveryRepository(Database(tmp_path / "s.db")))
+    settings.add_permission_rule("allow shell.exec: git *")
+    assert [r.format() for r in settings.permission_rules()] == ["allow shell.exec: git *"]
+    # a duplicate is a no-op, a removing call reports what it did
+    settings.add_permission_rule("allow shell.exec: git *")
+    assert len(settings.permission_rules()) == 1
+    assert settings.remove_permission_rule("allow shell.exec: git *") is True
+    assert settings.remove_permission_rule("allow shell.exec: git *") is False
+    assert settings.permission_rules() == ()
+
+
+def test_too_many_rules_are_refused(tmp_path: Path) -> None:
+    from samurai_ai.domain.permission import MAX_RULES
+    from samurai_ai.services.settings import SettingsService, TooManyRulesError
+    from samurai_ai.storage.database import Database
+    from samurai_ai.storage.recovery import RecoveryRepository
+
+    settings = SettingsService(RecoveryRepository(Database(tmp_path / "m.db")))
+    for index in range(MAX_RULES):
+        settings.add_permission_rule(f"allow shell.exec: cmd{index}")
+    with pytest.raises(TooManyRulesError):
+        settings.add_permission_rule("allow shell.exec: onemore")
+
+
+def test_a_broken_stored_line_does_not_take_the_others_down(tmp_path: Path) -> None:
+    import json
+
+    from samurai_ai.services.settings import SettingsService
+    from samurai_ai.storage.database import Database
+    from samurai_ai.storage.recovery import RecoveryRepository
+
+    settings = SettingsService(RecoveryRepository(Database(tmp_path / "b.db")))
+    settings.set_value(
+        "permission.rules", json.dumps(["allow shell.exec: git *", "nonsense", 42])
+    )
+    assert [r.format() for r in settings.permission_rules()] == ["allow shell.exec: git *"]
