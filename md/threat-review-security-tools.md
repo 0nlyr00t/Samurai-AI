@@ -153,7 +153,7 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 | amass | defer | — | — | перекрывается subfinder; вернуться при необходимости |
 | nmap | **реализован** (`scan.nmap`) | R2 | direct | `-sT -Pn`, без NET_RAW; порты профилем или регексом; rate зашит; egress не аудируется — это класс direct |
 | naabu | defer | — | — | перекрывается nmap profile; SYN-scan требует raw sockets — отдельный разговор про capabilities контейнера |
-| ffuf | **реализован** (`fuzz.ffuf`) | R2 | scoped egress | образ `secsi/ffuf` по digest; словник с репозитория через stdin; `-ac` от soft-404; rate зашит |
+| ffuf | **реализован** (`fuzz.ffuf`) | R2 | scoped egress | образ `secsi/ffuf` по digest; словарь из репозитория через stdin; `-ac` от soft-404; rate зашит |
 | gobuster | defer | — | — | перекрывается ffuf |
 | nuclei | **реализован** (`scan.nuclei`) | R3 | scoped egress | templates из образа; `-disable-update-check` зашит; severity enum; без headless/fuzzing-шаблонов |
 | nikto | defer | — | — | перекрывается nuclei; высокий FP-rate |
@@ -249,7 +249,7 @@ vault placeholders.
 - params: `url` (scope.check по хосту, обязателен литерал `FUZZ`),
   `extensions: array<enum [.php,.bak,.js,.txt,.zip]>`.
 - образ: официального нет, взят общинный `secsi/ffuf` по digest индекса;
-  словников в нём нет, а монтирования мы не используем — поэтому словник
+  словарей в нём нет, а монтирования мы не используем — поэтому словарь
   лежит в репозитории (`assets/wordlists/common.txt`, SecLists `0c618cf`,
   sha256 сверяется тестом) и едет через stdin (`-w /dev/stdin:FUZZ`).
 - шум гасится штатным статусным матчером и `-ac` (автокалибровка): на
@@ -259,7 +259,7 @@ vault placeholders.
   раннер профиля `sandbox.ffuf@v1`.
 - output: JSON `results[]` → `url status size words` (≤100); пусто —
   `no matches`; raw JSON в артефакт.
-- ограничение: словник ≤64 КиБ (кап stdin), поэтому только `common`;
+- ограничение: словарь ≤64 КиБ (кап stdin), поэтому только `common`;
   `raft-small-directories` не влезает.
 
 ## 5. Критерии отказа (действуют и для будущих кандидатов)
