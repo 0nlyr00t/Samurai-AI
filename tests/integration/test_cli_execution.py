@@ -376,3 +376,18 @@ def test_an_edited_manifest_shows_up_as_tampered(
     installed.write_text(json.dumps({**NIKTO_MANIFEST, "title": "Edited after review"}))
     assert main(["--db", database, "tool", "manifests"]) == 0
     assert "tampered" in capsys.readouterr().out
+
+
+def test_an_installed_manifest_can_be_uninstalled(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    _isolated_home(monkeypatch, tmp_path)
+    database = str(tmp_path / "uninstall.db")
+    path = tmp_path / "tool.json"
+    path.write_text(json.dumps(NIKTO_MANIFEST))
+    assert main(["--db", database, "tool", "install", str(path), "--trusted"]) == 0
+    capsys.readouterr()
+
+    assert main(["--db", database, "tool", "uninstall", "scan.nikto"]) == 0
+    assert "removed\tscan.nikto" in capsys.readouterr().out
+    assert main(["--db", database, "tool", "uninstall", "scan.nikto"]) == 1

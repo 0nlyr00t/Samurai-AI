@@ -26,9 +26,7 @@ from samurai_ai.domain.execution import (
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.sandbox import SandboxProfile
 
-MANIFEST_VERSION = 1
 PARSERS = ("jsonl", "xml-ports", "text-lines")
-TARGET_KINDS = ("host", "domain", "url-host")
 MAX_PARAMS = 12
 MAX_ARGV = 40
 _PARAM_NAME = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")

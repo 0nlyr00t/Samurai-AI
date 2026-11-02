@@ -59,6 +59,9 @@ def register_execution_commands(
 
     tool_commands.add_parser("manifests", help="List installed manifests")
 
+    uninstall = tool_commands.add_parser("uninstall", help="Remove an installed manifest")
+    uninstall.add_argument("manifest_id")
+
 
 def _rule_decision(
     args: argparse.Namespace, settings: SettingsService
@@ -134,6 +137,12 @@ def handle_execution_command(
             tampered = "tampered" if store.is_tampered(manifest) else "ok"
             print(f"{manifest.id}\tv{manifest.version}\t{manifest.parser}\t{tampered}")
         return 0
+    if args.tool_command == "uninstall":
+        if ManifestStore(tools_directory()).remove(args.manifest_id):
+            print(f"removed\t{args.manifest_id}")
+            return 0
+        print(f"no such manifest: {args.manifest_id}", file=sys.stderr)
+        return 1
     if args.tool_command == "run":
         decision, params = _rule_decision(args, settings)
         rule = decision.rule if decision is not None else None

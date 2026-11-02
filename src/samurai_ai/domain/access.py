@@ -135,6 +135,7 @@ _MINIMUM: dict[str, Role] = {
     "headless": Role.OPERATOR,
     "tool.install": Role.ADMIN,
     "tool.manifests": Role.VIEWER,
+    "tool.uninstall": Role.ADMIN,
     "rules": Role.VIEWER,
     "rules.list": Role.VIEWER,
     "rules.add": Role.ADMIN,
