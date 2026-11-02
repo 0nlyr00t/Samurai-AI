@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from samurai_ai.domain.impact import ImpactBudget, ImpactBudgetError, ImpactError, ImpactLevel
-from samurai_ai.domain.kernel import ArtifactKind, RiskClass
+from samurai_ai.domain.kernel import ArtifactKind
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.impact import ImpactService
