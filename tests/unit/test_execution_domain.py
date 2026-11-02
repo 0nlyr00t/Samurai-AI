@@ -159,7 +159,8 @@ def test_prompt_injection_scanner_flags_suspicious_output() -> None:
 def test_default_registry_contains_stage2_tools() -> None:
     registry = default_registry()
     definitions = {definition.id: definition for definition in registry.definitions()}
-    assert set(definitions) == {
+    # installed manifests add to the set, so only the built-ins are pinned
+    assert {
         "local.echo",
         "process.exec",
         "shell.exec",
@@ -171,7 +172,7 @@ def test_default_registry_contains_stage2_tools() -> None:
         "recon.dnsx-resolve",
         "scan.nmap",
         "fuzz.ffuf",
-    }
+    } <= set(definitions)
     assert definitions["local.echo"].risk_class == RiskClass.R0
     assert definitions["process.exec"].risk_class == RiskClass.R1
     assert definitions["shell.exec"].risk_class == RiskClass.R3
