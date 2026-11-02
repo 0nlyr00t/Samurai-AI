@@ -92,7 +92,7 @@ Implemented:
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), further security tools (
 technical blockers documented in `md/threat-review-security-tools.md`),
-LLM streaming, per-argument permission rules with a doom-loop guard,
+LLM streaming, a doom-loop guard for auto-allowed loops,
 OS-level background shell jobs, extension seams/plugins, an operation web surface, full egress enforcement on
 Docker Desktop for Mac, and OS package installers (a bare standalone binary is
 available).

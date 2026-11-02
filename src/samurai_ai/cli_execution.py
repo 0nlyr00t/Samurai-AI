@@ -11,7 +11,10 @@ from samurai_ai.domain.execution import (
     ToolRun,
     ToolValidationError,
 )
+from samurai_ai.domain.operations import OperationEvent
+from samurai_ai.domain.permission import Decision, classify_command, decide, parse_mode
 from samurai_ai.services.execution import ToolExecutionService
+from samurai_ai.services.settings import SettingsService
 
 
 def register_execution_commands(
@@ -41,8 +44,44 @@ def register_execution_commands(
     show.add_argument("run_id")
 
 
+def _rule_decision(
+    args: argparse.Namespace, settings: SettingsService
+) -> tuple[Decision | None, dict[str, Any]]:
+    """The operator's rule decision for this call, if the tool takes a command."""
+    params = parse_tool_params(args.params)
+    command = params.get("command")
+    if not isinstance(command, str):
+        return None, params
+    mode = parse_mode(settings.get_value("tui.permission_mode"))
+    risk = classify_command(command)
+    decision = decide(settings.permission_rules(), args.tool_id, command, mode, risk)
+    return decision, params
+
+
+def _record_rule(
+    execution: ToolExecutionService,
+    args: argparse.Namespace,
+    decision: Decision | None,
+) -> None:
+    if decision is None or decision.rule is None:
+        return
+    execution.operations.repository.append_event(
+        OperationEvent(
+            operation_id=args.operation_id,
+            event_type="permission.rule",
+            payload={
+                "rule": decision.rule.format(),
+                "action": decision.action,
+                "tool_id": args.tool_id,
+            },
+        )
+    )
+
+
 def handle_execution_command(
-    args: argparse.Namespace, execution: ToolExecutionService
+    args: argparse.Namespace,
+    execution: ToolExecutionService,
+    settings: SettingsService,
 ) -> int | None:
     if args.command != "tool":
         return None
@@ -59,14 +98,35 @@ def handle_execution_command(
                 )
         return 0
     if args.tool_command == "run":
-        params = parse_tool_params(args.params)
+        decision, params = _rule_decision(args, settings)
+        rule = decision.rule if decision is not None else None
+        approval_id = args.approval_id
+        if decision is not None and rule is not None:
+            _record_rule(execution, args, decision)
+            if decision.is_denied:
+                print(f"denied by rule: {rule.format()}", file=sys.stderr)
+                return 1
+            if decision.is_allowed and approval_id is None:
+                definition = execution.registry.get(args.tool_id).definition
+                approval = execution.kernel.request_approval(
+                    args.operation_id,
+                    f"tool.run {definition.id}",
+                    definition.risk_class,
+                    task_id=args.task_id,
+                    reason=f"allowed by rule {rule.format()}",
+                    requested_by="operator",
+                )
+                execution.kernel.approve(
+                    approval.id, decided_by=f"rule:{rule.format()}"
+                )
+                approval_id = approval.id
         try:
             result = execution.run_tool(
                 args.operation_id,
                 args.tool_id,
                 params,
                 task_id=args.task_id,
-                approval_id=args.approval_id,
+                approval_id=approval_id,
                 tool_version=args.tool_version,
             )
         except ApprovalRequiredError as exc:
