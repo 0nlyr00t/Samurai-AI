@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from samurai_ai.domain.access import AccessError
 from samurai_ai.domain.kernel import FindingStatus, GateStatus, TaskStatus
+from samurai_ai.domain.teamwork import NoteTarget, TeamworkError
 from samurai_ai.domain.traffic import TrafficNotFoundError, TrafficRole
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -47,6 +49,8 @@ class BoardController:
         def _write_dim(self, message: str) -> None: ...
         def _refresh_chrome(self) -> None: ...
         def _require_path(self, path: str) -> bool: ...
+        access: Any
+        team: Any
         def _memory_workspace(self) -> str: ...
         lessons: Any
         def push_screen(self, screen: Any, callback: Any = None) -> Any: ...
@@ -397,6 +401,42 @@ class BoardController:
 
         self.run_worker(ask(), exclusive=False)  # type: ignore[attr-defined]
 
+    def _note_prompt(self, kind: str, target_id: str) -> None:
+        """Leave a note on a finding or a task, for whoever picks the work up."""
+
+        async def ask() -> None:
+            from samurai_ai.tui.screens import ArgumentScreen
+
+            text = await self.push_screen_wait(
+                ArgumentScreen(self.translator, self.translator.t("team.note-prompt"))
+            )
+            if not text or not text.strip():
+                return
+            try:
+                actor = self.access.current()
+                self.team.note(
+                    self.operation.id,  # type: ignore[union-attr]
+                    NoteTarget(kind),
+                    target_id,
+                    text,
+                    actor=actor,
+                )
+            except (AccessError, TeamworkError) as exc:
+                self._write_line(f"[team] {exc}")
+                return
+            self._write_dim(self.translator.t("team.noted", id=target_id))
+
+        self.run_worker(ask(), exclusive=False)  # type: ignore[attr-defined]
+
+    def _note_lines(self, target_id: str) -> list[str]:
+        if self.operation is None:
+            return []
+        return [
+            f"{note.author}: {note.body}"
+            for note in self.team.notes(self.operation.id)
+            if note.target_id == target_id
+        ]
+
     def _traffic_lines(self, finding_id: str) -> list[str]:
         lines: list[str] = []
         for binding in self.traffic.bindings(finding_id):
@@ -497,6 +537,7 @@ class BoardController:
             "e": lambda: self._finding_evidence(finding_id),
             "t": lambda: self._finding_traffic_bind(finding_id),
             "y": lambda: self._finding_traffic_unbind(finding_id),
+            "m": lambda: self._note_prompt("finding", finding_id),
         }
         self.push_screen(
             ItemDetailScreen(
@@ -537,6 +578,7 @@ class BoardController:
             ),
             (t.t("board.section.evidence"), list(finding.evidence_ids)),
             (t.t("board.section.traffic"), self._traffic_lines(finding.id)),
+            (t.t("board.section.notes"), self._note_lines(finding.id)),
             (
                 t.t("board.section.duplicate"),
                 [finding.duplicate_of] if finding.duplicate_of else [],

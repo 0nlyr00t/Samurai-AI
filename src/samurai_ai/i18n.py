@@ -67,6 +67,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.whoami": "/whoami          Who is signed in and with which role",
         "help.logout": "/logout          End the session",
         "help.role": "/role [map <claim> <role>|rm <claim>]  Claim to role mapping",
+        "team.owner": "owner: {who}",
+        "team.added": "{who} joined as {level}",
+        "team.removed": "{who} removed",
+        "team.transferred": "{who} now owns the operation",
+        "team.noted": "note left on {id}",
+        "team.note-prompt": "Note for whoever picks this up",
+        "board.section.notes": "NOTES",
+        "board.action.m": "leave a note",
+        "help.team": (
+            "/team [add <subject> [viewer]|rm|transfer|note <kind> <id> <text>]  "
+            "Who is on the operation"
+        ),
         "help.constraint": (
             "/constraint [deny|allow|rm] <text|id>  Operator boundaries for the task"
         ),
@@ -591,6 +603,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.whoami": "/whoami          Кто вошёл и с какой ролью",
         "help.logout": "/logout          Закрыть сессию",
         "help.role": "/role [map <claim> <role>|rm <claim>]  Сопоставление claim роли",
+        "team.owner": "владелец: {who}",
+        "team.added": "{who} добавлен как {level}",
+        "team.removed": "{who} снят",
+        "team.transferred": "{who} теперь владеет операцией",
+        "team.noted": "заметка к {id}",
+        "team.note-prompt": "Заметка тому, кто подхватит",
+        "board.section.notes": "ЗАМЕТКИ",
+        "board.action.m": "оставить заметку",
+        "help.team": (
+            "/team [add <subject> [viewer]|rm|transfer|note <вид> <id> <текст>]  "
+            "Кто на операции"
+        ),
         "help.constraint": "/constraint [deny|allow|rm] <текст|id>  Границы задачи от оператора",
         "help.lessons": "/lessons [extract|adopt <id>|reject <id>|mode]  Уроки из исходов",
         "help.memory": "/memory [ws]     Показать записи campaign memory (фильтр workspace)",

@@ -48,6 +48,7 @@ from samurai_ai.domain.permission import (
 )
 from samurai_ai.domain.retest import RetestVerdict
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.teamwork import NoteTarget, OperationLevel, TeamworkError
 from samurai_ai.domain.traffic import TrafficRole
 from samurai_ai.i18n import Translator
 from samurai_ai.services.access import AccessService
@@ -70,6 +71,7 @@ from samurai_ai.services.reports import ReportService
 from samurai_ai.services.retests import RetestService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
+from samurai_ai.services.teamwork import TeamworkService
 from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.access import AccessRepository
@@ -80,6 +82,7 @@ from samurai_ai.storage.graph import GraphRepository
 from samurai_ai.storage.lessons import LessonRepository
 from samurai_ai.storage.retests import RetestRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
+from samurai_ai.storage.teamwork import TeamworkRepository
 from samurai_ai.storage.traffic import TrafficRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
@@ -394,6 +397,10 @@ class SamuraiApp(
         )
         self.retests = RetestService(
             service, kernel, RetestRepository(service.repository.database), self.traffic
+        )
+        self.team = TeamworkService(
+            service, AccessRepository(service.repository.database),
+            TeamworkRepository(service.repository.database),
         )
         self.access = AccessService(
             settings, vault, AccessRepository(service.repository.database)
@@ -1355,6 +1362,55 @@ class SamuraiApp(
         ended = self.access.logout()
         self._write_dim(self.translator.t("auth.signed-out" if ended else "auth.no-session"))
         self._refresh_chrome()
+
+    def _handle_team_command(self, argument: str) -> None:
+        """`/team` lists; `add|rm|transfer|note` change."""
+        if self.operation is None:
+            self._write_line("[error] " + self.translator.t("palette.no-operation"))
+            return
+        parts = argument.split(maxsplit=3)
+        action = parts[0] if parts else ""
+        try:
+            actor = self.access.current()
+            if action == "add" and len(parts) >= 2:
+                level = OperationLevel.VIEWER if len(parts) > 2 and parts[2] == "viewer" else (
+                    OperationLevel.MEMBER
+                )
+                member = self.team.add_member(
+                    self.operation.id, parts[1], level=level, actor=actor
+                )
+                self._write_dim(
+                    self.translator.t(
+                        "team.added", who=member.label, level=member.level.value
+                    )
+                )
+                return
+            if action == "rm" and len(parts) >= 2:
+                self.team.remove_member(self.operation.id, parts[1], actor=actor)
+                self._write_dim(self.translator.t("team.removed", who=parts[1]))
+                return
+            if action == "transfer" and len(parts) >= 2:
+                self.team.transfer(self.operation.id, parts[1], actor=actor)
+                self._write_dim(self.translator.t("team.transferred", who=parts[1]))
+                return
+            if action == "note" and len(parts) >= 4:
+                note = self.team.note(
+                    self.operation.id,
+                    NoteTarget(parts[1]),
+                    parts[2],
+                    parts[3],
+                    actor=actor,
+                )
+                self._write_dim(self.translator.t("team.noted", id=note.id))
+                return
+            self.team.assert_visible(self.operation.id, actor)
+        except (AccessError, TeamworkError, ValueError) as exc:
+            self._write_line(f"[team] {exc}")
+            return
+        owner = self.team.owner(self.operation.id)
+        self._write_line(self.translator.t("team.owner", who=owner or "-"))
+        for member in self.team.members(self.operation.id):
+            self._write_line(f"[team] {member.label or member.subject} · {member.level.value}")
 
     def _handle_role_command(self, argument: str) -> None:
         parts = argument.split()
