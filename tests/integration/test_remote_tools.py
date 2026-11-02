@@ -199,4 +199,9 @@ def test_the_tunnel_reports_volume_in_the_warning_line(tmp_path: Path, listener:
         approval_id=approval_id,
     )
     assert "allowed;" in result.stderr
-    assert result.egress_events and result.egress_events[0]["verdict"] == "allowed"
+    completed = [
+        event
+        for event in service.events(operation.id)
+        if event.event_type == "tool.run.completed"
+    ]
+    assert completed[0].payload["egress"][0]["verdict"] == "allowed"
