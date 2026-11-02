@@ -242,6 +242,31 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         proxy_flag="-x",
     ),
     SandboxProfile(
+        id="sandbox.ops@v1",
+        description="Operational toolbelt (ssh, smbclient, impacket, xfreerdp, "
+        "adb, pwntools, gcc) behind the scoped proxy",
+        # locally built from packaging/sandbox/ops; a rebuild changes the id, so
+        # re-pin here after a rebuild
+        image="sha256:72181e934bb8c2f661919fdf20ae836075e06b999e43240ab33de341d1404702",
+        allowed_executables=(
+            "ssh",
+            "smbclient",
+            "xfreerdp",
+            "adb",
+            "python3",
+            "gcc",
+            "socat",
+            "nmap",
+            "curl",
+        ),
+        cpu_limit="2.0",
+        memory_mb=1024,
+        pids_limit=512,
+        timeout_seconds=900,
+        max_output_bytes=524288,
+        network_mode="scoped",
+    ),
+    SandboxProfile(
         id="sandbox.camoufox@v1",
         description="Anti-detect Firefox (camoufox) driven by an inline python "
         "script; the only network path is the scoped proxy",
