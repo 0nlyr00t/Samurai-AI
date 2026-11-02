@@ -220,8 +220,8 @@ class SmbListTool(_RemoteTool):
         return self._definition
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        host, _ = self._host_port(params)
-        return self._run(["-c", _SMB_DRIVER, "-L"], {"host": host, "port": 445}, scope)
+        host, port = self._host_port(params)
+        return self._run(["-c", _SMB_DRIVER, "-L"], {"host": host, "port": port}, scope)
 
 
 _SMB_DRIVER = r"""
