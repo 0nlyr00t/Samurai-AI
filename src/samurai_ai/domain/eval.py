@@ -69,6 +69,10 @@ class EvalLiveTarget(BaseModel):
     api_family: ApiFamily = ApiFamily.OPENAI_COMPATIBLE
     model: str = Field(min_length=1)
     secret_env: str = Field(min_length=1)
+    # Some gateways serve a certificate chain the system store does not accept;
+    # the endpoint is still pinned by the scenario, so TLS off is a deliberate
+    # per-target choice rather than the default.
+    verify_tls: bool = True
     timeout_seconds: float = Field(default=120.0, gt=0.0)
     cost_input_per_m: float = Field(default=0.0, ge=0.0)
     cost_output_per_m: float = Field(default=0.0, ge=0.0)
