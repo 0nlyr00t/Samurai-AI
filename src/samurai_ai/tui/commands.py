@@ -125,6 +125,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/whoami", GROUP_SESSION, "_handle_whoami_command", argument=True),
     _spec("/logout", GROUP_SESSION, "_handle_logout_command", argument=True),
     _spec("/role", GROUP_SESSION, "_handle_role_command", argument=True),
+    _spec("/team", GROUP_SESSION, "_handle_team_command", operation=True, argument=True),
     _spec("/constraint", GROUP_PLAYBOOKS, "_handle_constraint_command", argument=True),
     _spec("/traffic", GROUP_PLAYBOOKS, "_handle_traffic_command", operation=True, argument=True),
     _spec("/retest", GROUP_PLAYBOOKS, "_handle_retest_command", operation=True, argument=True),

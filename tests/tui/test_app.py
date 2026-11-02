@@ -3633,6 +3633,52 @@ def test_the_actor_is_the_signed_in_subject(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_team_command_lists_the_owner(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.team.claim_owner(operation.id, app.access.current())
+            app._handle_command("/team")
+            await pilot.pause()
+            log = " ".join(str(line.text) for line in app.query("RichLog").first().lines)
+            assert "owner: local" in log
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_board_note_lands_on_the_target(tmp_path: Path) -> None:
+    from samurai_ai.domain.teamwork import NoteTarget
+
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            finding = stack[1].create_finding(operation.id, "IDOR on /user")
+            app.team.claim_owner(operation.id, app.access.current())
+            app.team.note(
+                operation.id,
+                NoteTarget.FINDING,
+                finding.id,
+                "проверь id 2",
+                actor=app.access.current(),
+            )
+            await pilot.pause()
+            assert "проверь id 2" in app._note_lines(finding.id)[0]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_skills_gaps_report_lists_misses(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")

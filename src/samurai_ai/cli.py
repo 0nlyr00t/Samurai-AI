@@ -29,9 +29,10 @@ from samurai_ai.cli_reports import handle_report_command, register_report_comman
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
+from samurai_ai.cli_team import handle_team_command
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.config import default_database_path, vault_key_path
-from samurai_ai.domain.access import AccessError, Role
+from samurai_ai.domain.access import AccessError, Principal, Role
 from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
 from samurai_ai.domain.ctf import (
     ChallengeNotFoundError,
@@ -71,6 +72,7 @@ from samurai_ai.domain.reports import ReportError, ReportNotFoundError
 from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
 from samurai_ai.domain.skills import SkillError, SkillNotFoundError
 from samurai_ai.domain.swarm import SwarmError, SwarmNotFoundError
+from samurai_ai.domain.teamwork import NoteTarget
 from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
 from samurai_ai.self_update import run_update
@@ -97,6 +99,7 @@ from samurai_ai.services.reports import ReportService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.swarm import SwarmService
+from samurai_ai.services.teamwork import TeamworkService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.access import AccessRepository
 from samurai_ai.storage.agents import AgentRunRepository
@@ -122,6 +125,7 @@ from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.skill_gaps import SkillGapRepository
 from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
+from samurai_ai.storage.teamwork import TeamworkRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
 
@@ -200,6 +204,26 @@ def build_parser() -> argparse.ArgumentParser:
     op_export.add_argument("--format", dest="format", choices=["html"], default="html")
     op_export.add_argument("--out", type=Path, required=True)
 
+    team = subcommands.add_parser("team", help="Members and notes of an operation")
+    team_commands = team.add_subparsers(dest="team_command", required=True)
+    team_members = team_commands.add_parser("members", help="List the people on an operation")
+    team_members.add_argument("operation_id")
+    team_add = team_commands.add_parser("add", help="Add a signed-in person")
+    team_add.add_argument("operation_id")
+    team_add.add_argument("subject")
+    team_add.add_argument("--viewer", action="store_true", help="read-only membership")
+    team_rm = team_commands.add_parser("rm", help="Remove a member")
+    team_rm.add_argument("operation_id")
+    team_rm.add_argument("subject")
+    team_transfer = team_commands.add_parser("transfer", help="Hand the operation over")
+    team_transfer.add_argument("operation_id")
+    team_transfer.add_argument("subject")
+    team_note = team_commands.add_parser("note", help="Leave a note on a finding or a task")
+    team_note.add_argument("operation_id")
+    team_note.add_argument("kind", choices=[kind.value for kind in NoteTarget])
+    team_note.add_argument("target")
+    team_note.add_argument("text")
+
     scope = subcommands.add_parser("scope", help="Evaluate operation scope")
     scope_commands = scope.add_subparsers(dest="scope_command", required=True)
     check = scope_commands.add_parser("check", help="Check a target against operation scope")
@@ -252,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    global _ACCESS
     args = build_parser().parse_args(argv)
     if args.command == "update":
         # Self-update needs no database or services.
@@ -277,8 +302,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         skill_service,
         export_service,
         access_service,
+        team_service,
     ) = _make_services(args.db)
 
+    _ACCESS = access_service
     if args.command not in _OPEN_COMMANDS:
         try:
             access_service.require(_command_path(args))
@@ -293,6 +320,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         role_result = handle_role_command(args, access_service)
         if role_result is not None:
             return role_result
+        try:
+            team_result = handle_team_command(
+                args, team_service, operation_service, access_service.current()
+            )
+        except AccessError as exc:
+            print(f"[access] {exc}", file=sys.stderr)
+            return 2
+        if team_result is not None:
+            return team_result
         recovery_result = handle_recovery_command(
             args,
             recovery_service,
@@ -361,7 +397,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if eval_result is not None:
             return eval_result
         if args.command == "operation":
-            return _handle_operation(args, operation_service, kernel_service, export_service)
+            return _handle_operation(
+                args, operation_service, kernel_service, export_service, team_service
+            )
         if args.command == "scope":
             decision = operation_service.check_scope(args.operation_id, args.target)
             if args.json_output:
@@ -459,20 +497,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
 
+def _current_principal() -> Principal | None:
+    """The signed-in person, or None when the store cannot answer."""
+    if _ACCESS is None:  # pragma: no cover - only outside `main`
+        return None
+    try:
+        return _ACCESS.current()
+    except Exception:  # noqa: BLE001 - listing must not fail on identity
+        return None
+
+
 def _handle_operation(
     args: argparse.Namespace,
     service: OperationService,
     kernel: KernelService,
     exports: IntegrationExportService,
+    team: TeamworkService,
 ) -> int:
+    actor = _current_principal()
+
     if args.operation_command == "create":
         scope = ScopeContract(includes=tuple(args.includes), excludes=tuple(args.excludes))
         operation = service.create(args.name, OperationMode(args.mode), scope, args.objective)
+        if actor is not None:
+            team.claim_owner(operation.id, actor)
         _emit_operation(operation, args.json_output)
         return 0
 
     if args.operation_command == "list":
         operations = service.list_all()
+        if actor is not None:
+            operations = team.visible(operations, actor)
         if args.json_output:
             _print_json([operation.model_dump(mode="json") for operation in operations])
         else:
@@ -521,6 +576,8 @@ def _handle_operation(
 
 #: Commands that must work before anyone can sign in.
 _OPEN_COMMANDS = frozenset({"update", "auth", "role"})
+#: Set once in `main` so handlers outside the service wiring can reach identity.
+_ACCESS: AccessService | None = None
 
 
 def _command_path(args: argparse.Namespace) -> str:
@@ -551,6 +608,7 @@ def _make_services(
     SkillService,
     IntegrationExportService,
     AccessService,
+    TeamworkService,
 ]:
     database = Database(database_path or default_database_path())
     operation_repository = OperationRepository(database)
@@ -602,6 +660,7 @@ def _make_services(
     goals = GoalService(operations, GoalRepository(database))
     exports = IntegrationExportService(operations, kernel, redteam, planning, vault)
     access = AccessService(settings, vault, AccessRepository(database))
+    team = TeamworkService(operations, AccessRepository(database), TeamworkRepository(database))
     return (
         operations,
         kernel,
@@ -623,6 +682,7 @@ def _make_services(
         skill_service,
         exports,
         access,
+        team,
     )
 
 

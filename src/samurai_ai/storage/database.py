@@ -829,6 +829,31 @@ CREATE TABLE IF NOT EXISTS role_mappings (
 );
 """
 
+_MIGRATION_27 = """
+CREATE TABLE IF NOT EXISTS operation_members (
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    subject      TEXT NOT NULL,
+    label        TEXT NOT NULL DEFAULT '',
+    level        TEXT NOT NULL DEFAULT 'member',
+    added_by     TEXT NOT NULL DEFAULT '',
+    added_at     TEXT NOT NULL,
+    PRIMARY KEY (operation_id, subject)
+);
+
+CREATE TABLE IF NOT EXISTS operation_notes (
+    id           TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    target_kind  TEXT NOT NULL,
+    target_id    TEXT NOT NULL,
+    body         TEXT NOT NULL,
+    author       TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS operation_notes_target
+ON operation_notes(operation_id, target_kind, target_id);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -856,6 +881,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (24, _MIGRATION_24),
     (25, _MIGRATION_25),
     (26, _MIGRATION_26),
+    (27, _MIGRATION_27),
 )
 
 
