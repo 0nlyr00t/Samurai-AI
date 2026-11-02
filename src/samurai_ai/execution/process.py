@@ -23,6 +23,7 @@ from samurai_ai.domain.execution import ToolExecutionError, ToolValidationError
 
 DEFAULT_ALLOWED_EXECUTABLES: frozenset[str] = frozenset({"echo"})
 _READ_CHUNK = 65536
+_MAX_STDIN_BYTES = 65536
 
 
 class CircuitBreakerOpenError(ToolExecutionError):
@@ -86,15 +87,21 @@ class ProcessManager:
         argv: builtins.list[str] | tuple[str, ...],
         *,
         env: Mapping[str, str] | None = None,
+        stdin_data: bytes | None = None,
     ) -> ManagedProcess:
         arguments = tuple(argv)
         self._validate_argv(arguments)
         self._validate_env(env)
+        self._validate_stdin(stdin_data)
         child_env = {**os.environ, **env} if env else None
         try:
             process = await asyncio.create_subprocess_exec(
                 *arguments,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=(
+                    asyncio.subprocess.PIPE
+                    if stdin_data is not None
+                    else asyncio.subprocess.DEVNULL
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=child_env,
@@ -103,6 +110,12 @@ class ProcessManager:
         except OSError as exc:
             self._record_failure()
             raise ToolExecutionError(f"failed to spawn {arguments[0]!r}: {exc}") from exc
+        if stdin_data is not None and process.stdin is not None:
+            # Bounded payload: the pipe buffer holds it, so feeding it here is
+            # deadlock-free and the child sees EOF immediately afterwards.
+            process.stdin.write(stdin_data)
+            await process.stdin.drain()
+            process.stdin.close()
         handle = ManagedProcess(
             id=f"proc_{uuid4().hex[:12]}",
             argv=arguments,
@@ -162,8 +175,9 @@ class ProcessManager:
         timeout_seconds: float | None = None,
         *,
         env: Mapping[str, str] | None = None,
+        stdin_data: bytes | None = None,
     ) -> ProcessResult:
-        handle = await self.start(argv, env=env)
+        handle = await self.start(argv, env=env, stdin_data=stdin_data)
         return await self.wait(handle.id, timeout_seconds=timeout_seconds)
 
     def _validate_argv(self, argv: tuple[str, ...]) -> None:
@@ -194,6 +208,14 @@ class ProcessManager:
                 raise ToolValidationError(
                     f"env variable {name!r} cannot contain NUL bytes"
                 )
+
+    def _validate_stdin(self, stdin_data: bytes | None) -> None:
+        if stdin_data is None:
+            return
+        if len(stdin_data) > _MAX_STDIN_BYTES:
+            raise ToolValidationError(
+                f"stdin payload exceeds {_MAX_STDIN_BYTES} bytes"
+            )
 
     async def _pump(
         self,

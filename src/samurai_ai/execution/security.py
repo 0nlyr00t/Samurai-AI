@@ -1,11 +1,12 @@
-"""Governed adapters for external security tools (threat-review waves 1-2).
+"""Governed adapters for external security tools (threat-review waves 1-4).
 
-Each adapter wraps a scoped-sandbox profile with a fixed argv template:
-the model picks values from validated parameters, the adapter builds the
-command line itself. Targets are scope-checked before the container spawns;
-network egress goes only through the scoped, token-authenticated egress
-proxy; tool stdout is parsed into a bounded structured summary while the
-raw output stays in the artifact.
+Each adapter wraps a sandbox profile with a fixed argv template: the model
+picks values from validated parameters, the adapter builds the command line
+itself. Targets are scope-checked before the container spawns. Egress goes
+through the scoped, token-authenticated proxy except on `direct`-class
+profiles, where the adapter's scope check is the only gate (see
+md/threat-review-security-tools.md 2.7). Tool stdout is parsed into a bounded
+structured summary while the raw output stays in the artifact.
 
 Secrets never enter argv: provider keys are passed as env names and the
 value comes from the docker client environment (see
@@ -19,12 +20,14 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import xml.etree.ElementTree as ElementTree
 from typing import Any
 from uuid import uuid4
 
 from samurai_ai.domain.execution import (
     NetworkAccess,
     ToolDefinition,
+    ToolExecutionError,
     ToolKind,
     ToolScopeError,
     ToolValidationError,
@@ -36,6 +39,7 @@ from samurai_ai.execution.registry import ToolOutput
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 
 _NO_COMMA_OR_SPACE = re.compile(r"^[^\s,]+$")
+_PORTS = re.compile(r"^\d{1,5}(?:-\d{1,5})?(?:,\d{1,5}(?:-\d{1,5})?)*$")
 _SUMMARY_LIMIT = 100
 
 
@@ -46,6 +50,7 @@ class _ScopedSandboxTool:
 
     def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
         self._runner = runner
+        self._notice: str | None = None
 
     @property
     def runner(self) -> DockerSandboxRunner:
@@ -72,6 +77,10 @@ class _ScopedSandboxTool:
     ) -> tuple[dict[str, str], dict[str, str]]:
         """Plain env (value in argv) and secret env (name in argv only)."""
         return {}, {}
+
+    def build_stdin(self, params: dict[str, Any]) -> bytes | None:
+        """Payload for tools that read their targets from stdin."""
+        return None
 
     def summarize(self, stdout: str) -> list[str]:
         raise NotImplementedError
@@ -107,7 +116,7 @@ class _ScopedSandboxTool:
         _, secret_env = self.build_env(params)
         if secret_env:
             self.runner.validate_secret_env(profile, secret_env)
-        asyncio.run(self.runner.preflight(profile))
+        self._notice = asyncio.run(self.runner.preflight(profile))
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         profile = get_profile(self.profile_id)
@@ -123,6 +132,7 @@ class _ScopedSandboxTool:
             scope,
             env=env,
             secret_env=secret_env,
+            stdin_data=self.build_stdin({**params, "targets": targets}),
         )
         result = outcome.result
         summary_lines = self.summarize(result.stdout)
@@ -131,6 +141,8 @@ class _ScopedSandboxTool:
             stdout = "# summary\n" + "\n".join(summary_lines) + "\n\n# raw\n"
         stdout += result.stdout
         stderr = result.stderr
+        if self._notice is not None:
+            stderr = f"[allowlist] {self._notice}\n{stderr}"
         if result.timed_out:
             stderr += "\n[sandbox timed out]"
         if result.truncated:
@@ -571,4 +583,309 @@ class SubfinderPassiveTool(_ScopedSandboxTool):
         return lines
 
 
-__all__ = ["HttpxProbeTool", "NucleiScanTool", "SubfinderPassiveTool"]
+class DnsxResolveTool(_ScopedSandboxTool):
+    """Resolve in-scope names through the pinned DoH resolver over SOCKS5.
+
+    The resolver lives in the signed profile, so the model cannot redirect
+    lookups. A resolver that answers nothing while the run succeeded is
+    reported as a failure: otherwise "no names" and "dead resolver" would read
+    the same. `-rcode noerror,nxdomain` makes a live resolver answer once per
+    name, which is what tells the two apart.
+    """
+
+    profile_id = "sandbox.dnsx@v1"
+    executable = "dnsx"
+    max_targets = 50
+
+    _TYPE_FLAGS = {"A": "-a", "AAAA": "-aaaa", "CNAME": "-cname"}
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="recon.dnsx-resolve",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Resolve in-scope hosts through the pinned DoH resolver "
+            "(records per name, candidate assets for the ledger)",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=180,
+            output_limit_bytes=262144,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "hosts": _targets_schema(self.max_targets),
+                    "types": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": list(self._TYPE_FLAGS),
+                        },
+                        "minItems": 1,
+                        "maxItems": len(self._TYPE_FLAGS),
+                        "default": ["A"],
+                    },
+                },
+                "required": ["hosts"],
+                "additionalProperties": False,
+            },
+            capabilities=("recon", "dns-resolution"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_targets(
+        self, params: dict[str, Any], scope: ScopeContract
+    ) -> list[str]:
+        hosts = [str(host) for host in params["hosts"]]
+        if not 1 <= len(hosts) <= self.max_targets:
+            raise ToolValidationError(
+                f"{self.definition.id}: expected 1..{self.max_targets} hosts, "
+                f"got {len(hosts)}"
+            )
+        for host in hosts:
+            if not _NO_COMMA_OR_SPACE.fullmatch(host) or host.startswith("-"):
+                raise ToolValidationError(
+                    f"{self.definition.id}: host must be a bare name without "
+                    f"spaces, commas or a leading dash: {host!r}"
+                )
+            decision = scope.evaluate(host)
+            if not decision.allowed:
+                raise ToolScopeError(
+                    f"{self.definition.id}: host {host!r} is out of scope: "
+                    f"{decision.detail}"
+                )
+        return hosts
+
+    def _validated_types(self, params: dict[str, Any]) -> list[str]:
+        types = [str(item) for item in params.get("types") or ["A"]]
+        if not types:
+            raise ToolValidationError(f"{self.definition.id}: types must not be empty")
+        for item in types:
+            if item not in self._TYPE_FLAGS:
+                raise ToolValidationError(
+                    f"{self.definition.id}: unknown record type {item!r}"
+                )
+        return list(dict.fromkeys(types))
+
+    def _resolver(self) -> str:
+        resolver = get_profile(self.profile_id).resolver_url
+        if resolver is None:
+            raise ToolValidationError(
+                f"{self.definition.id}: sandbox profile {self.profile_id} pins no "
+                "resolver"
+            )
+        return resolver
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        # dnsx 1.2.2 has no -timeout flag: the profile timeout governs the run.
+        type_flags = [self._TYPE_FLAGS[item] for item in self._validated_types(params)]
+        return [
+            "-silent",
+            "-json",
+            "-omit-raw",
+            "-nc",
+            "-disable-update-check",
+            "-rcode",
+            "noerror,nxdomain",
+            "-r",
+            self._resolver(),
+            *type_flags,
+        ]
+
+    def build_stdin(self, params: dict[str, Any]) -> bytes:
+        # dnsx 1.2.2 ignores -l, so the host list goes through stdin.
+        return "".join(f"{str(host)}\n" for host in params["targets"]).encode("utf-8")
+
+    def summarize(self, stdout: str) -> list[str]:
+        lines: list[str] = []
+        with_records = False
+        for raw_line in stdout.splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                record = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            host = record.get("host") or record.get("input")
+            if not host:
+                continue
+            status = str(record.get("status_code", "?"))
+            found: list[str] = []
+            for record_type in ("a", "aaaa", "cname"):
+                values = record.get(record_type) or ()
+                if isinstance(values, str):
+                    values = [values]
+                if values:
+                    found.append(
+                        f"{record_type.upper()}={','.join(str(value) for value in values[:5])}"
+                    )
+            if found:
+                with_records = True
+            lines.append(f"{host}\t{status}\t{' '.join(found)}".rstrip())
+            if len(lines) >= _SUMMARY_LIMIT:
+                break
+        if lines and not with_records:
+            lines.append("no answers")
+        return lines
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        output = super().invoke(params, scope)
+        # Zero parsed lines on a successful exit means the resolver never
+        # answered — not that the names are dead.
+        if output.exit_code == 0 and not output.stdout.startswith("# summary\n"):
+            raise ToolExecutionError(
+                f"{self.definition.id}: resolver {self._resolver()} answered nothing "
+                f"(exit 0, no records, no NXDOMAIN)"
+            )
+        return output
+
+
+class NmapScanTool(_ScopedSandboxTool):
+    """Port scan on a direct-class profile: the adapter is the only gate.
+
+    `-sT` keeps the sandbox at `--cap-drop ALL` (no raw sockets) and `-Pn`
+    always, because ping discovery needs raw ICMP too. nmap's own `--proxies`
+    covers only version detection and takes no credentials, so the proxy is not
+    in the path at all — the egress journal has no entry for this class.
+    """
+
+    profile_id = "sandbox.nmap@v1"
+    executable = "nmap"
+    max_targets = 10
+
+    _PROFILE_FLAGS = {"fast": ["-F"], "standard": ["--top-ports", "1000"]}
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="scan.nmap",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Scan in-scope hosts for open TCP ports (connect scan, "
+            "no ping, rate capped)",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.DIRECT,
+            timeout_seconds=600,
+            output_limit_bytes=524288,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "targets": _targets_schema(self.max_targets),
+                    "profile": {
+                        "type": "string",
+                        "enum": list(self._PROFILE_FLAGS),
+                    },
+                    "ports": {"type": "string", "minLength": 1},
+                    "service_detection": {"type": "boolean", "default": False},
+                },
+                "required": ["targets"],
+                "additionalProperties": False,
+            },
+            capabilities=("scan", "port-scan"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_ports(self, params: dict[str, Any]) -> list[str] | None:
+        ports = params.get("ports")
+        profile = params.get("profile")
+        if ports is not None and profile is not None:
+            raise ToolValidationError(
+                f"{self.definition.id}: use either 'profile' or 'ports', not both"
+            )
+        if ports is None and profile is None:
+            return None
+        if ports is not None:
+            value = str(ports)
+            if not _PORTS.fullmatch(value):
+                raise ToolValidationError(
+                    f"{self.definition.id}: ports must look like 80,443,8000-8100: "
+                    f"{value!r}"
+                )
+            for part in value.split(","):
+                high = int(part.split("-")[-1])
+                if high > 65535:
+                    raise ToolValidationError(
+                        f"{self.definition.id}: port {high} is above 65535"
+                    )
+            return ["-p", value]
+        flags = self._PROFILE_FLAGS.get(str(profile))
+        if flags is None:
+            raise ToolValidationError(
+                f"{self.definition.id}: unknown profile {profile!r}"
+            )
+        return list(flags)
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        port_flags = self._validated_ports(params)
+        if port_flags is None:
+            port_flags = list(self._PROFILE_FLAGS["fast"])
+        args = [
+            "-Pn",
+            "-sT",
+            "-n",
+            "--max-rate",
+            "300",
+            *port_flags,
+            "-oX",
+            "-",
+        ]
+        if params.get("service_detection"):
+            args += ["-sV", "--version-light"]
+        args += [str(target) for target in params["targets"]]
+        return args
+
+    def summarize(self, stdout: str) -> list[str]:
+        try:
+            root = ElementTree.fromstring(stdout)
+        except ElementTree.ParseError:
+            return []
+        lines: list[str] = []
+        for host in root.iter("host"):
+            address = host.find("address")
+            if address is None:
+                continue
+            name = address.get("addr", "?")
+            for port in host.iter("port"):
+                state = port.find("state")
+                if state is None or state.get("state") != "open":
+                    continue
+                service = port.find("service")
+                service_text = ""
+                if service is not None:
+                    label = service.get("name", "")
+                    version = " ".join(
+                        part
+                        for part in (
+                            service.get("product", ""),
+                            service.get("version", ""),
+                        )
+                        if part
+                    )
+                    service_text = f" {label}{(' ' + version) if version else ''}"
+                lines.append(
+                    f"{name}:{port.get('portid', '?')}/{port.get('protocol', 'tcp')}"
+                    f" open{service_text}"
+                )
+                if len(lines) >= _SUMMARY_LIMIT:
+                    return lines
+        return lines or ["no open ports"]
+
+
+__all__ = [
+    "DnsxResolveTool",
+    "HttpxProbeTool",
+    "NmapScanTool",
+    "NucleiScanTool",
+    "SubfinderPassiveTool",
+]

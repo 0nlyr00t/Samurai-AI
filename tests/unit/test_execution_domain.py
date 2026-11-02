@@ -168,6 +168,8 @@ def test_default_registry_contains_stage2_tools() -> None:
         "recon.httpx-probe",
         "scan.nuclei",
         "recon.subfinder-passive",
+        "recon.dnsx-resolve",
+        "scan.nmap",
     }
     assert definitions["local.echo"].risk_class == RiskClass.R0
     assert definitions["process.exec"].risk_class == RiskClass.R1
@@ -200,7 +202,6 @@ class _StubAdapter:
 @pytest.mark.parametrize(
     ("kind", "network"),
     [
-        (ToolKind.SANDBOX, NetworkAccess.DIRECT),
         (ToolKind.PROCESS, NetworkAccess.PROXIED),
         (ToolKind.LOCAL, NetworkAccess.DIRECT),
         (ToolKind.MCP, NetworkAccess.PROXIED),
@@ -213,6 +214,17 @@ def test_registry_rejects_impossible_network_declarations(
     definition = make_definition(id="local.impossible", kind=kind, network=network)
     with pytest.raises(ToolValidationError, match="network"):
         registry.register(_StubAdapter(definition))
+
+
+def test_sandbox_tools_may_declare_direct_network() -> None:
+    # the direct profile class runs on bridge networking: only the adapter's
+    # scope check stands in front, so the declaration is allowed on purpose
+    registry = default_registry()
+    definition = make_definition(
+        id="local.direct", kind=ToolKind.SANDBOX, network=NetworkAccess.DIRECT
+    )
+    registry.register(_StubAdapter(definition))
+    assert registry.get("local.direct").definition.network is NetworkAccess.DIRECT
 
 
 def test_registry_requires_http_tools_to_declare_direct_network() -> None:

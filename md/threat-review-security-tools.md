@@ -82,10 +82,28 @@ argv, значение — в окружение клиента `docker`, отк
 7. Образы projectdiscovery объявляют свой entrypoint, поэтому исполняемый
    файл едет на `--entrypoint`: иначе имя дублировалось и инструмент падал
    с «no input list provided».
+8. Инструмент, которому нужен только SOCKS (`dnsx -proxy`), получает второй
+   вход прокси — SOCKS5 CONNECT-only (RFC 1928/1929, имя `samurai`, пароль =
+   per-run токен). Вердикт, resolver и события те же, что у CONNECT; BIND и
+   UDP ASSOCIATE отвечают `REP=7`. Схема прокси и DoH-резолвер — поля
+   профиля (`proxy_scheme`, `resolver_url`), то есть в подписи.
+9. Токен в этом случае неизбежно уезжает в argv (`-proxy socks5://samurai:<t>@…`),
+   потому что env-пути у инструмента нет; токен регистрируется в редаторе и
+   режется в выводе и артефактах.
+10. Инструменты, которые прокси не может провести, живут классом `direct`:
+   контейнер остаётся на bridge NAT, scope проверяется только в адаптере до
+   spawn, egress-аудит у такого запуска отсутствует. Сейчас это nmap; на
+   Docker Desktop Mac мост и так обходим, так что класс честно называет то, что
+   происходит, вместо мнимого enforcement.
 
 Остаточный риск: окружение процесса `docker` читается тем же пользователем
 (`ps e`), а на Docker Desktop for Mac scoped sandbox остаётся soft
 enforcement. Оба ограничения уже зафиксированы выше и не новы для канала.
+
+Подпись профилей — HMAC от мастер-ключа vault, лежащего рядом в каталоге
+состояния. Она пининит digest'ы и лимиты одним артефактом и делает дрейф
+видимым, но не защищает от того, кто уже может писать в код: он подпишет то же
+самое. Поэтому самолечение при расхождении принимается, а не считается дырой.
 
 ### 2.3 argv/flag injection
 
@@ -130,10 +148,10 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 | Инструмент | Решение | Risk | Сеть | Обязательные контроли |
 |---|---|---|---|---|
 | httpx (probe) | **реализован** (`recon.httpx-probe`) | R2 | scoped egress | target через scope.evaluate; флаги из enum; JSON output; rate cap |
-| dnsx | dedicated adapter | R2 | scoped egress | как у httpx; resolver pinned через proxy |
+| dnsx | **реализован** (`recon.dnsx-resolve`) | R2 | scoped egress (SOCKS5) | resolver закреплён в подписи профиля (`doh:`), имена через stdin, `-rcode noerror,nxdomain`, молчащий резолвер = failed |
 | subfinder | **реализован** (`recon.subfinder-passive`) | R2 | scoped egress | domain через scope.evaluate; закрытый enum источников; ключи только по имени через env-канал; `-proxy` из профиля; JSON output; без `-all` |
 | amass | defer | — | — | перекрывается subfinder; вернуться при необходимости |
-| nmap | defer (блокер) | — | — | raw TCP/SYN сканер архитектурно несовместим с HTTP CONNECT egress proxy; ждёт TCP-level enforcement (Linux internal network harness) |
+| nmap | **реализован** (`scan.nmap`) | R2 | direct | `-sT -Pn`, без NET_RAW; порты профилем или регексом; rate зашит; egress не аудируется — это класс direct |
 | naabu | defer | — | — | перекрывается nmap profile; SYN-scan требует raw sockets — отдельный разговор про capabilities контейнера |
 | ffuf | defer | — | — | нет официального контейнерного образа (supply chain не проходит pinned-digest критерий) |
 | gobuster | defer | — | — | перекрывается ffuf |
@@ -178,15 +196,43 @@ vault placeholders.
   часть подписи, расширение = переподпись.
 - источники без ключа работают без `keys`; resolvers по UDP 53 идут мимо
   proxy — принятое ослабление, а не регрессия.
-- после добавления профиля набор sandbox-профилей меняется: существующие
-  установки переподписывают allowlist (`samurai sandbox sign`).
+- набор sandbox-профилей меняется с каждым новым адаптером: подпись allowlist
+  расходится, и первый же запуск переподписывает её сам, предупреждая в stderr и
+  оставляя след в `samurai sandbox profiles`. Ручной путь (`samurai sandbox sign`)
+  и проверка без записи (`samurai sandbox verify`, код 1 при расхождении)
+  остаются.
 
-### `scan.nmap` v1 (R3) — deferred: raw TCP/SYN несовместим с CONNECT-proxy
+### `recon.dnsx-resolve` v1 (R2, scoped egress через SOCKS5) — реализован
 
-- params: `targets` (1..10, scope.check), `profile: enum [fast, standard]`
-  → `-F -T3` / `-sV -T3 --max-rate 300`, `ports: string` (regex
-  `^\d+(-\d+)?(,\d+(-\d+)?)*$`).
-- output: `-oX -` → парсинг портов; raw XML в артефакт.
+- params: `hosts: array<string>` (1..50, каждый — scope.check), `types: array<enum
+  [A,AAAA,CNAME]>` (default `[A]`).
+- резолвер в argv не выбирается: он из профиля (`resolver_url =
+  doh:https://cloudflare-dns.com/dns-query`, хост в `egress_hosts`), имена уезжают
+  в stdin (флаг `-l` в образе 1.2.2 молча не работает).
+- шаблон: `dnsx -silent -json -omit-raw -nc -disable-update-check -rcode
+  noerror,nxdomain [-a|-aaaa|-cname] -r <resolver>`; `-proxy` и env
+  подставляет раннер профиля `sandbox.dnsx@v1`.
+- output: JSONL → строки `host<TAB>STATUS<TAB>записи` (кандидаты для
+  `asset add`); NXDOMAIN остаётся строкой со статусом, все-без-записей даёт
+  `no answers`. Ноль разобранных строк при exit 0 — failed с именем резолвера
+  (различение «имён нет» и «резолвер молчит»).
+- ограничение: у инструмента нет env-пути для прокси, токен виден в argv;
+  UDP ASSOCIATE не поддерживается — только DoH-over-TCP.
+
+### `scan.nmap` v1 (R2, класс direct) — реализован
+
+- params: `targets` (1..10, scope.check), `profile: enum [fast, standard]` →
+  `-F` / `--top-ports 1000` (взаимоисключимы с `ports`), `ports: string`
+  (regex `^\d+(-\d+)?(,\d+(-\d+)?)*$`, верхняя граница 65535),
+  `service_detection: bool`.
+- шаблон: `nmap -Pn -sT -n --max-rate 300 <порты> -oX - [-sV --version-light]`
+  — connect-скан, чтобы остаться на `--cap-drop ALL` без NET_RAW; `-Pn`
+  всегда, потому что ping тоже требует raw ICMP.
+- output: XML → строки `host:port/proto open service version` (≤100, закрытые
+  порты не печатаются), raw XML в артефакт.
+- почем прокси нет: `nmap --proxies` действует только на `-sV`/NSE и не умеет
+  авторизацию, а фазы ping/port-scan его игнорируют — так что nmap отнесён к
+  классу direct (см. 2.8).
 
 ### `scan.nuclei` v1 (R3, scoped egress, approval обязателен) — реализован
 

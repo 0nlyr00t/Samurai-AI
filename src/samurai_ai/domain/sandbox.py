@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import re
+import urllib.parse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -19,6 +20,8 @@ _EGRESS_HOST = re.compile(
 )
 MAX_ENV_NAMES = 16
 MAX_EGRESS_HOSTS = 64
+_PROXY_SCHEMES = ("http", "socks5")
+_RESOLVER_URL = re.compile(r"doh:https://[a-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?\Z")
 SIGNING_INFO = b"samurai-sandbox-profiles-v1"
 
 
@@ -51,6 +54,10 @@ class SandboxProfile(BaseModel):
     env_names: tuple[str, ...] = ()
     # Flag through which the tool takes the egress proxy URL, e.g. "-proxy".
     proxy_flag: str | None = None
+    # How the proxy URL is addressed: HTTP CONNECT (default) or SOCKS5.
+    proxy_scheme: str = "http"
+    # DoH resolver the profile is pinned to, in the tool's own "doh:<url>" form.
+    resolver_url: str | None = None
     # Third-party hosts the tool may reach besides the operation scope
     # (passive sources); "*.example.com" also matches the apex.
     egress_hosts: tuple[str, ...] = ()
@@ -76,9 +83,9 @@ class SandboxProfile(BaseModel):
     @field_validator("network_mode")
     @classmethod
     def validate_network_mode(cls, value: str) -> str:
-        if value not in ("none", "scoped"):
+        if value not in ("none", "scoped", "direct"):
             raise SandboxProfileError(
-                f"sandbox network_mode must be 'none' or 'scoped': {value!r}"
+                f"sandbox network_mode must be 'none', 'scoped' or 'direct': {value!r}"
             )
         return value
 
@@ -124,6 +131,33 @@ class SandboxProfile(BaseModel):
                     f"sandbox egress host must be a lowercase host or *.suffix: {host!r}"
                 )
         return value
+
+    @field_validator("proxy_scheme")
+    @classmethod
+    def validate_proxy_scheme(cls, value: str) -> str:
+        if value not in _PROXY_SCHEMES:
+            raise SandboxProfileError(
+                f"sandbox proxy scheme must be one of {_PROXY_SCHEMES}: {value!r}"
+            )
+        return value
+
+    @field_validator("resolver_url")
+    @classmethod
+    def validate_resolver_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _RESOLVER_URL.fullmatch(value):
+            raise SandboxProfileError(
+                f"sandbox resolver must look like doh:https://host/path: {value!r}"
+            )
+        return value
+
+    def resolver_host(self) -> str | None:
+        """Host the pinned resolver talks to, so the profile can allow it."""
+        if self.resolver_url is None:
+            return None
+        _, _, url = self.resolver_url.partition(":")
+        return urllib.parse.urlsplit(url).hostname
 
 
 def canonical_profiles_payload(

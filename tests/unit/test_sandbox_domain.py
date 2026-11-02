@@ -74,6 +74,10 @@ def make_runner(
     return runner, fake
 
 
+def _raise_missing_key() -> bytes:
+    raise RuntimeError("no key")
+
+
 def sign_default(tmp_path: Path) -> None:
     sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
 
@@ -95,7 +99,7 @@ def test_profile_requires_digest_pinned_image() -> None:
 
 def test_profile_network_mode_fail_closed() -> None:
     for bad in ("bridge", "host", "Scoped"):
-        with pytest.raises(ValidationError, match="'none' or 'scoped'"):
+        with pytest.raises(ValidationError, match="'none', 'scoped' or 'direct'"):
             make_profile(network_mode=bad)
     assert make_profile().network_mode == "none"
     assert make_profile(network_mode="scoped").network_mode == "scoped"
@@ -267,21 +271,47 @@ def test_run_appends_proxy_flag_and_forwards_child_env(tmp_path: Path) -> None:
     assert fake.envs[-1] == {"HOME": "/tmp", "SHODAN_API_KEY": "k"}
 
 
-def test_preflight_fails_without_signature(tmp_path: Path) -> None:
-    runner, fake = make_runner(tmp_path)
+def test_preflight_signs_a_missing_allowlist(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
     profile = get_profile("sandbox.default@v1")
-    with pytest.raises(SandboxSignatureError, match="signature is missing"):
-        asyncio.run(runner.preflight(profile))
-    assert fake.calls == []
+    notice = asyncio.run(runner.preflight(profile))
+    assert notice is not None and "unsigned" in notice
+    assert (tmp_path / "sandbox-allowlist.sig").exists()
+    record = runner.resign_record()
+    assert record is not None and record["reason"] == "unsigned"
+    assert record["profiles"] == len(SANDBOX_PROFILES)
 
 
-def test_preflight_fails_with_invalid_signature(tmp_path: Path) -> None:
+def test_preflight_resigns_an_invalid_allowlist(tmp_path: Path) -> None:
     sign_allowlist(tmp_path / "sandbox-allowlist.sig", OTHER_KEY)
-    runner, fake = make_runner(tmp_path)
+    runner, _ = make_runner(tmp_path)
     profile = get_profile("sandbox.default@v1")
-    with pytest.raises(SandboxSignatureError, match="signature is invalid"):
+    notice = asyncio.run(runner.preflight(profile))
+    assert notice is not None and "invalid" in notice
+    assert runner.allowlist_status() == "signed"
+    record = runner.resign_record()
+    assert record is not None and record["reason"] == "invalid"
+
+
+def test_a_valid_signature_is_left_alone(tmp_path: Path) -> None:
+    sign_default(tmp_path)
+    runner, _ = make_runner(tmp_path)
+    profile = get_profile("sandbox.default@v1")
+    before = (tmp_path / "sandbox-allowlist.sig").read_text()
+    assert asyncio.run(runner.preflight(profile)) is None
+    assert (tmp_path / "sandbox-allowlist.sig").read_text() == before
+    assert runner.resign_record() is None
+
+
+def test_preflight_refuses_when_the_key_is_unavailable(tmp_path: Path) -> None:
+    sign_default(tmp_path)
+    runner = DockerSandboxRunner(
+        FakeManager(), tmp_path / "sandbox-allowlist.sig", _raise_missing_key
+    )
+    runner.signature_path.write_text("deadbeef\n", encoding="utf-8")
+    profile = get_profile("sandbox.default@v1")
+    with pytest.raises(SandboxSignatureError, match="master key is unavailable"):
         asyncio.run(runner.preflight(profile))
-    assert fake.calls == []
 
 
 def test_preflight_fails_when_docker_unavailable(tmp_path: Path) -> None:
@@ -387,3 +417,65 @@ def test_sign_allowlist_writes_signature_file(tmp_path: Path) -> None:
     path = tmp_path / "home" / "sandbox-allowlist.sig"
     assert path.read_text(encoding="ascii").strip() == signature
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_profile_validates_proxy_scheme_and_resolver() -> None:
+    assert make_profile().proxy_scheme == "http"
+    assert make_profile(proxy_scheme="socks5").proxy_scheme == "socks5"
+    with pytest.raises(ValidationError, match="proxy scheme"):
+        make_profile(proxy_scheme="socks4")
+    with pytest.raises(ValidationError, match="resolver must look like"):
+        make_profile(resolver_url="https://cloudflare-dns.com/dns-query")
+    profile = make_profile(
+        proxy_scheme="socks5",
+        resolver_url="doh:https://cloudflare-dns.com/dns-query",
+        egress_hosts=("cloudflare-dns.com",),
+    )
+    assert profile.resolver_host() == "cloudflare-dns.com"
+    assert make_profile().resolver_host() is None
+
+
+def test_run_uses_the_profile_proxy_scheme(tmp_path: Path) -> None:
+    runner, fake = make_runner(tmp_path)
+    sign_default(tmp_path)
+    profile = make_profile(
+        network_mode="scoped",
+        proxy_flag="-proxy",
+        proxy_scheme="socks5",
+        allowed_executables=("echo",),
+    )
+    runner.run(
+        profile,
+        "run_socks",
+        "echo",
+        ["hi"],
+        ScopeContract(includes=("example.com",)),
+    )
+    docker_run = fake.calls[-1]
+    assert docker_run[docker_run.index("-proxy") + 1].startswith(
+        "socks5://samurai:"
+    )
+
+
+def test_direct_profile_uses_bridge_networking(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = make_profile(network_mode="direct", allowed_executables=("nmap",))
+    argv = runner.build_argv(profile, "run_direct", "nmap", ["-sT", "example.com"])
+    assert "--network" not in argv
+    assert not any(part.startswith(("HTTP_PROXY=", "https_proxy=")) for part in argv)
+    assert argv[-5:] == [
+        "--entrypoint",
+        "nmap",
+        profile.image,
+        "-sT",
+        "example.com",
+    ]
+
+
+def test_direct_profile_runs_without_scope(tmp_path: Path) -> None:
+    sign_default(tmp_path)
+    runner, fake = make_runner(tmp_path)
+    profile = make_profile(network_mode="direct", allowed_executables=("nmap",))
+    outcome = runner.run(profile, "run_direct2", "nmap", ["-sT"])
+    assert outcome.result.stdout == "hello"
+    assert outcome.proxy_token is None
