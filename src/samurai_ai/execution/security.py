@@ -20,8 +20,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 import xml.etree.ElementTree as ElementTree
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from samurai_ai.domain.execution import (
@@ -41,6 +44,16 @@ from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 _NO_COMMA_OR_SPACE = re.compile(r"^[^\s,]+$")
 _PORTS = re.compile(r"^\d{1,5}(?:-\d{1,5})?(?:,\d{1,5}(?:-\d{1,5})?)*$")
 _SUMMARY_LIMIT = 100
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _wordlist_dir() -> Path:
+    """`assets/wordlists`, also inside a PyInstaller one-file bundle."""
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle is not None:
+        return Path(bundle) / "assets" / "wordlists"
+    return _REPO_ROOT / "assets" / "wordlists"
+_FUZZ_MATCH_CODES = "200-299,301,302,307,401,403,405,500"
 
 
 class _ScopedSandboxTool:
@@ -882,8 +895,144 @@ class NmapScanTool(_ScopedSandboxTool):
         return lines or ["no open ports"]
 
 
+class FfufFuzzTool(_ScopedSandboxTool):
+    """Content discovery by fuzzing a URL path with a bundled wordlist.
+
+    The wordlist rides on stdin (`-w /dev/stdin:FUZZ`) because the sandbox does
+    not mount host paths; `assets/wordlists` pins the file by sha256 in a test.
+    Noise is handled by the stock status matcher plus `-ac`, otherwise soft-404
+    and SPA routers answer everything.
+    """
+
+    profile_id = "sandbox.ffuf@v1"
+    executable = "ffuf"
+    max_targets = 1
+
+    _EXTENSIONS = (".php", ".bak", ".js", ".txt", ".zip")
+    WORDLIST = "common.txt"
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="fuzz.ffuf",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Fuzz an in-scope URL path (FUZZ keyword) with a bundled "
+            "wordlist through the scoped proxy",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=300,
+            output_limit_bytes=262144,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "minLength": 1},
+                    "extensions": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": list(self._EXTENSIONS)},
+                        "maxItems": len(self._EXTENSIONS),
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            capabilities=("fuzz", "content-discovery"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_targets(
+        self, params: dict[str, Any], scope: ScopeContract
+    ) -> list[str]:
+        url = str(params["url"])
+        if "FUZZ" not in url:
+            raise ToolValidationError(
+                f"{self.definition.id}: url must contain the FUZZ keyword: {url!r}"
+            )
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ToolValidationError(
+                f"{self.definition.id}: url must be http(s) with a host: {url!r}"
+            )
+        decision = scope.evaluate(parts.hostname)
+        if not decision.allowed:
+            raise ToolScopeError(
+                f"{self.definition.id}: host {parts.hostname!r} is out of scope: "
+                f"{decision.detail}"
+            )
+        return [url]
+
+    def _validated_extensions(self, params: dict[str, Any]) -> list[str]:
+        extensions = [str(item) for item in params.get("extensions") or ()]
+        for item in extensions:
+            if item not in self._EXTENSIONS:
+                raise ToolValidationError(
+                    f"{self.definition.id}: unknown extension {item!r}"
+                )
+        return list(dict.fromkeys(extensions))
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        targets = params.get("targets") or [params["url"]]
+        args = [
+            "-s",
+            "-noninteractive",
+            "-of",
+            "json",
+            "-o",
+            "/dev/stdout",
+            "-ac",
+            "-mc",
+            _FUZZ_MATCH_CODES,
+            "-rate",
+            "50",
+            "-t",
+            "20",
+            "-w",
+            "/dev/stdin:FUZZ",
+            "-u",
+            str(targets[0]),
+        ]
+        extensions = self._validated_extensions(params)
+        if extensions:
+            args += ["-e", ",".join(extensions)]
+        return args
+
+    def build_env(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        # ffuf writes a scraper config under $HOME and the rootfs is read-only.
+        return {"HOME": "/tmp", "TMPDIR": "/tmp"}, {}
+
+    def build_stdin(self, params: dict[str, Any]) -> bytes:
+        return (_wordlist_dir() / self.WORDLIST).read_bytes()
+
+    def summarize(self, stdout: str) -> list[str]:
+        try:
+            document = json.loads(stdout[stdout.index("{"):])
+        except (ValueError, json.JSONDecodeError):
+            return []
+        if not isinstance(document, dict):
+            return []
+        lines: list[str] = []
+        for result in document.get("results") or ():
+            if not isinstance(result, dict):
+                continue
+            url = str(result.get("url", "?"))[:200]
+            status = result.get("status", "?")
+            size = result.get("length", "?")
+            words = result.get("words", "?")
+            lines.append(f"{url}\tstatus={status}\tsize={size}\twords={words}")
+            if len(lines) >= _SUMMARY_LIMIT:
+                break
+        return lines or ["no matches"]
+
+
 __all__ = [
     "DnsxResolveTool",
+    "FfufFuzzTool",
     "HttpxProbeTool",
     "NmapScanTool",
     "NucleiScanTool",
