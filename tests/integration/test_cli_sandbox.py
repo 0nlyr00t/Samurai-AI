@@ -61,7 +61,7 @@ def test_cli_sandbox_sign_and_profiles(sandbox_home: Path, capsys) -> None:
     capsys.readouterr()
 
 
-def test_cli_sandbox_exec_fail_closed_without_signature(
+def test_cli_sandbox_exec_signs_a_missing_allowlist(
     sandbox_home: Path, capsys
 ) -> None:
     database = str(sandbox_home / "run.db")
@@ -83,18 +83,17 @@ def test_cli_sandbox_exec_fail_closed_without_signature(
         )
         == 2
     )
-    assert "sandbox allowlist signature is missing" in capsys.readouterr().err
+    assert "signature is missing" not in capsys.readouterr().err
+    assert (sandbox_home / "home" / "sandbox-allowlist.sig").exists()
 
     assert (
         main(["--db", database, "--json", "operation", "show", operation_id, "--events"])
         == 0
     )
     events = json.loads(capsys.readouterr().out)["events"]
-    assert not [
-        event
-        for event in events
-        if event["event_type"].startswith(("tool.run", "approval"))
-    ]
+    # the run now gets past preflight to the approval prompt, but nothing ran
+    assert [event for event in events if event["event_type"] == "approval.requested"]
+    assert not [event for event in events if event["event_type"].startswith("tool.run")]
 
 
 def test_cli_sandbox_exec_rejects_unknown_profile(sandbox_home: Path, capsys) -> None:

@@ -423,6 +423,7 @@ class SandboxExecTool:
                 lambda: load_master_key(vault_key_path()),
             )
         self.runner = runner
+        self._notice: str | None = None
         self._definition = ToolDefinition(
             id="sandbox.exec",
             version=1,
@@ -459,7 +460,7 @@ class SandboxExecTool:
         executable = str(params["executable"])
         args = [str(argument) for argument in params.get("args", [])]
         self.runner.validate_invocation(profile, executable, args)
-        asyncio.run(self.runner.preflight(profile))
+        self._notice = asyncio.run(self.runner.preflight(profile))
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         profile = get_profile(str(params["profile"]))
@@ -469,6 +470,8 @@ class SandboxExecTool:
         outcome = self.runner.run(profile, run_id, executable, args, scope)
         result = outcome.result
         stderr = result.stderr
+        if self._notice is not None:
+            stderr = f"[allowlist] {self._notice}\n{stderr}"
         if result.timed_out:
             stderr += "\n[sandbox timed out]"
         if result.truncated:

@@ -9,9 +9,11 @@ must carry a valid HMAC signature derived from the vault master key.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -227,6 +229,9 @@ class DockerSandboxRunner:
     ) -> None:
         self.manager = manager
         self.signature_path = signature_path
+        # Sidecar with the last automatic re-sign: reason and time survive the
+        # stderr scroll-back and `sandbox profiles` shows them.
+        self.resign_journal_path = signature_path.with_suffix(".reason")
         self.master_key_loader = master_key_loader
         self.egress_allowed_ports = egress_allowed_ports
 
@@ -341,18 +346,68 @@ class DockerSandboxRunner:
         ]
         return argv
 
-    def verify_allowlist_signature(self) -> None:
+    def allowlist_status(self) -> str:
+        """``signed`` / ``unsigned`` / ``invalid`` — without writing anything."""
         if not self.signature_path.exists():
-            raise SandboxSignatureError(
-                f"sandbox allowlist signature is missing: {self.signature_path}; "
-                "create it with 'samurai sandbox sign'"
-            )
+            return "unsigned"
+        try:
+            master_key = self.master_key_loader()
+        except Exception:
+            return "unknown"
         signature = self.signature_path.read_text(encoding="utf-8")
-        if not verify_profiles(self.master_key_loader(), SANDBOX_PROFILES, signature):
+        return (
+            "signed"
+            if verify_profiles(master_key, SANDBOX_PROFILES, signature)
+            else "invalid"
+        )
+
+    def verify_allowlist_signature(self) -> str | None:
+        """Keep the allowlist signed; re-sign on drift and say so.
+
+        The signature lives next to the state, so its key is as reachable as the
+        project code is: what it buys is pinned digests in one artifact and a
+        visible drift, not authenticity against a local writer. Re-signing on
+        drift therefore beats refusing on every upgrade — as long as it is
+        announced and recorded.
+        """
+        status = self.allowlist_status()
+        if status == "signed":
+            return None
+        if status == "unknown":
             raise SandboxSignatureError(
-                "sandbox allowlist signature is invalid; "
-                "re-create it with 'samurai sandbox sign'"
+                "sandbox allowlist signature cannot be checked: the vault master "
+                "key is unavailable"
             )
+        master_key = self.master_key_loader()
+        sign_allowlist(self.signature_path, master_key)
+        self._record_resign(status)
+        return (
+            f"allowlist signature was {status}; re-signed {len(SANDBOX_PROFILES)} "
+            f"profile(s) after a profile change"
+        )
+
+    def _record_resign(self, reason: str) -> None:
+        payload = {
+            "resigned_at": datetime.now(UTC).isoformat(),
+            "reason": reason,
+            "profiles": len(SANDBOX_PROFILES),
+        }
+        descriptor = os.open(
+            self.resign_journal_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        try:
+            os.write(descriptor, (json.dumps(payload) + "\n").encode("utf-8"))
+        finally:
+            os.close(descriptor)
+
+    def resign_record(self) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(self.resign_journal_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
 
     async def docker_available(self) -> bool:
         try:
@@ -374,8 +429,8 @@ class DockerSandboxRunner:
             return False
         return result.exit_code == 0
 
-    async def preflight(self, profile: SandboxProfile) -> None:
-        self.verify_allowlist_signature()
+    async def preflight(self, profile: SandboxProfile) -> str | None:
+        notice = self.verify_allowlist_signature()
         if not await self.docker_available():
             raise SandboxError(
                 "docker is not available; sandbox.exec requires a running Docker daemon"
@@ -385,6 +440,7 @@ class DockerSandboxRunner:
                 f"sandbox image is not present locally: {profile.image}; "
                 "pull it manually as a trusted operator action (auto-pull is disabled)"
             )
+        return notice
 
     def run(
         self,

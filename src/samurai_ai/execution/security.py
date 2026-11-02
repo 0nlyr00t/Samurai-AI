@@ -47,6 +47,7 @@ class _ScopedSandboxTool:
 
     def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
         self._runner = runner
+        self._notice: str | None = None
 
     @property
     def runner(self) -> DockerSandboxRunner:
@@ -112,7 +113,7 @@ class _ScopedSandboxTool:
         _, secret_env = self.build_env(params)
         if secret_env:
             self.runner.validate_secret_env(profile, secret_env)
-        asyncio.run(self.runner.preflight(profile))
+        self._notice = asyncio.run(self.runner.preflight(profile))
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         profile = get_profile(self.profile_id)
