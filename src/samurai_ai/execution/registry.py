@@ -497,6 +497,15 @@ class SandboxExecTool:
         )
 
 
+def _manifest_tools() -> tuple[Any, ...]:
+    """Tools installed as manifests; code adapters win on an id collision."""
+    from samurai_ai.config import tools_directory
+    from samurai_ai.execution.manifests import ManifestTool
+    from samurai_ai.services.manifests import ManifestStore
+
+    return tuple(ManifestTool(manifest) for manifest in ManifestStore(tools_directory()).load_all())
+
+
 def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
     from samurai_ai.execution.security import (
         DnsxResolveTool,
@@ -520,6 +529,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             DnsxResolveTool(),
             NmapScanTool(),
             FfufFuzzTool(),
+            *_manifest_tools(),
         ),
         dynamic_resolver=dynamic_resolver,
     )

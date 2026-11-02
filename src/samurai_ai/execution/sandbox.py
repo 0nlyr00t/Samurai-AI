@@ -244,13 +244,39 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
 )
 
 
+def installed_profile(manifest_id: str) -> SandboxProfile | None:
+    """The profile of an installed manifest, if one is installed."""
+    from samurai_ai.config import tools_directory
+    from samurai_ai.services.manifests import ManifestStore
+
+    for manifest in ManifestStore(tools_directory()).load_all():
+        if manifest.id == manifest_id:
+            return manifest.profile()
+    return None
+
+
+def all_profiles() -> tuple[SandboxProfile, ...]:
+    """Static profiles plus one per installed manifest.
+
+    Manifests add profiles at runtime, so signing and lookup must see the union
+    — otherwise a manifest tool could never pass the signature check.
+    """
+    from samurai_ai.config import tools_directory
+    from samurai_ai.services.manifests import ManifestStore
+
+    extra = tuple(
+        manifest.profile() for manifest in ManifestStore(tools_directory()).load_all()
+    )
+    return (*SANDBOX_PROFILES, *extra)
+
+
 def get_profile(profile_id: str) -> SandboxProfile:
-    for profile in SANDBOX_PROFILES:
+    for profile in all_profiles():
         if profile.id == profile_id:
             return profile
     raise ToolValidationError(
         f"unknown sandbox profile: {profile_id!r} "
-        f"(available: {', '.join(profile.id for profile in SANDBOX_PROFILES)})"
+        f"(available: {', '.join(profile.id for profile in all_profiles())})"
     )
 
 
@@ -393,7 +419,7 @@ class DockerSandboxRunner:
         signature = self.signature_path.read_text(encoding="utf-8")
         return (
             "signed"
-            if verify_profiles(master_key, SANDBOX_PROFILES, signature)
+            if verify_profiles(master_key, all_profiles(), signature)
             else "invalid"
         )
 
@@ -418,7 +444,7 @@ class DockerSandboxRunner:
         sign_allowlist(self.signature_path, master_key)
         self._record_resign(status)
         return (
-            f"allowlist signature was {status}; re-signed {len(SANDBOX_PROFILES)} "
+            f"allowlist signature was {status}; re-signed {len(all_profiles())} "
             f"profile(s) after a profile change"
         )
 
@@ -585,7 +611,7 @@ class DockerSandboxRunner:
 
 
 def sign_allowlist(signature_path: Path, master_key: bytes) -> str:
-    signature = sign_profiles(master_key, SANDBOX_PROFILES)
+    signature = sign_profiles(master_key, all_profiles())
     signature_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(signature_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -598,6 +624,8 @@ def sign_allowlist(signature_path: Path, master_key: bytes) -> str:
 __all__ = [
     "DOCKER_EXECUTABLE",
     "SANDBOX_PROFILES",
+    "all_profiles",
+    "installed_profile",
     "DockerSandboxRunner",
     "SandboxRunOutcome",
     "get_profile",

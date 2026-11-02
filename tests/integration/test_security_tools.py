@@ -865,3 +865,84 @@ def test_wordlist_resolution_follows_a_frozen_bundle(
     (bundled / FfufFuzzTool.WORDLIST).write_bytes(b"from-bundle\n")
     monkeypatch.setattr(security.sys, "_MEIPASS", str(tmp_path), raising=False)
     assert FfufFuzzTool().build_stdin({}) == b"from-bundle\n"
+
+
+DEMO_MANIFEST = {
+    "id": "scan.demo-manifest",
+    "title": "Demo manifest tool",
+    "image": "busybox@sha256:" + "a" * 64,
+    "executable": "echo",
+    "risk_class": "r2",
+    "network": "none",
+    "params": {
+        "target": {"type": "string", "required": True, "pattern": "^[a-z0-9.-]+$"},
+        "flags": {"type": "array", "items_enum": ["-x", "fast"], "default": ["fast"]},
+    },
+    "targets": {"param": "target", "kind": "host", "max": 1},
+    "argv": ["-n", "{target}", "{flags}"],
+    "parser": "jsonl",
+}
+
+
+def make_manifest_stack(
+    tmp_path: Path, stdout: str, monkeypatch: pytest.MonkeyPatch
+) -> tuple[OperationService, KernelService, ToolExecutionService, FakeManager]:
+    from samurai_ai.domain.tool_manifest import ToolManifest
+    from samurai_ai.execution.manifests import ManifestTool
+
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    database_path = tmp_path / "manifest-run.db"
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = FakeManager(ProcessResult(exit_code=0, stdout=stdout, stderr=""))
+    database = Database(database_path)
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    runner = DockerSandboxRunner(
+        manager, tmp_path / "sandbox-allowlist.sig", lambda: MASTER_KEY
+    )
+    tool = ManifestTool(ToolManifest.model_validate(DEMO_MANIFEST), runner)
+    registry = ToolRegistry(adapters=(tool,))
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), registry=registry
+    )
+    return service, kernel, execution, manager
+
+
+def test_a_manifest_tool_runs_through_the_same_governance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, execution, manager = make_manifest_stack(
+        tmp_path, '{"host": "example.com", "status": 200}\n', monkeypatch
+    )
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "scan.demo-manifest", RiskClass.R2)
+
+    result = execution.run_tool(
+        operation.id,
+        "scan.demo-manifest",
+        {"target": "example.com", "flags": ["fast", "-x"]},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    tool_args = tool_arguments(docker_run_argv(manager))
+    assert tool_args[:3] == ["-n", "example.com", "fast,-x"]
+    assert "host=example.com\tstatus=200" in result.stdout
+
+
+def test_a_manifest_tool_checks_scope_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, execution, manager = make_manifest_stack(
+        tmp_path, "", monkeypatch
+    )
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "scan.demo-manifest", RiskClass.R2)
+    with pytest.raises(ToolScopeError):
+        execution.run_tool(
+            operation.id,
+            "scan.demo-manifest",
+            {"target": "evil-outside.com"},
+            approval_id=approval_id,
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]

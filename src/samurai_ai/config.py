@@ -42,3 +42,8 @@ def vault_key_path() -> Path:
 
 def sandbox_allowlist_path() -> Path:
     return config_directory() / "sandbox-allowlist.sig"
+
+
+def tools_directory() -> Path:
+    """Installed tool manifests (data, reviewed and sha256-pinned)."""
+    return config_directory() / "tools"
