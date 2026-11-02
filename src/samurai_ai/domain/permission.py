@@ -156,3 +156,103 @@ def classify_command(command: str, cwd: str | None = None) -> CommandRisk:
 def classify_argv(argv: tuple[str, ...], cwd: str | None = None) -> CommandRisk:
     """Classify a structured argv (no shell parsing needed)."""
     return classify_command(" ".join(argv), cwd)
+
+
+RULE_ACTIONS = ("allow", "ask", "deny")
+MAX_RULES = 50
+MAX_RULE_PATTERN = 200
+_RULE_TOOL = re.compile(r"(?:\*|[a-z0-9][a-z0-9.-]{0,63})\Z")
+
+
+class PermissionRuleError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class PermissionRule:
+    """One operator rule: an action bound to a tool and a command pattern.
+
+    The pattern is matched against the command text with ``*`` as "anything",
+    so ``git *`` covers ``git push --force`` but not ``gitk``.
+    """
+
+    action: str
+    tool_id: str
+    pattern: str
+
+    def __post_init__(self) -> None:
+        if self.action not in RULE_ACTIONS:
+            raise PermissionRuleError(
+                f"rule action must be one of {', '.join(RULE_ACTIONS)}: {self.action!r}"
+            )
+        if not _RULE_TOOL.fullmatch(self.tool_id):
+            raise PermissionRuleError(f"invalid rule tool id: {self.tool_id!r}")
+        if not self.pattern.strip():
+            raise PermissionRuleError("rule pattern must not be empty")
+        if len(self.pattern) > MAX_RULE_PATTERN:
+            raise PermissionRuleError(
+                f"rule pattern is longer than {MAX_RULE_PATTERN}: {self.pattern!r}"
+            )
+
+    def matches(self, tool_id: str, command: str) -> bool:
+        if self.tool_id not in ("*", tool_id):
+            return False
+        expression = ".*".join(re.escape(part) for part in self.pattern.split("*"))
+        return re.fullmatch(expression, command) is not None
+
+    def format(self) -> str:
+        return f"{self.action} {self.tool_id}: {self.pattern}"
+
+    @classmethod
+    def parse(cls, text: str) -> PermissionRule:
+        action, _, rest = text.strip().partition(" ")
+        tool_id, _, pattern = rest.partition(":")
+        if not action or not tool_id or not pattern.strip():
+            raise PermissionRuleError(
+                f"rule must look like 'allow shell.exec: git *': {text!r}"
+            )
+        return cls(action=action, tool_id=tool_id.strip(), pattern=pattern.strip())
+
+
+@dataclass(frozen=True)
+class Decision:
+    """What the tool boundary should do, and which rule decided it."""
+
+    action: str
+    rule: PermissionRule | None = None
+
+    @property
+    def is_allowed(self) -> bool:
+        return self.action == "allow"
+
+    @property
+    def is_denied(self) -> bool:
+        return self.action == "deny"
+
+
+def decide(
+    rules: tuple[PermissionRule, ...],
+    tool_id: str,
+    command: str,
+    mode: PermissionMode,
+    risk: CommandRisk,
+    *,
+    reusable: bool = False,
+) -> Decision:
+    """Order: deny → ask → allow → risk badge → mode.
+
+    ``deny`` and ``ask`` are operator guards and outrank ``allow``; ``allow``
+    outranks the advisory badge and the mode. Without a matching rule the
+    behaviour is exactly the old one: a badge or the mode decides.
+    """
+    for action in ("deny", "ask", "allow"):
+        for rule in rules:
+            if rule.action == action and rule.matches(tool_id, command):
+                return Decision(action=action, rule=rule)
+    # No rule: the old behaviour, unchanged — a reusable approval keeps quiet
+    # unless the command carries a badge, and only `ask` mode prompts at all.
+    if not mode.prompts_for_tools:
+        return Decision(action="silent")
+    if reusable and risk.empty:
+        return Decision(action="silent")
+    return Decision(action="ask")

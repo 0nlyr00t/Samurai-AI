@@ -130,6 +130,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/traffic", GROUP_PLAYBOOKS, "_handle_traffic_command", operation=True, argument=True),
     _spec("/retest", GROUP_PLAYBOOKS, "_handle_retest_command", operation=True, argument=True),
     _spec("/skills", GROUP_PLAYBOOKS, "_show_skills", argument=True),
+    _spec("/rules", GROUP_VIEW, "_handle_rules_command", argument=True),
     _spec("/playbooks", GROUP_PLAYBOOKS, "_show_custom_playbooks"),
     # view and control
     _spec("/lang", GROUP_VIEW, "_show_lang", argument=True, prompt_key="palette.prompt.locale"),

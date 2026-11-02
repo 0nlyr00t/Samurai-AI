@@ -216,3 +216,63 @@ def test_cli_http_fetch_human_approval_error(tmp_path: Path, capsys, http_server
     captured = capsys.readouterr()
     assert "approval required" in captured.err
     assert "apr_" in captured.err
+
+
+def test_an_allow_rule_approves_without_a_prompt(tmp_path: Path, capsys) -> None:
+    database = str(tmp_path / "rules.db")
+    operation_id = create_operation(database, capsys)
+    assert main(["--db", database, "rules", "add", "allow shell.exec: echo *"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--db",
+                database,
+                "tool",
+                "run",
+                operation_id,
+                "shell.exec",
+                "--param",
+                "command=echo hi-from-rule",
+            ]
+        )
+        == 0
+    )
+    assert "hi-from-rule" in capsys.readouterr().out
+
+    assert main(["--db", database, "--json", "operation", "show", operation_id, "--events"]) == 0
+    events = json.loads(capsys.readouterr().out)["events"]
+    rules = [e for e in events if e["event_type"] == "permission.rule"]
+    assert rules and rules[0]["payload"]["action"] == "allow"
+    decided = [
+        e for e in events if e["event_type"] == "approval.decided" and "rule:" in str(e["payload"])
+    ]
+    assert decided
+
+
+def test_a_deny_rule_stops_before_execution(tmp_path: Path, capsys) -> None:
+    database = str(tmp_path / "deny.db")
+    operation_id = create_operation(database, capsys)
+    assert main(["--db", database, "rules", "add", "deny shell.exec: *rm -rf*"]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--db",
+                database,
+                "tool",
+                "run",
+                operation_id,
+                "shell.exec",
+                "--param",
+                "command=rm -rf /tmp/definitely-missing-dir",
+            ]
+        )
+        == 1
+    )
+    assert "denied by rule" in capsys.readouterr().err
+    assert main(["--db", database, "--json", "operation", "show", operation_id, "--events"]) == 0
+    events = json.loads(capsys.readouterr().out)["events"]
+    assert not [e for e in events if e["event_type"].startswith("tool.run")]

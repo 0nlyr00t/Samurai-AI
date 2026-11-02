@@ -43,6 +43,7 @@ from samurai_ai.domain.lessons import LessonMode
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import (
     PermissionMode,
+    PermissionRuleError,
     next_mode,
     parse_mode,
 )
@@ -2273,6 +2274,31 @@ class SamuraiApp(
             self._write_line(
                 f"[memory] {entry.id} | {entry.workspace} | {entry.kind.value} | {entry.title}"
             )
+
+    def _handle_rules_command(self, argument: str = "") -> None:
+        """`/rules` lists; `/rules add <text>` and `/rules rm <text>` edit."""
+        text = argument.strip()
+        verb, _, rest = text.partition(" ")
+        try:
+            if verb == "add" and rest.strip():
+                rule = self.settings.add_permission_rule(rest.strip())
+                self._write_line(f"[rules] added {rule.format()}")
+                return
+            if verb == "rm" and rest.strip():
+                removed = self.settings.remove_permission_rule(rest.strip())
+                self._write_line(
+                    f"[rules] {'removed' if removed else 'no such rule'} {rest.strip()}"
+                )
+                return
+        except PermissionRuleError as exc:
+            self._write_line(f"[rules] {exc}")
+            return
+        rules = self.settings.permission_rules()
+        if not rules:
+            self._write_line("[rules] no rules")
+            return
+        for rule in rules:
+            self._write_line(f"[rules] {rule.format()}")
 
     def _show_skills(self, argument: str = "") -> None:
         if argument.strip().lower() == "gaps":

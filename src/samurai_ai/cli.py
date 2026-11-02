@@ -26,6 +26,7 @@ from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
 from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
 from samurai_ai.cli_reports import handle_report_command, register_report_commands
+from samurai_ai.cli_rules import handle_rules_command, register_rules_commands
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
@@ -272,6 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_events_commands(subcommands)
     register_headless_commands(subcommands)
     register_eval_commands(subcommands)
+    register_rules_commands(subcommands)
     return parser
 
 
@@ -329,6 +331,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         if team_result is not None:
             return team_result
+        rules_result = handle_rules_command(args, settings_service)
+        if rules_result is not None:
+            return rules_result
         recovery_result = handle_recovery_command(
             args,
             recovery_service,
@@ -340,7 +345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         kernel_result = handle_kernel_command(args, kernel_service)
         if kernel_result is not None:
             return kernel_result
-        execution_result = handle_execution_command(args, execution_service)
+        execution_result = handle_execution_command(args, execution_service, settings_service)
         if execution_result is not None:
             return execution_result
         vault_result = handle_vault_command(args, vault_service)

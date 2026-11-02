@@ -954,8 +954,8 @@ class _ChatProvider:
         )
 
 
-def _chat_stack(tmp_path: Path):  # type: ignore[no-untyped-def]
-    provider = _ChatProvider()
+def _chat_stack(tmp_path: Path, provider=None):  # type: ignore[no-untyped-def]
+    provider = provider or _ChatProvider()
     stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
     settings = stack[2]
     settings.set_locale("en")
@@ -4846,6 +4846,111 @@ def test_no_legacy_hint_even_with_an_old_state_directory(tmp_path: Path, monkeyp
             text = " ".join(line.text for line in app.query_one("#journal", RichLog).lines)
             assert ".samurai" not in text
             assert "--db" not in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+class _ToolCallChatProvider(_ChatProvider):
+    """First answer asks for a shell command, later answers are plain text."""
+
+    def __init__(self, command: str) -> None:
+        super().__init__()
+        self.command = command
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+        self.calls += 1
+        if self.calls == 1:
+            return ChatResponse(
+                text="",
+                tool_calls=(
+                    ToolCall(
+                        id="call_1", name="shell_exec", arguments={"command": self.command}
+                    ),
+                ),
+                usage=Usage(prompt_tokens=3, completion_tokens=2),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=5,
+            )
+        return ChatResponse(
+            text="done",
+            usage=Usage(prompt_tokens=3, completion_tokens=2),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def test_a_deny_rule_blocks_a_chat_tool_call(tmp_path: Path) -> None:
+    stack, provider, operation = _chat_stack(tmp_path, _ToolCallChatProvider("rm temp"))
+    stack[2].set_locale("en")
+    stack[2].add_permission_rule("deny shell.exec: *rm*")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import AccessPromptScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "rm temp"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                # no prompt at all; the refusal goes back to the model instead
+                assert not isinstance(app.screen, AccessPromptScreen)
+                assert any("denied" in m.plain for m in messages if isinstance(m, Text))
+                assert provider.calls == 2
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_the_rules_command_lists_and_edits(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            command_input = app.query_one("#command-input", Input)
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                command_input.value = "/rules"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert any("no rules" in _message_text(m) for m in messages)
+
+                command_input.value = "/rules add allow shell.exec: git *"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert [r.format() for r in stack[2].permission_rules()] == [
+                    "allow shell.exec: git *"
+                ]
+
+                command_input.value = "/rules"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert any("git *" in _message_text(m) for m in messages)
+
+                command_input.value = "/rules rm allow shell.exec: git *"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert stack[2].permission_rules() == ()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
