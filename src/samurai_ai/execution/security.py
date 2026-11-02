@@ -1,4 +1,4 @@
-"""Governed adapters for external security tools (threat-review wave 1).
+"""Governed adapters for external security tools (threat-review waves 1-2).
 
 Each adapter wraps a scoped-sandbox profile with a fixed argv template:
 the model picks values from validated parameters, the adapter builds the
@@ -6,6 +6,10 @@ command line itself. Targets are scope-checked before the container spawns;
 network egress goes only through the scoped, token-authenticated egress
 proxy; tool stdout is parsed into a bounded structured summary while the
 raw output stays in the artifact.
+
+Secrets never enter argv: provider keys are passed as env names and the
+value comes from the docker client environment (see
+md/threat-review-security-tools.md 2.7).
 
 See md/threat-review-security-tools.md for the decision record.
 """
@@ -63,6 +67,12 @@ class _ScopedSandboxTool:
     def build_args(self, params: dict[str, Any]) -> list[str]:
         raise NotImplementedError
 
+    def build_env(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Plain env (value in argv) and secret env (name in argv only)."""
+        return {}, {}
+
     def summarize(self, stdout: str) -> list[str]:
         raise NotImplementedError
 
@@ -94,14 +104,26 @@ class _ScopedSandboxTool:
         profile = get_profile(self.profile_id)
         args = self.build_args(params)
         self.runner.validate_invocation(profile, self.executable, args)
+        _, secret_env = self.build_env(params)
+        if secret_env:
+            self.runner.validate_secret_env(profile, secret_env)
         asyncio.run(self.runner.preflight(profile))
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         profile = get_profile(self.profile_id)
         targets = self._validated_targets(params, scope)
         args = self.build_args({**params, "targets": targets})
+        env, secret_env = self.build_env(params)
         run_id = uuid4().hex[:12]
-        outcome = self.runner.run(profile, run_id, self.executable, args, scope)
+        outcome = self.runner.run(
+            profile,
+            run_id,
+            self.executable,
+            args,
+            scope,
+            env=env,
+            secret_env=secret_env,
+        )
         result = outcome.result
         summary_lines = self.summarize(result.stdout)
         stdout = ""
@@ -126,7 +148,10 @@ class _ScopedSandboxTool:
             stderr=stderr,
             exit_code=result.exit_code if result.exit_code is not None else -1,
             timed_out=result.timed_out,
-            secrets=(outcome.proxy_token,) if outcome.proxy_token else (),
+            secrets=(
+                *((outcome.proxy_token,) if outcome.proxy_token else ()),
+                *secret_env.values(),
+            ),
             egress_events=outcome.egress_events,
         )
 
@@ -339,4 +364,211 @@ class NucleiScanTool(_ScopedSandboxTool):
         return lines
 
 
-__all__ = ["HttpxProbeTool", "NucleiScanTool"]
+class SubfinderPassiveTool(_ScopedSandboxTool):
+    """Passive subdomain enumeration; provider keys travel as env names only.
+
+    The API-key channel is decided in md/threat-review-security-tools.md 2.7:
+    a key never enters argv, only the declared variable name does, and the
+    value comes from the vault through a ``{{secret:name}}`` parameter.
+    """
+
+    profile_id = "sandbox.subfinder@v1"
+    executable = "subfinder"
+    max_targets = 1
+
+    # Sources that answer without a provider key (subfinder NoKey/OptionalKey).
+    _KEYLESS = (
+        "crtsh",
+        "anubis",
+        "waybackarchive",
+        "commoncrawl",
+        "sitedossier",
+        "threatcrowd",
+        "rapiddns",
+        "hackertarget",
+        "subdomaincenter",
+    )
+    # Sources that only answer with a key; subfinder reads "{SOURCE}_API_KEY".
+    _KEYED = (
+        "shodan",
+        "virustotal",
+        "securitytrails",
+        "github",
+        "censys",
+        "urlscan",
+        "chaos",
+        "c99",
+        "certspotter",
+        "dnsdumpster",
+        "quake",
+        "intelx",
+        "digitalyama",
+        "fofa",
+        "zoomeyeapi",
+        "windvane",
+    )
+    _ALL_SOURCES = (*_KEYLESS, *_KEYED)
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="recon.subfinder-passive",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Passive subdomain enumeration for an in-scope domain "
+            "through free sources; provider keys are vault secrets passed by "
+            "env name only",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=300,
+            output_limit_bytes=262144,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "minLength": 1},
+                    "sources": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": list(self._ALL_SOURCES),
+                        },
+                        "maxItems": len(self._ALL_SOURCES),
+                    },
+                    "keys": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "timeout_seconds": {"type": "integer", "default": 30},
+                },
+                "required": ["domain"],
+                "additionalProperties": False,
+            },
+            capabilities=("recon", "subdomain-enumeration"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_targets(
+        self, params: dict[str, Any], scope: ScopeContract
+    ) -> list[str]:
+        domain = str(params["domain"])
+        if not _NO_COMMA_OR_SPACE.fullmatch(domain) or domain.startswith("-"):
+            raise ToolValidationError(
+                f"{self.definition.id}: domain must be a bare name without "
+                f"spaces, commas or a leading dash: {domain!r}"
+            )
+        decision = scope.evaluate(domain)
+        if not decision.allowed:
+            raise ToolScopeError(
+                f"{self.definition.id}: domain {domain!r} is out of scope: "
+                f"{decision.detail}"
+            )
+        return [domain]
+
+    def _validated_keys(self, params: dict[str, Any]) -> dict[str, str]:
+        raw_keys = params.get("keys") or {}
+        if not isinstance(raw_keys, dict):
+            raise ToolValidationError(f"{self.definition.id}: keys must be an object")
+        keys: dict[str, str] = {}
+        for source, reference in raw_keys.items():
+            source = str(source)
+            if source in self._KEYLESS:
+                raise ToolValidationError(
+                    f"{self.definition.id}: source {source!r} needs no key"
+                )
+            if source not in self._KEYED:
+                raise ToolValidationError(
+                    f"{self.definition.id}: unknown keyed source {source!r}"
+                )
+            value = str(reference)
+            if not value:
+                raise ToolValidationError(
+                    f"{self.definition.id}: key for {source!r} is empty"
+                )
+            if "\n" in value or "\r" in value:
+                raise ToolValidationError(
+                    f"{self.definition.id}: key for {source!r} must be a single line"
+                )
+            keys[source] = value
+        return keys
+
+    def _validated_sources(self, params: dict[str, Any]) -> list[str]:
+        keys = self._validated_keys(params)
+        requested = [str(source) for source in params.get("sources") or ()]
+        unknown = [source for source in requested if source not in self._ALL_SOURCES]
+        if unknown:
+            raise ToolValidationError(
+                f"{self.definition.id}: unknown sources {', '.join(unknown)}"
+            )
+        sources = list(dict.fromkeys([*(requested or self._KEYLESS), *keys]))
+        missing = [
+            source for source in sources if source in self._KEYED and source not in keys
+        ]
+        if missing:
+            raise ToolValidationError(
+                f"{self.definition.id}: sources need a key in 'keys': "
+                f"{', '.join(missing)}"
+            )
+        return sources
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        targets = params.get("targets") or [params["domain"]]
+        timeout = int(params.get("timeout_seconds", 30))
+        if not 1 <= timeout <= 60:
+            raise ToolValidationError(
+                f"{self.definition.id}: timeout_seconds must be 1..60, got {timeout}"
+            )
+        sources = self._validated_sources(params)
+        return [
+            "-silent",
+            "-json",
+            "-nc",
+            "-disable-update-check",
+            "-t",
+            "10",
+            "-timeout",
+            str(timeout),
+            "-d",
+            str(targets[0]),
+            "-s",
+            ",".join(sources),
+        ]
+
+    def build_env(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        keys = self._validated_keys(params)
+        # HOME on the tmpfs: subfinder creates its provider config file and the
+        # rootfs is read-only. Values here carry no secrets.
+        env = {"HOME": "/tmp", "TMPDIR": "/tmp"}
+        secret_env = {
+            f"{source.upper()}_API_KEY": value for source, value in keys.items()
+        }
+        return env, secret_env
+
+    def summarize(self, stdout: str) -> list[str]:
+        lines: list[str] = []
+        for raw_line in stdout.splitlines():
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                record = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            host = record.get("host") or record.get("input")
+            if not host:
+                continue
+            source = str(record.get("source", "?"))[:24]
+            lines.append(f"{host}\t[{source}]")
+            if len(lines) >= _SUMMARY_LIMIT:
+                break
+        return lines
+
+
+__all__ = ["HttpxProbeTool", "NucleiScanTool", "SubfinderPassiveTool"]

@@ -73,6 +73,38 @@ def test_sandbox_exec_runs_in_docker(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result.stdout.strip() == "hello from sandbox"
 
 
+def test_secret_env_reaches_the_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    profile = get_profile("sandbox.scoped@v1")
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: load_master_key(vault_key_path()),
+    )
+    if not asyncio.run(runner.docker_available()):
+        pytest.skip("docker daemon is not available")
+    if not asyncio.run(runner.image_present(profile.image)):
+        pytest.skip(f"sandbox image not pulled: {profile.image}")
+    sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+
+    secret = "s3cr3t-channel-value"
+    outcome = runner.run(
+        profile,
+        "run_env_test",
+        "cat",
+        ["/proc/self/environ"],
+        ScopeContract(includes=("example.com",)),
+        env={"HOME": "/tmp"},
+        secret_env={"SAMURAI_TEST_SECRET": secret},
+    )
+    environment = outcome.result.stdout.split("\x00")
+    assert f"SAMURAI_TEST_SECRET={secret}" in environment
+    assert "HOME=/tmp" in environment
+
+
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         body = b"scoped-docker-ok"

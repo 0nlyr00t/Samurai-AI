@@ -51,9 +51,41 @@ enforcement — только на Linux-harness. Это **блокер для di
   раскрывают интерес к цели третьим сторонам. Допустимо в bug bounty scope,
   фиксируется в журнале операции (кто и когда запрашивал).
 - **API keys**: провайдерские ключи (SecurityTrails, Shodan и т.п.) — только
-  через `{{secret:name}}` placeholders; в argv/процессе plaintext не
-  появляется (env-передача с redaction — отдельный пункт реализации).
+  из vault по имени; значение не появляется ни в argv, ни в журнале. Канал
+  описан в 2.7.
 - **Вывод**: R2, egress через proxy, ключи из vault.
+
+### 2.7 Канал доставки секретов в sandbox (реализован)
+
+Ключ, положенный в argv (`--env K=V`), виден в списке процессов и в
+evidence; ключ, положенный в конфиг-файл, требует bind-mount и второго
+канала с временным файлом 0600. Принят третий путь: имя переменной уходит в
+argv, значение — в окружение клиента `docker`, откуда docker сам забирает его
+по `--env NAME` без `=`.
+
+Правила канала:
+
+1. Значение даёт только vault (`{{secret:name}}` в параметре); плейсхолдер
+   разворачивается на границе исполнения, после approval, и сразу
+   регистрируется в редаторе — попадание в stdout/stderr/артефакт режется.
+2. Имена переменных объявляет профиль (`env_names`, ≤16), а не модель:
+   имя вне списка профиля — отказ, иначе контейнер получает произвольный env.
+3. Имя — `^[A-Z][A-Z0-9_]{0,63}$`, значение непустое, однострочное, ≤8 КиБ.
+4. Обычные (не секретные) переменные, нужные инструменту, идут значением
+   (`--env K=V`) — HOME/TMPDIR на tmpfs.
+5. Сетевые флаги, которым нужен proxy URL, берут URL из профиля
+   (`proxy_flag`), чтобы токен не уезжал в argv параметров.
+6. Passive-инструмент говорит с третьими сторонами, а не с целью: их
+   хосты — список `egress_hosts` в подписанном профиле (точный хост или
+   `*.suffix`). Промах списка даёт обычный `denied-scope` в аудите, так что
+   дрейф виден, а не молча проходит.
+7. Образы projectdiscovery объявляют свой entrypoint, поэтому исполняемый
+   файл едет на `--entrypoint`: иначе имя дублировалось и инструмент падал
+   с «no input list provided».
+
+Остаточный риск: окружение процесса `docker` читается тем же пользователем
+(`ps e`), а на Docker Desktop for Mac scoped sandbox остаётся soft
+enforcement. Оба ограничения уже зафиксированы выше и не новы для канала.
 
 ### 2.3 argv/flag injection
 
@@ -99,7 +131,7 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 |---|---|---|---|---|
 | httpx (probe) | **реализован** (`recon.httpx-probe`) | R2 | scoped egress | target через scope.evaluate; флаги из enum; JSON output; rate cap |
 | dnsx | dedicated adapter | R2 | scoped egress | как у httpx; resolver pinned через proxy |
-| subfinder | defer (волна 2) | — | — | DNS-over-UDP не проходит через CONNECT-proxy; passive API-источники работают, но нужен env-secret канал для API keys |
+| subfinder | **реализован** (`recon.subfinder-passive`) | R2 | scoped egress | domain через scope.evaluate; закрытый enum источников; ключи только по имени через env-канал; `-proxy` из профиля; JSON output; без `-all` |
 | amass | defer | — | — | перекрывается subfinder; вернуться при необходимости |
 | nmap | defer (блокер) | — | — | raw TCP/SYN сканер архитектурно несовместим с HTTP CONNECT egress proxy; ждёт TCP-level enforcement (Linux internal network harness) |
 | naabu | defer | — | — | перекрывается nmap profile; SYN-scan требует raw sockets — отдельный разговор про capabilities контейнера |
@@ -128,15 +160,26 @@ vault placeholders.
 - output: NDJSON → структура (host, status, title, tech[]); raw в артефакт
   (≤256KB).
 
-### `recon.subfinder_passive` v1 (R2, scoped egress) — волна 2 (ждёт env-secret канал)
+### `recon.subfinder-passive` v1 (R2, scoped egress) — реализован
 
-- params: `domain: string` (scope.check), `sources: array<enum>`
-  (бесплатные без ключей по умолчанию), опционально `key_ref: string` —
-  имя vault-секрета, никогда не значение.
-- шаблон argv: `subfinder -silent -json -all=false [-sources ...]`;
-  ключи через env из vault с redaction.
-- output: список доменов → candidates для asset ledger (через
-  `asset add`, не прямая запись).
+- params: `domain: string` (scope.check), `sources: array<enum>` из
+  безключевых источников (`crtsh`, `anubis`, `waybackarchive`,
+  `commoncrawl`, `sitedossier`, `threatcrowd`, `rapiddns`, `hackertarget`,
+  `subdomaincenter`), `keys: object` — карта источник → `{{secret:name}}`
+  для источников, которым нужен ключ, `timeout_seconds` (≤60).
+- шаблон argv: `subfinder -silent -json -nc -disable-update-check
+  -t 10 -timeout <t> -d <domain> [-s <sources>]`; `-proxy` и env подставляет
+  раннер профиля `sandbox.subfinder@v1`. Ключи уезжают как
+  `{SOURCE}_API_KEY` по каналу 2.7, ключ для источника вне enum — отказ.
+- output: JSONL → список хостов (кандидаты в asset ledger через
+  `asset add`, не прямая запись); raw в артефакт (≤256KB).
+- `egress_hosts` профиля — API-хосты принятых источников, снятые прогоном
+  (crt.sh, anubisdb.com, *.commoncrawl.org, api.shodan.io и т.д.); список
+  часть подписи, расширение = переподпись.
+- источники без ключа работают без `keys`; resolvers по UDP 53 идут мимо
+  proxy — принятое ослабление, а не регрессия.
+- после добавления профиля набор sandbox-профилей меняется: существующие
+  установки переподписывают allowlist (`samurai sandbox sign`).
 
 ### `scan.nmap` v1 (R3) — deferred: raw TCP/SYN несовместим с CONNECT-proxy
 
@@ -171,12 +214,14 @@ vault placeholders.
 3. с обязательной телеметрией без off-флага;
 4. R4-инструменты (эксплуатация, DoS-capable) без привязки к approved ROE
    red-team операции;
-5. требующие прямого сетевого доступа в обход egress proxy.
+5. требующие прямого сетевого доступа в обход egress proxy — кроме
+   резолвинга по UDP 53 (HTTP CONNECT его не переносит); при разрешённом
+   исключении оно фиксируется в матрице и в спецификации адаптера.
 
 ## 6. Открытые вопросы к реализации
 
-- Передача API keys через env внутри sandbox с redaction (текущий механизм
-  placeholders покрывает argv; env — расширить).
+- ~~Передача API keys через env внутри sandbox с redaction~~ — закрыто
+  каналом 2.7.
 - Raw-sockets сканеры (naabu/masscan) — capabilities контейнера, отдельный
   review при появлении потребности.
 - Rate enforcement слоем egress proxy (сейчас throttle зашит в argv;
