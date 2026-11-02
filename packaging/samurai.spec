@@ -5,6 +5,10 @@ from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = collect_all("textual")
 
+# Sandbox wordlists are data files the binary must carry: there is no repo
+# checkout next to a standalone executable.
+datas += [("../assets/wordlists", "assets/wordlists")]
+
 a = Analysis(
     ["../src/samurai_ai/__main__.py"],
     pathex=["../src"],

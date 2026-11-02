@@ -170,6 +170,7 @@ def test_default_registry_contains_stage2_tools() -> None:
         "recon.subfinder-passive",
         "recon.dnsx-resolve",
         "scan.nmap",
+        "fuzz.ffuf",
     }
     assert definitions["local.echo"].risk_class == RiskClass.R0
     assert definitions["process.exec"].risk_class == RiskClass.R1

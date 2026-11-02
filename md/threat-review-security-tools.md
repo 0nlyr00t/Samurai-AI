@@ -153,7 +153,7 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 | amass | defer | — | — | перекрывается subfinder; вернуться при необходимости |
 | nmap | **реализован** (`scan.nmap`) | R2 | direct | `-sT -Pn`, без NET_RAW; порты профилем или регексом; rate зашит; egress не аудируется — это класс direct |
 | naabu | defer | — | — | перекрывается nmap profile; SYN-scan требует raw sockets — отдельный разговор про capabilities контейнера |
-| ffuf | defer | — | — | нет официального контейнерного образа (supply chain не проходит pinned-digest критерий) |
+| ffuf | **реализован** (`fuzz.ffuf`) | R2 | scoped egress | образ `secsi/ffuf` по digest; словник с репозитория через stdin; `-ac` от soft-404; rate зашит |
 | gobuster | defer | — | — | перекрывается ffuf |
 | nuclei | **реализован** (`scan.nuclei`) | R3 | scoped egress | templates из образа; `-disable-update-check` зашит; severity enum; без headless/fuzzing-шаблонов |
 | nikto | defer | — | — | перекрывается nuclei; высокий FP-rate |
@@ -244,12 +244,23 @@ vault placeholders.
 - output: JSONL → findings candidates (через `finding propose` с dedup),
   raw в артефакт.
 
-### `fuzz.ffuf` v1 (R3) — deferred: нет официального образа (supply chain)
+### `fuzz.ffuf` v1 (R2, scoped egress) — реализован
 
-- params: `target` (scope.check, URL с плейсхолдером FUZZ), `wordlist:
-  enum` (bundled: `common`, `raft-small`, `params`), `extensions`,
-  `rate: enum [low, medium]` → зашитые `-rate`/`-t`.
-- output: JSON → список путей; raw в артефакт.
+- params: `url` (scope.check по хосту, обязателен литерал `FUZZ`),
+  `extensions: array<enum [.php,.bak,.js,.txt,.zip]>`.
+- образ: официального нет, взят общинный `secsi/ffuf` по digest индекса;
+  словников в нём нет, а монтирования мы не используем — поэтому словник
+  лежит в репозитории (`assets/wordlists/common.txt`, SecLists `0c618cf`,
+  sha256 сверяется тестом) и едет через stdin (`-w /dev/stdin:FUZZ`).
+- шум гасится штатным статусным матчером и `-ac` (автокалибровка): на
+  soft-404 и SPA-роутерах без неё «находится» всё.
+- шаблон: `ffuf -s -noninteractive -of json -o /dev/stdout -ac -mc <набор>
+  -rate 50 -t 20 -w /dev/stdin:FUZZ -u <url> [-e ...]`; `-x` и HOME подставляет
+  раннер профиля `sandbox.ffuf@v1`.
+- output: JSON `results[]` → `url status size words` (≤100); пусто —
+  `no matches`; raw JSON в артефакт.
+- ограничение: словник ≤64 КиБ (кап stdin), поэтому только `common`;
+  `raft-small-directories` не влезает.
 
 ## 5. Критерии отказа (действуют и для будущих кандидатов)
 

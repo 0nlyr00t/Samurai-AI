@@ -500,6 +500,7 @@ class SandboxExecTool:
 def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> ToolRegistry:
     from samurai_ai.execution.security import (
         DnsxResolveTool,
+        FfufFuzzTool,
         HttpxProbeTool,
         NmapScanTool,
         NucleiScanTool,
@@ -518,6 +519,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             SubfinderPassiveTool(),
             DnsxResolveTool(),
             NmapScanTool(),
+            FfufFuzzTool(),
         ),
         dynamic_resolver=dynamic_resolver,
     )
