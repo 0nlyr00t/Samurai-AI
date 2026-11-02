@@ -853,3 +853,15 @@ def test_ffuf_wordlist_is_the_pinned_one() -> None:
         "47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a"
     )
     assert len(payload) < 64 * 1024  # must fit the stdin cap
+
+
+def test_wordlist_resolution_follows_a_frozen_bundle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from samurai_ai.execution import security
+
+    bundled = tmp_path / "assets" / "wordlists"
+    bundled.mkdir(parents=True)
+    (bundled / FfufFuzzTool.WORDLIST).write_bytes(b"from-bundle\n")
+    monkeypatch.setattr(security.sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert FfufFuzzTool().build_stdin({}) == b"from-bundle\n"

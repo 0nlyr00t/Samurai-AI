@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,15 @@ from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 _NO_COMMA_OR_SPACE = re.compile(r"^[^\s,]+$")
 _PORTS = re.compile(r"^\d{1,5}(?:-\d{1,5})?(?:,\d{1,5}(?:-\d{1,5})?)*$")
 _SUMMARY_LIMIT = 100
-_WORDLISTS = Path(__file__).resolve().parents[3] / "assets" / "wordlists"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _wordlist_dir() -> Path:
+    """`assets/wordlists`, also inside a PyInstaller one-file bundle."""
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle is not None:
+        return Path(bundle) / "assets" / "wordlists"
+    return _REPO_ROOT / "assets" / "wordlists"
 _FUZZ_MATCH_CODES = "200-299,301,302,307,401,403,405,500"
 
 
@@ -998,8 +1007,7 @@ class FfufFuzzTool(_ScopedSandboxTool):
         return {"HOME": "/tmp", "TMPDIR": "/tmp"}, {}
 
     def build_stdin(self, params: dict[str, Any]) -> bytes:
-        wordlist = _WORDLISTS / self.WORDLIST
-        return wordlist.read_bytes()
+        return (_wordlist_dir() / self.WORDLIST).read_bytes()
 
     def summarize(self, stdout: str) -> list[str]:
         try:
