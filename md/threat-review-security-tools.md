@@ -90,6 +90,11 @@ argv, значение — в окружение клиента `docker`, отк
 9. Токен в этом случае неизбежно уезжает в argv (`-proxy socks5://samurai:<t>@…`),
    потому что env-пути у инструмента нет; токен регистрируется в редаторе и
    режется в выводе и артефактах.
+10. Инструменты, которые прокси не может провести, живут классом `direct`:
+   контейнер остаётся на bridge NAT, scope проверяется только в адаптере до
+   spawn, egress-аудит у такого запуска отсутствует. Сейчас это nmap; на
+   Docker Desktop Mac мост и так обходим, так что класс честно называет то, что
+   происходит, вместо мнимого enforcement.
 
 Остаточный риск: окружение процесса `docker` читается тем же пользователем
 (`ps e`), а на Docker Desktop for Mac scoped sandbox остаётся soft
@@ -146,7 +151,7 @@ off-флаги зашиты в шаблон. Контрольным рубежо
 | dnsx | **реализован** (`recon.dnsx-resolve`) | R2 | scoped egress (SOCKS5) | resolver закреплён в подписи профиля (`doh:`), имена через stdin, `-rcode noerror,nxdomain`, молчащий резолвер = failed |
 | subfinder | **реализован** (`recon.subfinder-passive`) | R2 | scoped egress | domain через scope.evaluate; закрытый enum источников; ключи только по имени через env-канал; `-proxy` из профиля; JSON output; без `-all` |
 | amass | defer | — | — | перекрывается subfinder; вернуться при необходимости |
-| nmap | defer (блокер) | — | — | raw TCP/SYN сканер архитектурно несовместим с HTTP CONNECT egress proxy; ждёт TCP-level enforcement (Linux internal network harness) |
+| nmap | **реализован** (`scan.nmap`) | R2 | direct | `-sT -Pn`, без NET_RAW; порты профилем или регексом; rate зашит; egress не аудируется — это класс direct |
 | naabu | defer | — | — | перекрывается nmap profile; SYN-scan требует raw sockets — отдельный разговор про capabilities контейнера |
 | ffuf | defer | — | — | нет официального контейнерного образа (supply chain не проходит pinned-digest критерий) |
 | gobuster | defer | — | — | перекрывается ffuf |
@@ -214,12 +219,20 @@ vault placeholders.
 - ограничение: у инструмента нет env-пути для прокси, токен виден в argv;
   UDP ASSOCIATE не поддерживается — только DoH-over-TCP.
 
-### `scan.nmap` v1 (R3) — deferred: raw TCP/SYN несовместим с CONNECT-proxy
+### `scan.nmap` v1 (R2, класс direct) — реализован
 
-- params: `targets` (1..10, scope.check), `profile: enum [fast, standard]`
-  → `-F -T3` / `-sV -T3 --max-rate 300`, `ports: string` (regex
-  `^\d+(-\d+)?(,\d+(-\d+)?)*$`).
-- output: `-oX -` → парсинг портов; raw XML в артефакт.
+- params: `targets` (1..10, scope.check), `profile: enum [fast, standard]` →
+  `-F` / `--top-ports 1000` (взаимоисключимы с `ports`), `ports: string`
+  (regex `^\d+(-\d+)?(,\d+(-\d+)?)*$`, верхняя граница 65535),
+  `service_detection: bool`.
+- шаблон: `nmap -Pn -sT -n --max-rate 300 <порты> -oX - [-sV --version-light]`
+  — connect-скан, чтобы остаться на `--cap-drop ALL` без NET_RAW; `-Pn`
+  всегда, потому что ping тоже требует raw ICMP.
+- output: XML → строки `host:port/proto open service version` (≤100, закрытые
+  порты не печатаются), raw XML в артефакт.
+- почем прокси нет: `nmap --proxies` действует только на `-sV`/NSE и не умеет
+  авторизацию, а фазы ping/port-scan его игнорируют — так что nmap отнесён к
+  классу direct (см. 2.8).
 
 ### `scan.nuclei` v1 (R3, scoped egress, approval обязателен) — реализован
 

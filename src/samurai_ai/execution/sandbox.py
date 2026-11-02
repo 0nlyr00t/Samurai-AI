@@ -206,6 +206,24 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         resolver_url="doh:https://cloudflare-dns.com/dns-query",
         egress_hosts=("cloudflare-dns.com",),
     ),
+    SandboxProfile(
+        id="sandbox.nmap@v1",
+        description="Port scanner (nmap) on plain bridge networking: a direct "
+        "class where only the adapter's scope check stands in front",
+        image=(
+            "instrumentisto/nmap@sha256:"
+            "96f6ed194519b62421a1a1c57809e65a7f94d2aa1c8c25676f247e5e148c0827"
+        ),
+        allowed_executables=("nmap",),
+        cpu_limit="2.0",
+        memory_mb=512,
+        pids_limit=256,
+        timeout_seconds=600,
+        max_output_bytes=524288,
+        # nmap's own --proxies covers only -sV/NSE and takes no credentials, and
+        # port scanning ignores it entirely — so the proxy is left out.
+        network_mode="direct",
+    ),
 )
 
 
@@ -312,8 +330,9 @@ class DockerSandboxRunner:
                 "--env",
                 "NO_PROXY=",
             ]
-        else:
+        elif profile.network_mode == "none":
             argv += ["--network", "none"]
+        # "direct": bridge networking as-is, no proxy of ours in the path.
         for name, value in (env or {}).items():
             argv += ["--env", f"{name}={value}"]
         for name in (secret_env or {}):

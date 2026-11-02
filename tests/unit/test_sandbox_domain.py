@@ -99,7 +99,7 @@ def test_profile_requires_digest_pinned_image() -> None:
 
 def test_profile_network_mode_fail_closed() -> None:
     for bad in ("bridge", "host", "Scoped"):
-        with pytest.raises(ValidationError, match="'none' or 'scoped'"):
+        with pytest.raises(ValidationError, match="'none', 'scoped' or 'direct'"):
             make_profile(network_mode=bad)
     assert make_profile().network_mode == "none"
     assert make_profile(network_mode="scoped").network_mode == "scoped"
@@ -455,3 +455,27 @@ def test_run_uses_the_profile_proxy_scheme(tmp_path: Path) -> None:
     assert docker_run[docker_run.index("-proxy") + 1].startswith(
         "socks5://samurai:"
     )
+
+
+def test_direct_profile_uses_bridge_networking(tmp_path: Path) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = make_profile(network_mode="direct", allowed_executables=("nmap",))
+    argv = runner.build_argv(profile, "run_direct", "nmap", ["-sT", "example.com"])
+    assert "--network" not in argv
+    assert not any(part.startswith(("HTTP_PROXY=", "https_proxy=")) for part in argv)
+    assert argv[-5:] == [
+        "--entrypoint",
+        "nmap",
+        profile.image,
+        "-sT",
+        "example.com",
+    ]
+
+
+def test_direct_profile_runs_without_scope(tmp_path: Path) -> None:
+    sign_default(tmp_path)
+    runner, fake = make_runner(tmp_path)
+    profile = make_profile(network_mode="direct", allowed_executables=("nmap",))
+    outcome = runner.run(profile, "run_direct2", "nmap", ["-sT"])
+    assert outcome.result.stdout == "hello"
+    assert outcome.proxy_token is None

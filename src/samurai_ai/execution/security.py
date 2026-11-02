@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import xml.etree.ElementTree as ElementTree
 from typing import Any
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ from samurai_ai.execution.registry import ToolOutput
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 
 _NO_COMMA_OR_SPACE = re.compile(r"^[^\s,]+$")
+_PORTS = re.compile(r"^\d{1,5}(?:-\d{1,5})?(?:,\d{1,5}(?:-\d{1,5})?)*$")
 _SUMMARY_LIMIT = 100
 
 
@@ -744,9 +746,145 @@ class DnsxResolveTool(_ScopedSandboxTool):
         return output
 
 
+class NmapScanTool(_ScopedSandboxTool):
+    """Port scan on a direct-class profile: the adapter is the only gate.
+
+    `-sT` keeps the sandbox at `--cap-drop ALL` (no raw sockets) and `-Pn`
+    always, because ping discovery needs raw ICMP too. nmap's own `--proxies`
+    covers only version detection and takes no credentials, so the proxy is not
+    in the path at all — the egress journal has no entry for this class.
+    """
+
+    profile_id = "sandbox.nmap@v1"
+    executable = "nmap"
+    max_targets = 10
+
+    _PROFILE_FLAGS = {"fast": ["-F"], "standard": ["--top-ports", "1000"]}
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="scan.nmap",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Scan in-scope hosts for open TCP ports (connect scan, "
+            "no ping, rate capped)",
+            risk_class=RiskClass.R2,
+            read_only=True,
+            network=NetworkAccess.DIRECT,
+            timeout_seconds=600,
+            output_limit_bytes=524288,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "targets": _targets_schema(self.max_targets),
+                    "profile": {
+                        "type": "string",
+                        "enum": list(self._PROFILE_FLAGS),
+                    },
+                    "ports": {"type": "string", "minLength": 1},
+                    "service_detection": {"type": "boolean", "default": False},
+                },
+                "required": ["targets"],
+                "additionalProperties": False,
+            },
+            capabilities=("scan", "port-scan"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def _validated_ports(self, params: dict[str, Any]) -> list[str] | None:
+        ports = params.get("ports")
+        profile = params.get("profile")
+        if ports is not None and profile is not None:
+            raise ToolValidationError(
+                f"{self.definition.id}: use either 'profile' or 'ports', not both"
+            )
+        if ports is None and profile is None:
+            return None
+        if ports is not None:
+            value = str(ports)
+            if not _PORTS.fullmatch(value):
+                raise ToolValidationError(
+                    f"{self.definition.id}: ports must look like 80,443,8000-8100: "
+                    f"{value!r}"
+                )
+            for part in value.split(","):
+                high = int(part.split("-")[-1])
+                if high > 65535:
+                    raise ToolValidationError(
+                        f"{self.definition.id}: port {high} is above 65535"
+                    )
+            return ["-p", value]
+        flags = self._PROFILE_FLAGS.get(str(profile))
+        if flags is None:
+            raise ToolValidationError(
+                f"{self.definition.id}: unknown profile {profile!r}"
+            )
+        return list(flags)
+
+    def build_args(self, params: dict[str, Any]) -> list[str]:
+        port_flags = self._validated_ports(params)
+        if port_flags is None:
+            port_flags = list(self._PROFILE_FLAGS["fast"])
+        args = [
+            "-Pn",
+            "-sT",
+            "-n",
+            "--max-rate",
+            "300",
+            *port_flags,
+            "-oX",
+            "-",
+        ]
+        if params.get("service_detection"):
+            args += ["-sV", "--version-light"]
+        args += [str(target) for target in params["targets"]]
+        return args
+
+    def summarize(self, stdout: str) -> list[str]:
+        try:
+            root = ElementTree.fromstring(stdout)
+        except ElementTree.ParseError:
+            return []
+        lines: list[str] = []
+        for host in root.iter("host"):
+            address = host.find("address")
+            if address is None:
+                continue
+            name = address.get("addr", "?")
+            for port in host.iter("port"):
+                state = port.find("state")
+                if state is None or state.get("state") != "open":
+                    continue
+                service = port.find("service")
+                service_text = ""
+                if service is not None:
+                    label = service.get("name", "")
+                    version = " ".join(
+                        part
+                        for part in (
+                            service.get("product", ""),
+                            service.get("version", ""),
+                        )
+                        if part
+                    )
+                    service_text = f" {label}{(' ' + version) if version else ''}"
+                lines.append(
+                    f"{name}:{port.get('portid', '?')}/{port.get('protocol', 'tcp')}"
+                    f" open{service_text}"
+                )
+                if len(lines) >= _SUMMARY_LIMIT:
+                    return lines
+        return lines or ["no open ports"]
+
+
 __all__ = [
     "DnsxResolveTool",
     "HttpxProbeTool",
+    "NmapScanTool",
     "NucleiScanTool",
     "SubfinderPassiveTool",
 ]

@@ -164,10 +164,13 @@ class ToolRegistry:
             raise ToolValidationError(
                 f"r0 tool {definition.id} must be declared read-only"
             )
-        if definition.kind == ToolKind.SANDBOX and definition.network is NetworkAccess.DIRECT:
-            raise ToolValidationError(
-                f"sandbox tool {definition.id} reaches the network only via the proxy"
-            )
+        if (
+            definition.kind == ToolKind.SANDBOX
+            and definition.network is NetworkAccess.DIRECT
+        ):
+            # direct-class profiles run on bridge networking: nothing enforces
+            # egress but the adapter's own scope check.
+            pass
 
 
 def _validate_value(tool_id: str, name: str, value: Any, spec: Any) -> Any:
@@ -498,6 +501,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
     from samurai_ai.execution.security import (
         DnsxResolveTool,
         HttpxProbeTool,
+        NmapScanTool,
         NucleiScanTool,
         SubfinderPassiveTool,
     )
@@ -513,6 +517,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             NucleiScanTool(),
             SubfinderPassiveTool(),
             DnsxResolveTool(),
+            NmapScanTool(),
         ),
         dynamic_resolver=dynamic_resolver,
     )

@@ -20,6 +20,7 @@ from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
 from samurai_ai.execution.security import (
     DnsxResolveTool,
     HttpxProbeTool,
+    NmapScanTool,
     NucleiScanTool,
     SubfinderPassiveTool,
 )
@@ -591,3 +592,147 @@ def test_re_signing_is_announced_in_the_run_output(tmp_path: Path) -> None:
     assert result.stderr.startswith("[allowlist] ")
     assert "re-signed" in result.stderr
     assert (tmp_path / "sandbox-allowlist.sig").exists()
+
+
+NMAP_XML = """<?xml version="1.0"?>
+<nmaprun scanner="nmap">
+  <host><status state="up"/>
+    <address addr="93.184.216.34" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port>
+      <port protocol="tcp" portid="443"><state state="open"/>
+        <service name="https" product="nginx" version="1.25.3"/></port>
+      <port protocol="tcp" portid="8080"><state state="closed"/><service name="http-proxy"/></port>
+    </ports>
+  </host>
+</nmaprun>
+"""
+
+
+def make_nmap_stack(
+    tmp_path: Path, stdout: str, exit_code: int = 0
+) -> tuple[OperationService, KernelService, ToolExecutionService, FakeManager]:
+    database_path = tmp_path / "nmap.db"
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = FakeManager(ProcessResult(exit_code=exit_code, stdout=stdout, stderr=""))
+    database = Database(database_path)
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    runner = DockerSandboxRunner(
+        manager, tmp_path / "sandbox-allowlist.sig", lambda: MASTER_KEY
+    )
+    registry = ToolRegistry(adapters=(NmapScanTool(runner),))
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), registry=registry
+    )
+    return service, kernel, execution, manager
+
+
+def test_nmap_scan_is_a_connect_scan_without_ping(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_nmap_stack(tmp_path, NMAP_XML)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "scan.nmap", RiskClass.R2)
+
+    result = execution.run_tool(
+        operation.id,
+        "scan.nmap",
+        {"targets": ["example.com"], "ports": "80,443,8080"},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+
+    tool_args = tool_arguments(docker_run_argv(manager))
+    assert "-sT" in tool_args and "-Pn" in tool_args
+    assert tool_args[tool_args.index("-p") + 1] == "80,443,8080"
+    assert tool_args[tool_args.index("--max-rate") + 1] == "300"
+    assert tool_args[tool_args.index("-oX") + 1] == "-"
+    # no proxy in the path for a direct-class profile
+    assert "-proxy" not in tool_args
+
+    assert "93.184.216.34:80/tcp open http" in result.stdout
+    assert "93.184.216.34:443/tcp open https nginx 1.25.3" in result.stdout
+    summary = result.stdout.split("# raw")[0]
+    assert "8080" not in summary  # closed ports stay out of the summary
+
+
+def test_nmap_ports_and_profile_are_mutually_exclusive(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_nmap_stack(tmp_path, NMAP_XML)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "scan.nmap", RiskClass.R2)
+
+    with pytest.raises(ToolValidationError, match="either 'profile' or 'ports'"):
+        execution.run_tool(
+            operation.id,
+            "scan.nmap",
+            {"targets": ["example.com"], "profile": "fast", "ports": "443"},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError, match="ports must look like"):
+        execution.run_tool(
+            operation.id,
+            "scan.nmap",
+            {"targets": ["example.com"], "ports": "80,abc"},
+            approval_id=approval_id,
+        )
+    with pytest.raises(ToolValidationError, match="above 65535"):
+        execution.run_tool(
+            operation.id,
+            "scan.nmap",
+            {"targets": ["example.com"], "ports": "70000"},
+            approval_id=approval_id,
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+    # a profile on its own is fine and maps to a fixed flag set
+    execution.run_tool(
+        operation.id,
+        "scan.nmap",
+        {"targets": ["example.com"], "profile": "standard"},
+        approval_id=approval_id,
+    )
+    tool_args = tool_arguments(docker_run_argv(manager))
+    assert tool_args[tool_args.index("--top-ports") + 1] == "1000"
+
+
+def test_nmap_scope_checked_before_spawn(tmp_path: Path) -> None:
+    service, kernel, execution, manager = make_nmap_stack(tmp_path, NMAP_XML)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "scan.nmap", RiskClass.R2)
+    with pytest.raises(ToolScopeError):
+        execution.run_tool(
+            operation.id,
+            "scan.nmap",
+            {"targets": ["evil-outside.com"]},
+            approval_id=approval_id,
+        )
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_nmap_reports_no_open_ports_and_service_detection(tmp_path: Path) -> None:
+    empty = '<?xml version="1.0"?><nmaprun><host><ports/></host></nmaprun>'
+    service, kernel, execution, manager = make_nmap_stack(tmp_path, empty)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "scan.nmap", RiskClass.R2)
+    result = execution.run_tool(
+        operation.id,
+        "scan.nmap",
+        {"targets": ["example.com"], "service_detection": True},
+        approval_id=approval_id,
+    )
+    assert "no open ports" in result.stdout
+    tool_args = tool_arguments(docker_run_argv(manager))
+    assert "-sV" in tool_args
+
+
+def test_nmap_summary_is_bounded() -> None:
+    ports = "".join(
+        f'<port protocol="tcp" portid="{index}"><state state="open"/>'
+        f'<service name="svc"/></port>'
+        for index in range(400)
+    )
+    xml = (
+        '<?xml version="1.0"?><nmaprun><host><address addr="1.2.3.4"/>'
+        f"<ports>{ports}</ports></host></nmaprun>"
+    )
+    assert len(NmapScanTool().summarize(xml)) == 100
