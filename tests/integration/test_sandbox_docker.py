@@ -15,7 +15,7 @@ from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessManager
 from samurai_ai.execution.registry import SandboxExecTool, ToolRegistry
-from samurai_ai.execution.remote import SshExecTool
+from samurai_ai.execution.remote import SmbListTool, SshExecTool
 from samurai_ai.execution.sandbox import (
     DockerSandboxRunner,
     get_profile,
@@ -517,3 +517,82 @@ async def _image_present(image: str) -> bool:
         lambda: b"x" * 32,
     )
     return await runner.image_present(image)
+
+
+SMB_IMAGE = (
+    "dperson/samba@sha256:"
+    "66088b78a19810dd1457a8f39340e95e663c728083efa5fe7dc0d40b2478e869"
+)
+
+
+def test_smb_list_reaches_a_real_samba(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SMB rides the tunnel too: list shares of a real Samba server."""
+    if shutil.which("docker") is None:
+        pytest.skip("docker is not installed")
+    if asyncio.run(_docker_available()) is False:
+        pytest.skip("docker daemon is not available")
+    if asyncio.run(_image_present(SMB_IMAGE)) is False:
+        pytest.skip(f"target image not pulled: {SMB_IMAGE}")
+
+    port = _free_port()
+    name = f"samurai-smb-{port}"
+    subprocess.run(
+        [
+            "docker", "run", "-d", "--rm", "--name", name,
+            "-p", f"{port}:445", SMB_IMAGE,
+            "-p", "-s", "share;/mnt;yes;no;no;all", "-u", "ops;ops123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    try:
+        assert _wait_for_port(port)
+        monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+        sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+        database = Database(tmp_path / "smb.db")
+        service = OperationService(OperationRepository(database))
+        kernel = KernelService(service, KernelRepository(database))
+        recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+        runner = DockerSandboxRunner(
+            ProcessManager(allowed_executables=frozenset({"docker"})),
+            sandbox_allowlist_path(),
+            lambda: load_master_key(vault_key_path()),
+        )
+        execution = ToolExecutionService(
+            service,
+            kernel,
+            recovery,
+            ToolRunRepository(database),
+            registry=ToolRegistry(adapters=(SmbListTool(runner),)),
+        )
+        operation = service.create(
+            "smb lab", OperationMode.RED_TEAM, ScopeContract(includes=("127.0.0.1",))
+        )
+        params = {"host": "127.0.0.1", "port": port}
+        with pytest.raises(ApprovalRequiredError) as caught:
+            execution.run_tool(operation.id, "remote.smb-list", params)
+        kernel.approve(caught.value.approval_id, decided_by="operator")
+        result = execution.run_tool(
+            operation.id, "remote.smb-list", params, approval_id=caught.value.approval_id
+        )
+        assert result.run.status is ToolRunStatus.COMPLETED, result.stderr[-300:]
+        assert "share" in result.stdout
+        assert "allowed" in result.stderr
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+
+def _wait_for_port(port: int, timeout: float = 30.0) -> bool:
+    import socket
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False

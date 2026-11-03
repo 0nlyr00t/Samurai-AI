@@ -56,6 +56,8 @@ def listener() -> Iterator[int]:
 class FakeManager:
     """Behaves like docker: preflight succeeds, the run returns canned output."""
 
+    stall_seconds: float = 120.0
+
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
 

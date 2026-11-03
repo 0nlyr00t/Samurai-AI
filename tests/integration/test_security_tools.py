@@ -53,6 +53,8 @@ NUCLEI_JSONL = (
 
 
 class FakeManager:
+    stall_seconds: float = 120.0
+
     def __init__(self, run_result: ProcessResult) -> None:
         self.run_result = run_result
         self.calls: list[tuple[str, ...]] = []

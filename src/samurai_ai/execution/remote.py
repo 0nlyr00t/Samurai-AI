@@ -226,8 +226,12 @@ class SmbListTool(_RemoteTool):
 
 _SMB_DRIVER = r"""
 import subprocess, sys
-argv = ["smbclient", "-N", "-g", "--option=client min protocol=SMB2"]
-argv.append("//" + sys.argv[1].rsplit(":", 1)[0] + "/")
+action, endpoint = sys.argv[1], sys.argv[2]
+host, port = endpoint.rsplit(":", 1)
+argv = [
+    "smbclient", "-N", "-g", "-p", port,
+    "--option=client min protocol=SMB2", action, "//" + host + "/",
+]
 raise SystemExit(subprocess.call(argv))
 """
 

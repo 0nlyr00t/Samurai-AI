@@ -75,6 +75,8 @@ DEFAULT_MAX_DEPTH = 1
 MAX_CONSECUTIVE_REJECTS = 3
 #: the same command repeated this often in one run earns a model note
 REPEAT_THRESHOLD = 3
+#: a run cannot outlive this, whatever the steps do (overridable per call)
+DEFAULT_MAX_WALL_SECONDS = 900.0
 _MAX_BLACKBOARD_ITEMS = 20
 _CLOSE_OUT_ATTEMPTS = 2
 _CLOSE_OUT_STEP = (
@@ -185,7 +187,7 @@ class AgentOrchestrator:
         candidates: list[str],
         *,
         max_steps: int = DEFAULT_MAX_STEPS,
-        max_wall_seconds: float | None = None,
+        max_wall_seconds: float | None = DEFAULT_MAX_WALL_SECONDS,
         parent_run_id: str | None = None,
         max_depth: int = DEFAULT_MAX_DEPTH,
         approval_id: str | None = None,
@@ -417,7 +419,7 @@ class AgentOrchestrator:
         read_only_only: bool = False,
         approval_resolver: Callable[[str], bool] | None = None,
         model_approvals: dict[str, str] | None = None,
-        max_wall_seconds: float | None = None,
+        max_wall_seconds: float | None = DEFAULT_MAX_WALL_SECONDS,
     ) -> None:
         consecutive_rejects = 0
         deadline_at = (

@@ -36,6 +36,8 @@ def make_profile(**overrides: object) -> SandboxProfile:
 
 
 class FakeManager:
+    stall_seconds: float = 120.0
+
     def __init__(self, results: dict[tuple[str, ...], ProcessResult] | None = None) -> None:
         self.results = results or {}
         self.calls: list[tuple[str, ...]] = []
@@ -479,3 +481,23 @@ def test_direct_profile_runs_without_scope(tmp_path: Path) -> None:
     outcome = runner.run(profile, "run_direct2", "nmap", ["-sT"])
     assert outcome.result.stdout == "hello"
     assert outcome.proxy_token is None
+
+
+def test_the_stall_watchdog_follows_the_profile(tmp_path: Path) -> None:
+    runner, fake = make_runner(tmp_path)
+    sign_default(tmp_path)
+    profile = make_profile(network_mode="direct", allowed_executables=("echo",), stall_seconds=600)
+    runner.run(profile, "run_stall", "echo", ["hi"])
+    # restored after the run, so a following tool is not left on 600s
+    assert fake.stall_seconds == 120.0
+    seen = []
+    original = fake.run
+
+    async def spy(argv, timeout_seconds=None, *, env=None):  # type: ignore[no-untyped-def]
+        seen.append(fake.stall_seconds)
+        return await original(argv, timeout_seconds, env=env)
+
+    fake.run = spy  # type: ignore[method-assign]
+    runner.run(profile, "run_stall2", "echo", ["hi"])
+    # the preflight probes run first; the actual run is the last value and 600
+    assert seen[-1] == 600.0

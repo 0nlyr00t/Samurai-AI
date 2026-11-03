@@ -737,3 +737,26 @@ def test_active_genes_reach_the_executor_prompt(
     joined = "\n".join(prompts)
     assert "check the robots.txt first" in joined
     assert "a shadow hint" not in joined
+
+
+def test_a_run_gets_a_wall_deadline_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.agents import orchestrator as module
+
+    seen: list[float | None] = []
+    original = orchestrator_run = None
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    original = orchestrator._execute_steps
+
+    def spy(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs.get("max_wall_seconds"))
+        return original(*args, **kwargs)
+
+    orchestrator._execute_steps = spy  # type: ignore[method-assign]
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue('{"steps": ["one"]}', '{"commands": [{"type": "complete_task"}]}')
+    orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    assert seen == [module.DEFAULT_MAX_WALL_SECONDS]
+    _ = orchestrator_run
