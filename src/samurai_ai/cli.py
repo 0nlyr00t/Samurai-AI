@@ -24,6 +24,7 @@ from samurai_ai.cli_memory import handle_memory_command, register_memory_command
 from samurai_ai.cli_models import handle_model_command, register_model_commands
 from samurai_ai.cli_planning import handle_planning_command, register_planning_commands
 from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_commands
+from samurai_ai.cli_policy import handle_policy_command, register_policy_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
 from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
 from samurai_ai.cli_reports import handle_report_command, register_report_commands
@@ -107,6 +108,7 @@ from samurai_ai.services.teamwork import TeamworkService
 from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.access import AccessRepository
+from samurai_ai.storage.access_policy import OperationPolicyRepository
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.ctf import CtfConflictError, CtfRepository
 from samurai_ai.storage.database import Database
@@ -280,6 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_eval_commands(subcommands)
     register_rules_commands(subcommands)
     register_gene_commands(subcommands)
+    register_policy_commands(subcommands)
     return parser
 
 
@@ -312,11 +315,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         access_service,
         team_service,
     ) = _make_services(args.db)
+    operation_policies = OperationPolicyRepository(
+        Database(args.db or default_database_path())
+    )
 
     _ACCESS = access_service
     if args.command not in _OPEN_COMMANDS:
         try:
-            access_service.require(_command_path(args))
+            _path = _command_path(args)
+            access_service.require(
+                _path,
+                access_service.operation_role(
+                    getattr(args, "operation_id", None), _path
+                ),
+            )
         except AccessError as exc:
             print(f"[access] {exc}", file=sys.stderr)
             return 2
@@ -343,6 +355,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         gene_result = handle_gene_command(args)
         if gene_result is not None:
             return gene_result
+        try:
+            policy_result = handle_policy_command(
+                args, operation_policies, operation_service, team_service,
+                access_service.current(),
+            )
+        except AccessError as exc:
+            print(f"[access] {exc}", file=sys.stderr)
+            return 2
+        if policy_result is not None:
+            return policy_result
         recovery_result = handle_recovery_command(
             args,
             recovery_service,
@@ -683,7 +705,12 @@ def _make_services(
     swarm = SwarmService(operations, kernel, agents, SwarmRunRepository(database))
     goals = GoalService(operations, GoalRepository(database))
     exports = IntegrationExportService(operations, kernel, redteam, planning, vault)
-    access = AccessService(settings, vault, AccessRepository(database))
+    access = AccessService(
+        settings,
+        vault,
+        AccessRepository(database),
+        policies=OperationPolicyRepository(database),
+    )
     team = TeamworkService(operations, AccessRepository(database), TeamworkRepository(database))
     return (
         operations,
