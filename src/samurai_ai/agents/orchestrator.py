@@ -36,6 +36,7 @@ from samurai_ai.domain.agents import (
     AgentRun,
     AgentRunNotFoundError,
     AgentRunStatus,
+    AskOperatorCommand,
     CompleteTaskCommand,
     FailCommand,
     NoteCommand,
@@ -68,6 +69,10 @@ from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.questions import (
+    OperatorQuestionError,
+    OperatorQuestionService,
+)
 from samurai_ai.services.skills import SkillService
 from samurai_ai.storage.agents import AgentRunRepository
 
@@ -99,7 +104,11 @@ _EXECUTOR_INSTRUCTION = (
     "bracket placeholder is copied as-is, never resolved. Emit exactly one "
     'JSON object: {"commands": [...]}. Allowed command types: '
     'request_tool_run {"type":"request_tool_run","tool_id":...,"params":{...}}, '
-    'note {"type":"note","key":...,"value":...}, propose_finding '
+    'note {"type":"note","key":...,"value":...}, ask_operator '
+    '{"type":"ask_operator","questions":[{"id":"q1","question":...,"header":...,'
+    '"options":[{"label":...,"description":...,"recommended":true},...]}],'
+    '"timeout":120} — ask the operator and keep working if nobody answers, '
+    'propose_finding '
     '{"type":"propose_finding","title":...,"summary":...,"severity":...,'
     '"artifact_ids":[...]}, complete_task {"type":"complete_task"}, fail '
     '{"type":"fail","reason":...}. No prose.'
@@ -163,6 +172,7 @@ class AgentOrchestrator:
         skills: SkillService | None = None,
         genes: GeneService | None = None,
         impact: ImpactService | None = None,
+        questions: OperatorQuestionService | None = None,
     ) -> None:
         self.models = models
         self.kernel = kernel
@@ -174,6 +184,9 @@ class AgentOrchestrator:
         self.skills = skills
         self.genes = genes
         self.impact = impact
+        self.questions = questions
+        #: set by the host so a surfaced question can reach the operator
+        self.question_notice: Callable[[str], None] | None = None
 
     def get_run(self, run_id: str) -> AgentRun:
         run = self.runs.get(run_id)
@@ -534,6 +547,7 @@ class AgentOrchestrator:
                 command,
                 read_only_only=read_only_only,
                 approval_resolver=approval_resolver,
+                stop_event=stop_event,
             )
             if reason is None:
                 consecutive_rejects = 0
@@ -773,6 +787,7 @@ class AgentOrchestrator:
         *,
         read_only_only: bool = False,
         approval_resolver: Callable[[str], bool] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> str | None:
         """None when the command was applied, the reason when it was rejected."""
         try:
@@ -795,6 +810,8 @@ class AgentOrchestrator:
                 self._command_propose_finding(operation_id, run, command)
             elif isinstance(command, RecordImpactCommand):
                 self._command_record_impact(run, command)
+            elif isinstance(command, AskOperatorCommand):
+                self._command_ask_operator(operation_id, run, command, stop_event)
             elif isinstance(command, CompleteTaskCommand):
                 # re-affirming completion is not a mistake worth a refusal
                 if self._task_done(operation_id, run.task_id):
@@ -818,6 +835,33 @@ class AgentOrchestrator:
             self._reject(operation_id, run, command, str(exc))
             return str(exc)
         return None
+
+    def _command_ask_operator(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        command: AskOperatorCommand,
+        stop_event: threading.Event | None,
+    ) -> None:
+        """Ask the operator; the answer reaches the next step as a note."""
+        if self.questions is None:
+            raise AgentError("operator questions are not wired into this harness")
+        try:
+            outcome = self.questions.ask(
+                operation_id,
+                run.id,
+                command,
+                notify=self.question_notice,
+                stop_event=stop_event,
+            )
+        except OperatorQuestionError as exc:
+            raise AgentError(str(exc)) from exc
+        key = "operator-question" if outcome.pending else "operator-answer"
+        self._append_note(
+            operation_id,
+            run,
+            NoteCommand(type="note", key=f"{key}.{outcome.call_id}", value=outcome.text),
+        )
 
     def _command_record_impact(self, run: AgentRun, command: RecordImpactCommand) -> None:
         """The model escalates impact itself; the ladder decides what counts."""

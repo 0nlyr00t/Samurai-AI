@@ -27,6 +27,7 @@ _COMMAND_TYPES = frozenset(
         "note",
         "propose_finding",
         "record_impact",
+        "ask_operator",
         "complete_task",
         "fail",
     }

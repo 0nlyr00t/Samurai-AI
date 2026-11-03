@@ -93,6 +93,7 @@ from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService, ProgramRulesNotFoundError
+from samurai_ai.services.questions import OperatorQuestionService
 from samurai_ai.services.recovery import (
     PlanNotFoundError,
     RecoveryActionNotFoundError,
@@ -126,6 +127,7 @@ from samurai_ai.storage.models import (
 from samurai_ai.storage.operations import OperationConflictError, OperationRepository
 from samurai_ai.storage.planning import PlanningConflictError, PlanningRepository
 from samurai_ai.storage.playbooks import PlaybookConflictError, PlaybookRepository
+from samurai_ai.storage.questions import QuestionRepository
 from samurai_ai.storage.recovery import RecoveryConflictError, RecoveryRepository
 from samurai_ai.storage.redteam import RedTeamConflictError, RedTeamRepository
 from samurai_ai.storage.reports import ReportRepository
@@ -314,6 +316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         export_service,
         access_service,
         team_service,
+        question_service,
     ) = _make_services(args.db)
     operation_policies = OperationPolicyRepository(
         Database(args.db or default_database_path())
@@ -395,7 +398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if model_result is not None:
             return model_result
         agent_result = handle_agent_command(
-            args, agent_orchestrator, model_service, settings_service
+            args, agent_orchestrator, model_service, settings_service, question_service
         )
         if agent_result is not None:
             return agent_result
@@ -678,6 +681,7 @@ def _make_services(
     IntegrationExportService,
     AccessService,
     TeamworkService,
+    OperatorQuestionService,
 ]:
     database = Database(database_path or default_database_path())
     operation_repository = OperationRepository(database)
@@ -713,6 +717,7 @@ def _make_services(
     skill_service = SkillService(
         SkillRepository(database), vault, SkillGapRepository(database)
     )
+    questions = OperatorQuestionService(operations, QuestionRepository(database))
     agents = AgentOrchestrator(
         models,
         kernel,
@@ -723,6 +728,7 @@ def _make_services(
         skills=skill_service,
         genes=GeneService(GeneStore(genes_path())),
         impact=ImpactService(operations, kernel),
+        questions=questions,
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
     reports = ReportService(
@@ -764,6 +770,7 @@ def _make_services(
         exports,
         access,
         team,
+        questions,
     )
 
 

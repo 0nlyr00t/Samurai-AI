@@ -863,6 +863,24 @@ CREATE TABLE IF NOT EXISTS operation_role_policies (
 );
 """
 
+_MIGRATION_29 = """
+CREATE TABLE IF NOT EXISTS agent_questions (
+    id           TEXT PRIMARY KEY,
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    run_id       TEXT NOT NULL,
+    call_id      TEXT NOT NULL,
+    payload      TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    answer       TEXT NOT NULL DEFAULT '',
+    asked_at     TEXT NOT NULL,
+    answered_at  TEXT NOT NULL DEFAULT '',
+    answered_by  TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS agent_questions_by_operation
+    ON agent_questions (operation_id, status, asked_at);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -892,6 +910,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (26, _MIGRATION_26),
     (27, _MIGRATION_27),
     (28, _MIGRATION_28),
+    (29, _MIGRATION_29),
 )
 
 

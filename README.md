@@ -104,6 +104,7 @@ bare standalone binary). ADB и VBoxManage проверены только mock-
 - `samurai sandbox verify` — сходится ли подпись профилей, без записи.
 - `samurai report generate <op> --min-impact 3` — не выпускать отчёт по находкам ниже порога импакта.
 - `samurai policy set|list|rm <op>` — поднять роль, нужную для команды внутри одной операции (только ужесточение, владелец).
+- `samurai agent questions <op>` / `samurai agent answer <call> --select id=Метка` — открытые вопросы агента и ответы на них (вопрос ждёт ограниченно и не останавливает прогон).
 - Белт разложен на два образа — `remote` (админка) и `exploit` (компилятор и библиотеки); RDP-проба своя, на X.224 и TLS, поэтому freerdp и Xvfb в образах нет; оба публикуются из CI (`ghcr.io/<owner>/samurai-*`, amd64+arm64, по digest индекса), локально — `packaging/sandbox/build.sh remote|exploit`. Пакет в GHCR по умолчанию приватный. Видимость переключается вручную на странице пакета (`Settings` → `Change visibility`): ни `GITHUB_TOKEN`, ни токен `gh` через REST её не меняют (эндпоинт видимости отвечает 404). Пока пакет закрыт, `pull` требует `docker login ghcr.io` с токеном, у которого есть `read:packages`. PR с пином от бота требует approve прогона проверок (PR создан `GITHUB_TOKEN`).
 
 

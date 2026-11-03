@@ -559,6 +559,9 @@ class SamuraiApp(
 
     def on_mount(self) -> None:
         self._apply_mouse()
+        # the model may ask a question at any point of a run
+        if getattr(self.orchestrator, "question_notice", None) is None:
+            self.orchestrator.question_notice = self.question_notice_from_thread
         try:
             if self.requested_operation_id:
                 self.operation = self.service.get(self.requested_operation_id)

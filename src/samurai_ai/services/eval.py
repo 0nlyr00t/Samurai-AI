@@ -57,6 +57,7 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.models import ModelService, ProviderImpl
 from samurai_ai.services.operations import OperationService
+from samurai_ai.services.questions import OperatorQuestionService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.swarm import SwarmService
 from samurai_ai.services.vault import VaultService, load_master_key
@@ -66,6 +67,7 @@ from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.models import ModelEndpointRepository
 from samurai_ai.storage.operations import OperationRepository
+from samurai_ai.storage.questions import QuestionRepository
 from samurai_ai.storage.recovery import RecoveryRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
@@ -316,6 +318,9 @@ class _ScenarioStack:
         self.orchestrator = AgentOrchestrator(
             self.models, self.kernel, execution, self.operations,
             AgentRunRepository(self.database),
+            questions=OperatorQuestionService(
+                self.operations, QuestionRepository(self.database)
+            ),
         )
         self.swarms = SwarmService(
             self.operations, self.kernel, self.orchestrator,

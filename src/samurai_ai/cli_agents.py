@@ -10,6 +10,11 @@ from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.domain.agents import AgentRun
 from samurai_ai.domain.execution import ApprovalRequiredError
 from samurai_ai.services.models import ModelService
+from samurai_ai.services.questions import (
+    Answer,
+    OperatorQuestionError,
+    OperatorQuestionService,
+)
 
 
 def register_agent_commands(
@@ -52,6 +57,30 @@ def register_agent_commands(
     show = agent_commands.add_parser("show", help="Show an agent run with route and usage")
     show.add_argument("run_id")
 
+    questions = agent_commands.add_parser(
+        "questions", help="List operator questions a run left open"
+    )
+    questions.add_argument("operation_id")
+
+    answer = agent_commands.add_parser(
+        "answer", help="Answer a pending question call by its id"
+    )
+    answer.add_argument("call_id")
+    answer.add_argument(
+        "--select",
+        action="append",
+        default=[],
+        metavar="ID=LABEL[,LABEL]",
+        help="option label(s) to pick for one question; repeatable",
+    )
+    answer.add_argument(
+        "--custom",
+        action="append",
+        default=[],
+        metavar="ID=TEXT",
+        help="free-form answer for one question; repeatable",
+    )
+
 
 def _wall_deadline(settings: Any | None) -> float | None:
     """`agent.max_wall_seconds` from settings; blank or 0 disables the cap."""
@@ -72,9 +101,67 @@ def handle_agent_command(
     orchestrator: AgentOrchestrator,
     models: ModelService,
     settings: Any | None = None,
+    questions: OperatorQuestionService | None = None,
 ) -> int | None:
     if args.command != "agent":
         return None
+    if args.agent_command == "questions":
+        rows = [] if questions is None else questions.pending(args.operation_id)
+        if args.json_output:
+            _print_json(
+                [
+                    {
+                        "call_id": row.call_id,
+                        "question": row.id.split(".", 1)[1],
+                        "payload": json.loads(row.payload),
+                        "asked_at": row.id,
+                    }
+                    for row in rows
+                ]
+            )
+        elif not rows:
+            print("no open questions")
+        for row in rows:
+            payload = json.loads(row.payload)
+            question = next(
+                item
+                for item in payload["questions"]
+                if item["id"] == row.id.split(".", 1)[1]
+            )
+            print(f"{row.call_id}\t{question['id']}\t{question['question']}")
+            for option in question["options"]:
+                mark = "*" if option.get("recommended") else " "
+                print(f"  {mark} {option['label']}")
+        return 0
+    if args.agent_command == "answer":
+        if questions is None:
+            print("error: operator questions are not wired here", file=sys.stderr)
+            return 2
+        selections: dict[str, tuple[str, ...]] = {}
+        for item in args.select:
+            name, _, labels = item.partition("=")
+            selections[name.strip()] = tuple(
+                label.strip() for label in labels.split(",") if label.strip()
+            )
+        customs = {i.partition("=")[0].strip(): i.partition("=")[2] for i in args.custom}
+        answers = [
+            Answer(
+                id=name,
+                selected=selections.get(name, ()),
+                custom=customs.get(name, ""),
+            )
+            for name in list(dict.fromkeys([*selections, *customs]))
+        ]
+        if not answers:
+            print("error: pass --select or --custom", file=sys.stderr)
+            return 2
+        try:
+            rows = questions.answer(args.call_id, answers, by="operator")
+        except OperatorQuestionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"answered {len(rows)} question(s) of {args.call_id}")
+        return 0
     if args.agent_command == "run":
         model_id = args.model_id or models.default_model()
         if model_id is None:
