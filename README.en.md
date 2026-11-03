@@ -87,7 +87,7 @@ Implemented:
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v17, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 763 unit/integration/CLI/TUI tests.
+- 1118 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), further security tools (
