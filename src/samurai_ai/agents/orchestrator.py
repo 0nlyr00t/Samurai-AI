@@ -913,13 +913,20 @@ class AgentOrchestrator:
         # the next executor step can actually see what the tool returned.
         excerpt = result.stdout.strip()[:1500]
         if excerpt:
+            # the artifact ids ride along: a finding must name evidence, and the
+            # model otherwise reaches for the note key instead of the artifact
+            evidence = (
+                f"\nartifact_ids: {', '.join(result.artifact_ids)}"
+                if result.artifact_ids
+                else ""
+            )
             self._append_note(
                 operation_id,
                 run,
                 NoteCommand(
                     type="note",
                     key=f"tool-result.{command.tool_id}",
-                    value=excerpt,
+                    value=f"{excerpt}{evidence}",
                 ),
             )
 
