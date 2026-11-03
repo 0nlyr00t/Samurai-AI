@@ -20,6 +20,7 @@ from samurai_ai.domain.reports import (
     ReportScopeViolationError,
     ReportStateError,
 )
+from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.playbooks import PlaybookService
@@ -37,12 +38,14 @@ class ReportService:
         playbooks: PlaybookService,
         reports: ReportRepository,
         vault: VaultService | None = None,
+        impact: ImpactService | None = None,
     ) -> None:
         self.operations = operations
         self.kernel = kernel
         self.playbooks = playbooks
         self.reports = reports
         self.vault = vault
+        self.impact = impact
 
     def generate(
         self,
@@ -279,6 +282,7 @@ class ReportService:
                     f"- severity: {finding.severity.value}",
                     f"- summary: {finding.summary or '(none)'}",
                     f"- remediation: {finding.remediation or '(none)'}",
+                    f"- impact: {self._impact_note(finding.id)}",
                     "- evidence:",
                 ]
             )
@@ -291,6 +295,20 @@ class ReportService:
                 )
             lines.append("")
         return "\n".join(lines)
+
+    def _impact_note(self, finding_id: str) -> str:
+        """Graded impact, when the ladder was used; otherwise say so plainly."""
+        if self.impact is None:
+            return "not graded"
+        try:
+            state = self.impact.state(finding_id)
+        except Exception:
+            return "not graded"
+        level = state.level
+        if level is None:
+            return "not graded"
+        reportable = "reportable" if state.reportable else "below threshold"
+        return f"{level.value} ({state.points} points, {reportable})"
 
     def _render_html(
         self,
@@ -346,6 +364,7 @@ class ReportService:
                 f"<tr><th>id</th><td>{esc(finding.id)}</td></tr>"
                 f"<tr><th>severity</th><td>{esc(finding.severity.value)}</td></tr>"
                 f"<tr><th>summary</th><td>{esc(finding.summary or '(none)')}</td></tr>"
+                f"<tr><th>impact</th><td>{esc(self._impact_note(finding.id))}</td></tr>"
                 f"<tr><th>remediation</th><td>"
                 f"{esc(finding.remediation or '(none)')}</td></tr>"
                 "</table>"

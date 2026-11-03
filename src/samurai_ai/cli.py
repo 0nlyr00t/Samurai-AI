@@ -372,7 +372,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_result = handle_model_command(args, model_service)
         if model_result is not None:
             return model_result
-        agent_result = handle_agent_command(args, agent_orchestrator, model_service)
+        agent_result = handle_agent_command(
+            args, agent_orchestrator, model_service, settings_service
+        )
         if agent_result is not None:
             return agent_result
         playbook_result = handle_playbook_command(args, playbook_service)
@@ -670,7 +672,10 @@ def _make_services(
         genes=GeneService(GeneStore(genes_path())),
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
-    reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)
+    reports = ReportService(
+        operations, kernel, playbooks, ReportRepository(database), vault,
+        impact=ImpactService(operations, kernel),
+    )
     ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     planning = PlanningService(operations, kernel, PlanningRepository(database), vault)

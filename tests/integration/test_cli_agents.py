@@ -254,3 +254,21 @@ def test_cli_agent_run_uses_default_model_from_settings(
         == 0
     )
     assert "fake/agent@v1" in capsys.readouterr().out
+
+
+def test_a_setting_caps_the_run_deadline(tmp_path: Path, capsys) -> None:
+    from samurai_ai.cli_agents import _wall_deadline
+
+    class Settings:
+        def __init__(self, value: str | None) -> None:
+            self.value = value
+
+        def get_value(self, key: str) -> str | None:
+            return self.value
+
+    assert _wall_deadline(None) is None
+    assert _wall_deadline(Settings(None)) is None
+    assert _wall_deadline(Settings("")) is None
+    assert _wall_deadline(Settings("0")) is None
+    assert _wall_deadline(Settings("nonsense")) is None
+    assert _wall_deadline(Settings("120")) == 120.0

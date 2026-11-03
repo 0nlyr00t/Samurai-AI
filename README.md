@@ -92,6 +92,15 @@ doom-loop guard для авторазрешённых петель, shell-реж
 web-поверхность операции, полный egress enforcement на
 Docker Desktop for Mac и OS-пакеты installers (есть bare standalone binary).
 
+## Операторские команды ночной волны
+
+- `samurai finding impact attempt <id> <read|write|auth-bypass|data-export|rce> --evidence <id> [--rollback "…"]` — поднять импакт находки; `finding impact grade <id>` показывает уровень, баллы, порог отчётности и бюджет.
+- `samurai gene list|add|fitness|promote|rollback` — пул эволюционирующих подсказок: ген рождается в тени, фитнес берётся из отчёта eval (`--report`), в промпт идут только активные.
+- `samurai rules list|add|rm` — поаргументные правила `allow|ask|deny`.
+- `samurai tool install <file> --trusted` и `tool manifests` — инструменты манифестами, правка после установки видна как `tampered`.
+- `samurai sandbox verify` — сходится ли подпись профилей, без записи.
+
+
 ## Установка
 
 ```bash

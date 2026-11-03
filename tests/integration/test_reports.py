@@ -227,3 +227,21 @@ def test_mark_reported_flow(tmp_path: Path) -> None:
 
     updated = stack.reports.mark_reported(operation.id, [finding_id])
     assert updated[0].status is FindingStatus.REPORTED
+
+
+def test_a_report_shows_the_graded_impact(tmp_path: Path) -> None:
+    from samurai_ai.domain.impact import ImpactLevel
+    from samurai_ai.services.impact import ImpactService
+
+    stack = Stack(tmp_path / "impact.db")
+    impact = ImpactService(stack.operations, stack.kernel)
+    stack.reports.impact = impact
+    operation = make_operation(stack)
+    finding_id = add_validated_finding(stack, operation.id, "IDOR on orders")
+    artifact = stack.kernel.get_finding_by_id(finding_id).evidence_ids[0]
+    drive_to_verification(stack, operation.id)
+    impact.record(finding_id, ImpactLevel.AUTH_BYPASS, (artifact,), rollback="undo")
+
+    report = stack.reports.generate(operation.id)
+    text = (tmp_path / report.path).read_text(encoding="utf-8")
+    assert "impact: auth-bypass (3 points, reportable)" in text

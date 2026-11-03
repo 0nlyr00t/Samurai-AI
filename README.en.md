@@ -97,6 +97,15 @@ OS-level background shell jobs, extension seams/plugins, an operation web surfac
 Docker Desktop for Mac, and OS package installers (a bare standalone binary is
 available).
 
+## Operator commands from the nightly wave
+
+- `samurai finding impact attempt <id> <read|write|auth-bypass|data-export|rce> --evidence <id> [--rollback "…"]` — escalate a finding's impact; `finding impact grade <id>` shows level, points, reportable threshold and budget.
+- `samurai gene list|add|fitness|promote|rollback` — the evolving hint pool: genes are born shadowed, fitness comes from an eval report (`--report`), only active genes reach the prompt.
+- `samurai rules list|add|rm` — argument-level `allow|ask|deny` rules.
+- `samurai tool install <file> --trusted` and `tool manifests` — tools as manifests, an edit after install shows as `tampered`.
+- `samurai sandbox verify` — whether the profile signature matches, without writing.
+
+
 ## Installation
 
 ```bash
