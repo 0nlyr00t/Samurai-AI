@@ -37,7 +37,13 @@ def add_serve_commands(subcommands: Any, add_parser: Callable[..., Any]) -> None
 
     send = add_parser("send", help="Write into a running session")
     send.add_argument("operation_id")
-    send.add_argument("--message", required=True)
+    what = send.add_mutually_exclusive_group(required=True)
+    what.add_argument("--message", help="a note to the journal")
+    what.add_argument("--approve", nargs="?", const="", help="approve the pending step")
+    what.add_argument("--reject", nargs="?", const="", help="decline the pending step")
+    what.add_argument("--answer", metavar="CALL_ID", help="answer an agent's questions")
+    send.add_argument("--pick", action="append", default=[], metavar="ID=LABEL")
+    send.add_argument("--custom", action="append", default=[], metavar="ID=TEXT")
     send.add_argument("--socket", default=argparse.SUPPRESS)
     send.set_defaults(handler=_send)
 
@@ -58,7 +64,9 @@ def _socket_of(args: argparse.Namespace) -> Path:
 # -- daemon ---------------------------------------------------------------
 def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
     from samurai_ai.cli import _make_services
+    from samurai_ai.domain.kernel import ApprovalStatus
     from samurai_ai.domain.operations import OperationEvent
+    from samurai_ai.services.rpc.approvals import ApprovalWaiter
     from samurai_ai.services.rpc.peer import Peer
     from samurai_ai.services.rpc.runs import RunBusy, RunHandle, RunRegistry
     from samurai_ai.services.rpc.server import EventFeed, MethodError, RpcServer
@@ -67,6 +75,8 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
     operations = services[0]
     repository = operations.repository
     swarm_service = services[14]
+    questions_service = services[21]
+    kernel_service = services[1]
 
     def journal(operation_id: str, event_type: str, payload: dict[str, Any]) -> None:
         from samurai_ai.domain.operations import OperationEvent
@@ -76,6 +86,13 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
                 operation_id=operation_id, event_type=event_type, payload=payload
             )
         )
+
+    def still_pending(approval_id: str) -> bool:
+        """Read the approval fresh: another process may have decided it."""
+        approval = kernel_service.kernel.get_approval(approval_id)
+        return approval is None or approval.status is ApprovalStatus.PENDING
+
+    waiter = ApprovalWaiter(still_pending)
 
     async def work(handle: RunHandle) -> None:
         """Work the plan: each swarm only reaches the tasks ready when it starts."""
@@ -94,7 +111,7 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
                 [task.id for task in ready],
                 handle.route,
                 created_by=handle.created_by,
-                approval_resolver=(lambda _approval_id: True),
+                approval_resolver=waiter,
                 stop_event=handle.stop_event,
             )
 
@@ -155,7 +172,51 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
             raise MethodError("unknown-run", "no such run") from exc
         return handle.as_frame()
 
+    async def approvals_list(_peer: Peer, params: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = kernel_service.kernel.list_approvals(
+            str(params.get("operation_id") or ""), status=ApprovalStatus.PENDING
+        )
+        return [
+            {"id": row.id, "action": row.action, "risk": row.risk_class.value}
+            for row in rows
+        ]
+
+    async def approvals_decide(peer: Peer, params: dict[str, Any]) -> dict[str, Any]:
+        approval_id = str(params.get("approval_id") or "")
+        if params.get("reject"):
+            return kernel_service.reject(approval_id, peer.label).model_dump(mode="json")
+        return kernel_service.approve(approval_id, peer.label).model_dump(mode="json")
+
+    async def questions_list(_peer: Peer, params: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = questions_service.pending(str(params.get("operation_id") or ""))
+        return [
+            {"call_id": row.call_id, "id": row.id, "payload": json.loads(row.payload)}
+            for row in rows
+        ]
+
+    async def questions_answer(peer: Peer, params: dict[str, Any]) -> list[dict[str, Any]]:
+        from samurai_ai.services.questions import Answer
+
+        answers = [
+            Answer(
+                id=str(item.get("id")),
+                selected=tuple(item.get("selected") or ()),
+                custom=str(item.get("custom") or ""),
+            )
+            for item in params.get("answers") or []
+        ]
+        if not answers:
+            raise MethodError("empty", "an answer needs at least one question")
+        rows = questions_service.answer(
+            str(params.get("call_id") or ""), answers, peer.label
+        )
+        return [{"id": row.id, "status": row.status} for row in rows]
+
     server = RpcServer(EventFeed(repository.events_since))
+    server.register("approvals.list", approvals_list)
+    server.register("approvals.decide", approvals_decide, write=True)
+    server.register("questions.list", questions_list)
+    server.register("questions.answer", questions_answer, write=True)
     server.register("run.start", run_start, write=True)
     server.register("run.list", run_list)
     server.register("run.cancel", run_cancel, write=True)
@@ -250,6 +311,40 @@ async def _call_async(
         await client.close()
 
 
+async def _send_call(client: Any, args: argparse.Namespace) -> str:
+    """One connection, one write: the shape the daemon expects per action."""
+    if args.message is not None:
+        await client.call(
+            "send.message", {"operation_id": args.operation_id, "message": args.message}
+        )
+        return "sent"
+    if args.approve is not None or args.reject is not None:
+        reject = args.reject is not None
+        approval_id = args.reject if reject else args.approve
+        if not approval_id:
+            listing = await client.call(
+                "approvals.list", {"operation_id": args.operation_id}
+            )
+            if not listing:
+                raise LookupError("nothing is pending")
+            approval_id = listing[0]["id"]
+        await client.call(
+            "approvals.decide", {"approval_id": approval_id, "reject": reject}
+        )
+        return f"{'rejected' if reject else 'approved'} {approval_id}"
+    answers: dict[str, dict[str, Any]] = {}
+    for chunk in args.pick:
+        ident, _, label = chunk.partition("=")
+        answers.setdefault(ident, {"id": ident, "selected": []})["selected"].append(label)
+    for chunk in args.custom:
+        ident, _, text = chunk.partition("=")
+        answers.setdefault(ident, {"id": ident, "selected": []})["custom"] = text
+    rows = await client.call(
+        "questions.answer", {"call_id": args.answer, "answers": list(answers.values())}
+    )
+    return f"answered {len(rows)} question(s)"
+
+
 def _send(args: argparse.Namespace) -> int:
     async def run() -> int:
         from samurai_ai.services.rpc.client import Client, RpcFailure
@@ -260,13 +355,9 @@ def _send(args: argparse.Namespace) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         try:
-            await client.call(
-                "send.message",
-                {"operation_id": args.operation_id, "message": args.message},
-            )
-            print("sent")
+            print(await _send_call(client, args))
             return 0
-        except RpcFailure as exc:
+        except (RpcFailure, LookupError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         finally:
