@@ -53,8 +53,25 @@ def register_agent_commands(
     show.add_argument("run_id")
 
 
+def _wall_deadline(settings: Any | None) -> float | None:
+    """`agent.max_wall_seconds` from settings; blank or 0 disables the cap."""
+    if settings is None:
+        return None
+    raw = (settings.get_value("agent.max_wall_seconds") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 def handle_agent_command(
-    args: argparse.Namespace, orchestrator: AgentOrchestrator, models: ModelService
+    args: argparse.Namespace,
+    orchestrator: AgentOrchestrator,
+    models: ModelService,
+    settings: Any | None = None,
 ) -> int | None:
     if args.command != "agent":
         return None
@@ -73,6 +90,7 @@ def handle_agent_command(
                 args.task_id,
                 [model_id, *args.fallbacks],
                 max_steps=args.max_steps,
+                max_wall_seconds=_wall_deadline(settings),
                 approval_id=args.approval_id,
                 workspace=args.workspace,
                 skill_names=tuple(args.skills),
