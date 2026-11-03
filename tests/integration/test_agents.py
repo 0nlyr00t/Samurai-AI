@@ -194,6 +194,8 @@ def test_full_orchestrated_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     tool_notes = [key for key in by_key if ".tool-result.local.echo" in key]
     assert tool_notes
     assert "agent-echo" in by_key[tool_notes[0]]
+    # the note carries the artifact ids so a finding can name real evidence
+    assert "artifact_ids: art_" in by_key[tool_notes[0]]
 
     calls = [event for event in events if event.event_type == "model.call"]
     assert calls and all(event.payload["agent_run_id"] == run.id for event in calls)
