@@ -260,6 +260,67 @@ class SessionController:
         except Exception:  # noqa: BLE001 - the task already moved on
             pass
 
+    # -- operator questions -----------------------------------------------
+    def question_notice_from_thread(self, call_id: str) -> None:
+        """Called on the agent thread when the model asks something."""
+        self.call_from_thread(self._ask_questions, call_id)
+
+    def _ask_questions(self, call_id: str) -> None:
+        """Show one card per open question; unanswered ones stay pending."""
+        import json as _json
+
+        from samurai_ai.domain.agents import OperatorQuestion
+        from samurai_ai.services.questions import Answer
+
+        operation = self.operation
+        questions = getattr(self.orchestrator, "questions", None)
+        if operation is None or questions is None:
+            return
+        rows = [row for row in questions.pending(operation.id) if row.call_id == call_id]
+        answers: list[Answer] = []
+        for row in rows:
+            payload = _json.loads(row.payload)
+            identifier = row.id.split(".", 1)[1]
+            question = OperatorQuestion.model_validate(
+                next(item for item in payload["questions"] if item["id"] == identifier)
+            )
+            chosen = self._pick_option(question)
+            if chosen is None:
+                self._write_dim(
+                    self.translator.t(
+                        "question.skipped", id=identifier, call=call_id
+                    )
+                )
+                continue
+            answers.append(Answer(id=identifier, selected=(chosen,)))
+        if answers:
+            try:
+                questions.answer(call_id, answers, by="operator")
+            except Exception as exc:  # noqa: BLE001 - reported to the operator
+                self._write_dim(self._spawn_error_text(exc))
+
+    def _pick_option(self, question: Any) -> str | None:
+        from samurai_ai.tui.screens.question import OperatorQuestionScreen
+
+        holder: dict[str, str | None] = {}
+        done = threading.Event()
+
+        def ask() -> None:
+            def decided(label: str | None) -> None:
+                holder["label"] = label
+                done.set()
+
+            self.push_screen(
+                OperatorQuestionScreen(
+                    self.translator.t("question.title"), question
+                ),
+                decided,
+            )
+
+        self.call_from_thread(ask)
+        done.wait(timeout=600)
+        return holder.get("label")
+
     # -- approvals --------------------------------------------------------
     def _resolve_approval_from_thread(self, approval_id: str) -> bool:
         """Called on the subagent thread: ask the operator, block for the answer.

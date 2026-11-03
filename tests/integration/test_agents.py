@@ -817,7 +817,7 @@ def test_the_model_can_escalate_impact(
 
     state = orchestrator.impact.state(finding.id)
     assert state.level is not None and state.level.value == "auth-bypass"
-    events = [event.event_type for event in service.events(operation_id)]
+    events = [event.event_type for event in service.repository.events(operation_id)]
     assert "agent.command.impact" in events
     assert "impact.attempt" in events
 
@@ -854,3 +854,70 @@ def test_a_bad_impact_command_is_refused_not_fatal(
         if event.event_type == "agent.command.rejected"
     ]
     assert rejected and "rollback" in str(rejected[0].payload)
+
+
+def test_the_model_asks_the_operator_and_keeps_going(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A question nobody answers must not stall the run."""
+    from samurai_ai.services.questions import Answer, OperatorQuestionService
+    from samurai_ai.storage.questions import QuestionRepository
+
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    questions = OperatorQuestionService(service, QuestionRepository(kernel.kernel.database))
+    orchestrator.questions = questions
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["decide"]}',
+        '{"commands": [{"type": "ask_operator", "timeout": 1, "questions": '
+        '[{"id": "next", "question": "Go deeper?", "header": "Decide", '
+        '"options": [{"label": "Yes", "recommended": true}, {"label": "No"}]}]}]}',
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    assert run.status is AgentRunStatus.COMPLETED, run.notes
+    events = [event.event_type for event in service.repository.events(operation_id)]
+    assert "agent.question.asked" in events, events
+    pending = questions.pending(operation_id)
+    assert pending, "the question must stay listed after the deadline"
+    assert pending[0].status == "expired"
+    rows = questions.answer(
+        pending[0].call_id, [Answer(id="next", selected=("Yes",))], "op"
+    )
+    assert rows[0].status == "answered"
+    # answered calls drop out of the open list
+    assert pending[0].call_id not in {row.call_id for row in questions.pending(operation_id)}
+
+
+def test_an_answered_question_reaches_the_next_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.services.questions import Answer, OperatorQuestionService
+    from samurai_ai.storage.questions import QuestionRepository
+
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    questions = OperatorQuestionService(service, QuestionRepository(kernel.kernel.database))
+    orchestrator.questions = questions
+
+    def notice(call_id: str) -> None:
+        questions.answer(call_id, [Answer(id="next", selected=("Yes",))], "op")
+
+    orchestrator.question_notice = notice
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["decide"]}',
+        '{"commands": [{"type": "ask_operator", "questions": '
+        '[{"id": "next", "question": "Go deeper?", '
+        '"options": [{"label": "Yes"}, {"label": "No"}]}]}]}',
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    assert run.status is AgentRunStatus.COMPLETED
+    later_prompt = "\n".join(
+        message.content for message in fake.requests[-1].messages if message.role == "user"
+    )
+    assert '"selected": ["Yes"]' in later_prompt
