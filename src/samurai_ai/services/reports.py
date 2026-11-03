@@ -53,6 +53,7 @@ class ReportService:
         format: ReportFormat = ReportFormat.MARKDOWN,
         created_by: str = "operator",
         evidence_version: int | None = None,
+        min_impact_points: int | None = None,
     ) -> BountyReport:
         """Render a report; ``evidence_version`` guards against stale evidence.
 
@@ -73,6 +74,18 @@ class ReportService:
             raise ReportStateError(
                 f"operation {operation_id} has no validated findings to report"
             )
+        if min_impact_points:
+            below = [
+                finding
+                for finding in findings
+                if self._impact_points(finding.id) < min_impact_points
+            ]
+            if below:
+                listed = ", ".join(f"{item.id} ({item.title})" for item in below)
+                raise ReportStateError(
+                    f"impact below {min_impact_points} points: {listed}; "
+                    "escalate first or drop the threshold"
+                )
         if evidence_version is not None:
             current = max(finding.evidence_version for finding in findings)
             if current != evidence_version:
@@ -295,6 +308,14 @@ class ReportService:
                 )
             lines.append("")
         return "\n".join(lines)
+
+    def _impact_points(self, finding_id: str) -> int:
+        if self.impact is None:
+            return 0
+        try:
+            return self.impact.state(finding_id).points
+        except Exception:
+            return 0
 
     def _impact_note(self, finding_id: str) -> str:
         """Graded impact, when the ladder was used; otherwise say so plainly."""

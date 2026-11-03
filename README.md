@@ -99,6 +99,7 @@ Docker Desktop for Mac и OS-пакеты installers (есть bare standalone b
 - `samurai rules list|add|rm` — поаргументные правила `allow|ask|deny`.
 - `samurai tool install <file> --trusted` и `tool manifests` — инструменты манифестами, правка после установки видна как `tampered`.
 - `samurai sandbox verify` — сходится ли подпись профилей, без записи.
+- `samurai report generate <op> --min-impact 3` — не выпускать отчёт по находкам ниже порога импакта.
 
 
 ## Установка
