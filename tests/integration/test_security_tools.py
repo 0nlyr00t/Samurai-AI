@@ -827,7 +827,7 @@ def test_ffuf_url_contract_is_fail_closed(tmp_path: Path) -> None:
             approval_id=approval_id,
         )
     assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
-    # any `.ext` is accepted: the closed enum made the model retry blindly
+    # any `.ext` is accepted, with or without the dot
     execution.run_tool(
         operation.id,
         "fuzz.ffuf",
@@ -838,7 +838,7 @@ def test_ffuf_url_contract_is_fail_closed(tmp_path: Path) -> None:
         execution.run_tool(
             operation.id,
             "fuzz.ffuf",
-            {"url": "https://example.com/FUZZ", "extensions": ["jsp"]},
+            {"url": "https://example.com/FUZZ", "extensions": ["j sp"]},
             approval_id=approval_id,
         )
 
