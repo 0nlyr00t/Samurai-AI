@@ -370,6 +370,7 @@ class AgentOrchestrator:
         context = self._blackboard_excerpt(blackboard, run.id)
         prompt = (
             f"{_PLANNER_INSTRUCTION}{profile_for(run.specialization).planner_focus}\n"
+            f"{self._genes_excerpt()}"
             f"Task: {task_title}\n"
             f"Blackboard:\n{context or '(empty)'}"
         )
