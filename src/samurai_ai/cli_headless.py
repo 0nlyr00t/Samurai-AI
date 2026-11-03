@@ -32,10 +32,21 @@ def register_headless_commands(
     )
     run.add_argument("--workers", type=int, default=2)
     run.add_argument("--approval-id", dest="approval_id")
+    run.add_argument(
+        "--auto-approve",
+        dest="auto_approve",
+        action="store_true",
+        help="approve every tool call in place — for unattended runs",
+    )
     run.add_argument("--workspace", dest="workspace", default=None)
     run.add_argument(
         "--skill", action="append", dest="skills", default=[], metavar="SKILL_NAME"
     )
+
+
+def _always_approve(_approval_id: str) -> bool:
+    """An unattended batch has nobody to click; the operator said so up front."""
+    return True
 
 
 def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> int | None:
@@ -62,6 +73,7 @@ def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> i
         approval_id=approval_id,
         workspace=args.workspace,
         skill_names=tuple(args.skills),
+        approval_resolver=(_always_approve if args.auto_approve else None),
     )
     report = swarms.report(swarm.id)
     print(json.dumps(report, ensure_ascii=False, indent=2))
