@@ -1,7 +1,10 @@
 import pytest
 from pydantic import ValidationError
 
-from samurai_ai.domain.scope import ScopeContract, ScopeDecisionReason
+from samurai_ai.domain.scope import (
+    ScopeContract,
+    ScopeDecisionReason,
+)
 
 
 def test_domain_wildcard_and_exclusion_priority() -> None:
@@ -152,3 +155,25 @@ def test_localhost_and_loopback_are_the_same_host() -> None:
     assert ScopeContract(includes=("localhost",)).evaluate("http://127.0.0.1:8080").allowed
     # an address is still not a domain
     assert not ScopeContract(includes=("example.com",)).evaluate("10.0.0.1").allowed
+
+
+def test_a_host_alias_is_judged_as_its_address() -> None:
+    """An HTB vhost stands for the box's IP: same verdict, and it resolves."""
+    contract = ScopeContract(
+        includes=("10.129.98.19",), hosts={"flight.htb": "10.129.98.19"}
+    )
+    assert contract.evaluate("http://flight.htb/").allowed
+    assert contract.resolve_host("flight.htb") == "10.129.98.19"
+    assert contract.resolve_host("other.htb") == "other.htb"
+
+
+def test_a_host_alias_outside_scope_stays_out() -> None:
+    contract = ScopeContract(
+        includes=("10.129.98.19",), hosts={"elsewhere.htb": "10.10.10.10"}
+    )
+    assert not contract.evaluate("http://elsewhere.htb/").allowed
+
+
+def test_a_host_alias_name_cannot_be_an_address() -> None:
+    with pytest.raises(ValidationError, match="must be a name"):
+        ScopeContract(includes=("10.0.0.1",), hosts={"10.0.0.2": "10.0.0.1"})

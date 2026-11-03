@@ -421,6 +421,7 @@ class DockerSandboxRunner:
         proxy_url: str | None = None,
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
+        hosts: dict[str, str] | None = None,
     ) -> list[str]:
         self.validate_invocation(profile, executable, args)
         if secret_env:
@@ -433,6 +434,10 @@ class DockerSandboxRunner:
             # process stdin is always closed, so a tool sees EOF either way.
             "--interactive",
         ]
+        # an aliased vhost must resolve inside the container too, or the tool
+        # gets a name the sandbox DNS does not know
+        for name, address in sorted((hosts or {}).items()):
+            argv += ["--add-host", f"{name}:{address}"]
         if profile.network_mode == "scoped":
             if proxy_url is None:
                 raise SandboxError(
@@ -654,7 +659,14 @@ class DockerSandboxRunner:
         if proxy_url is not None and profile.proxy_flag is not None:
             args = [*args, profile.proxy_flag, proxy_url]
         argv = self.build_argv(
-            profile, run_id, executable, args, proxy_url, env, secret_env
+            profile,
+            run_id,
+            executable,
+            args,
+            proxy_url,
+            env,
+            secret_env,
+            hosts=scope.hosts if scope is not None else None,
         )
         await self.preflight(profile)
         # the watcher is per profile: nmap and a browser legitimately go quiet

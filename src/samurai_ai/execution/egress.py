@@ -213,11 +213,12 @@ class EgressProxy:
             except ToolExecutionError:
                 return VERDICT_DENIED_SCOPE
             return VERDICT_ALLOWED
-        decision = self.scope.evaluate(_scope_url(host, scheme))
+        target = self.scope.resolve_host(host)
+        decision = self.scope.evaluate(_scope_url(target, scheme))
         if not decision.allowed:
             return VERDICT_DENIED_SCOPE
         try:
-            addresses = self.resolver(host)
+            addresses = self.resolver(target)
         except ToolExecutionError:
             return VERDICT_DENIED_SCOPE
         for address in addresses:
@@ -294,7 +295,7 @@ class EgressProxy:
 
         counters = _Counters()
         try:
-            addresses = self.resolver(host)
+            addresses = self.resolver(self.scope.resolve_host(host))
             upstream_reader, upstream_writer = await asyncio.open_connection(
                 addresses[0], port
             )
@@ -382,7 +383,7 @@ class EgressProxy:
 
         counters = _Counters()
         try:
-            addresses = self.resolver(host)
+            addresses = self.resolver(self.scope.resolve_host(host))
             upstream_reader, upstream_writer = await asyncio.open_connection(
                 addresses[0], port
             )
