@@ -16,6 +16,7 @@ RUN apt-get update \
         xvfb \
         xauth \
         adb \
+        python3 \
         socat \
         nmap \
         curl \
@@ -26,6 +27,7 @@ RUN apt-get update \
         ncurses-base \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
 
+# the remote drivers are python: they own the tunnel and hand the endpoint out
 # there is no real terminal in here; a dumb one keeps tools from warning
 ENV PYTHONUNBUFFERED=1 \
     TERM=dumb

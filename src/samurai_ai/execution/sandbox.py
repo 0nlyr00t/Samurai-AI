@@ -248,7 +248,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         "adb, nmap, curl, jq) behind the scoped proxy",
         # built from packaging/sandbox/remote and published by ci as a
         # multi-arch index; the pin comes as a pull request, never by hand
-        image="sha256:88894b2c25938921f4b75ff11de3f48ec36c82987b2c46b00a28d75fe84e5a69",
+        image="sha256:ba62ee7981a34ab120e0800d32cf7768181348c2a2ad0c4e3ae2414de315961b",
         allowed_executables=(
             "ssh",
             "smbclient",
