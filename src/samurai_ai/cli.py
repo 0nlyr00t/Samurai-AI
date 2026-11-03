@@ -31,6 +31,7 @@ from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_comm
 from samurai_ai.cli_reports import handle_report_command, register_report_commands
 from samurai_ai.cli_rules import handle_rules_command, register_rules_commands
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
+from samurai_ai.cli_serve import add_serve_commands
 from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_team import handle_team_command
@@ -171,6 +172,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action=_VersionAction)
     parser.add_argument("--db", type=Path, help="Path to the Samurai SQLite database")
     parser.add_argument("--json", action="store_true", dest="json_output")
+    parser.add_argument(
+        "--socket", default=None, help="session daemon socket (serve/attach/send/call)"
+    )
     subcommands = parser.add_subparsers(dest="command")
 
     update = subcommands.add_parser(
@@ -301,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_rules_commands(subcommands)
     register_gene_commands(subcommands)
     register_policy_commands(subcommands)
+    add_serve_commands(subcommands, subcommands.add_parser)
     return parser
 
 
@@ -310,6 +315,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "update":
         # Self-update needs no database or services.
         return run_update(check=args.check)
+    if args.command in {"serve", "attach", "send", "call"}:
+        return int(args.handler(args) or 0)
     (
         operation_service,
         kernel_service,
