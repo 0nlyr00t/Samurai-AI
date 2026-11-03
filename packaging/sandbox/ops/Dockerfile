@@ -20,6 +20,8 @@ RUN apt-get update \
         binutils \
         file \
         socat \
+        xvfb \
+        xauth \
         jq \
         curl \
         nmap \

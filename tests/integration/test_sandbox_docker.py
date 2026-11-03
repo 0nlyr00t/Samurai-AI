@@ -15,7 +15,11 @@ from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessManager
 from samurai_ai.execution.registry import SandboxExecTool, ToolRegistry
-from samurai_ai.execution.remote import SmbListTool, SshExecTool
+from samurai_ai.execution.remote import (
+    RdpCheckTool,
+    SmbListTool,
+    SshExecTool,
+)
 from samurai_ai.execution.sandbox import (
     DockerSandboxRunner,
     get_profile,
@@ -585,6 +589,19 @@ def test_smb_list_reaches_a_real_samba(
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
+def _wait_for_log(name: str, needle: str, timeout: float = 90.0) -> bool:
+    """RDP negotiates before TLS, so a port or TLS probe are both premature."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        logs = subprocess.run(
+            ["docker", "logs", name], capture_output=True, text=True
+        )
+        if needle in logs.stdout + logs.stderr:
+            return True
+        time.sleep(1.0)
+    return False
+
+
 def _wait_for_port(port: int, timeout: float = 30.0) -> bool:
     import socket
 
@@ -596,3 +613,69 @@ def _wait_for_port(port: int, timeout: float = 30.0) -> bool:
         except OSError:
             time.sleep(0.5)
     return False
+
+
+RDP_IMAGE = (
+    "danielguerra/ubuntu-xrdp@sha256:"
+    "1a00da32f4e486f2f5fd8f656fc23bb235987c219153a587894469cad300b12d"
+)
+
+
+def test_rdp_check_reaches_a_real_xrdp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RDP rides the tunnel: an xrdp server must answer the auth-only probe."""
+    if shutil.which("docker") is None:
+        pytest.skip("docker is not installed")
+    if asyncio.run(_docker_available()) is False:
+        pytest.skip("docker daemon is not available")
+    if asyncio.run(_image_present(RDP_IMAGE)) is False:
+        pytest.skip(f"target image not pulled: {RDP_IMAGE}")
+
+    port = _free_port()
+    name = f"samurai-rdp-{port}"
+    subprocess.run(
+        [
+            "docker", "run", "-d", "--rm", "--name", name,
+            "--platform", "linux/amd64", "-p", f"{port}:3389", RDP_IMAGE,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    try:
+        # the port opens before xrdp is ready: wait for its own "running" log
+        assert _wait_for_log(name, "xrdp entered RUNNING state", timeout=90)
+        monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+        sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+        database = Database(tmp_path / "rdp.db")
+        service = OperationService(OperationRepository(database))
+        kernel = KernelService(service, KernelRepository(database))
+        recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+        runner = DockerSandboxRunner(
+            ProcessManager(allowed_executables=frozenset({"docker"})),
+            sandbox_allowlist_path(),
+            lambda: load_master_key(vault_key_path()),
+        )
+        execution = ToolExecutionService(
+            service,
+            kernel,
+            recovery,
+            ToolRunRepository(database),
+            registry=ToolRegistry(adapters=(RdpCheckTool(runner),)),
+        )
+        operation = service.create(
+            "rdp lab", OperationMode.RED_TEAM, ScopeContract(includes=("127.0.0.1",))
+        )
+        params = {"host": "127.0.0.1", "port": port}
+        with pytest.raises(ApprovalRequiredError) as caught:
+            execution.run_tool(operation.id, "remote.rdp-check", params)
+        kernel.approve(caught.value.approval_id, decided_by="operator")
+        result = execution.run_tool(
+            operation.id, "remote.rdp-check", params, approval_id=caught.value.approval_id
+        )
+        assert result.run.status is ToolRunStatus.COMPLETED, result.stderr[-300:]
+        assert "exit status 0" in (result.stdout + result.stderr)
+        assert "allowed" in result.stderr
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)

@@ -99,9 +99,16 @@ class _RemoteTool(_ScopedSandboxTool):
         """Tunnel and process share one loop, so handlers can actually run."""
         tunnel, endpoint = await self._open(params, scope)
         profile = get_profile(self.profile_id)
+        env, secret_env = self.build_env(params)
         try:
             outcome = await self.runner.run_async(
-                profile, "remote", self.executable, [*argv, endpoint], scope
+                profile,
+                "remote",
+                self.executable,
+                [*argv, endpoint],
+                scope,
+                env=env,
+                secret_env=secret_env,
             )
             for _ in range(25):
                 if tunnel.events:
@@ -267,6 +274,18 @@ class RdpCheckTool(_RemoteTool):
     def definition(self) -> ToolDefinition:
         return self._definition
 
+    def build_env(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        # the tunnel already is the proxy; freerdp would re-resolve the tunnel
+        # host through the host's env proxy and fail, so keep it direct
+        return {
+            "HOME": "/tmp",
+            "TMPDIR": "/tmp",
+            "NO_PROXY": "host.docker.internal",
+            "no_proxy": "host.docker.internal",
+        }, {}
+
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         host, port = self._host_port(params)
         return self._run(["-c", _RDP_DRIVER], {"host": host, "port": port or 3389}, scope)
@@ -276,9 +295,10 @@ _RDP_DRIVER = r"""
 import subprocess, sys
 endpoint = sys.argv[1]
 host, port = endpoint.rsplit(":", 1)
+# xfreerdp needs an X display even for /auth-only, so it runs under Xvfb
 argv = [
-    "xfreerdp", "/v:%s:%s" % (host, port), "/sec:tls", "/cert:ignore",
-    "/auth-only", "/u:probe", "/p:probe", "/timeout:10000",
+    "xvfb-run", "-a", "xfreerdp", "/v:%s:%s" % (host, port), "/sec:tls",
+    "/cert:ignore", "/auth-only", "/u:probe", "/p:probe", "/timeout:10000",
 ]
 raise SystemExit(subprocess.call(argv))
 """

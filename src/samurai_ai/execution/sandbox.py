@@ -248,7 +248,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         "adb, pwntools, gcc) behind the scoped proxy",
         # locally built from packaging/sandbox/ops; a rebuild changes the id, so
         # re-pin here after a rebuild
-        image="sha256:72181e934bb8c2f661919fdf20ae836075e06b999e43240ab33de341d1404702",
+        image="sha256:c315d87c28f2d8dfe3a85c934aa1059e5b3cb19c63085fbf3173f38dab47657f",
         allowed_executables=(
             "ssh",
             "smbclient",
