@@ -243,22 +243,48 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         proxy_flag="-x",
     ),
     SandboxProfile(
-        id="sandbox.ops@v1",
-        description="Operational toolbelt (ssh, smbclient, impacket, xfreerdp, "
-        "adb, pwntools, gcc) behind the scoped proxy",
-        # built from packaging/sandbox/ops and published by ci as a multi-arch
-        # index; the pin comes as a pull request, never by hand
-        image="ghcr.io/0nlyr00t/samurai-ops@sha256:803c61331ff1404c283fde5e72984cbeb491b9a3b7c3d1b4ad835e80fcf8c3a3",
+        id="sandbox.remote@v1",
+        description="Remote administration belt (ssh, smbclient, xfreerdp, "
+        "adb, nmap, curl, jq) behind the scoped proxy",
+        # built from packaging/sandbox/remote and published by ci as a
+        # multi-arch index; the pin comes as a pull request, never by hand
+        image="sha256:ba62ee7981a34ab120e0800d32cf7768181348c2a2ad0c4e3ae2414de315961b",
         allowed_executables=(
             "ssh",
             "smbclient",
             "xfreerdp",
             "adb",
-            "python3",
-            "gcc",
-            "socat",
             "nmap",
             "curl",
+            "jq",
+            "socat",
+            # the remote drivers are python: they own the tunnel and hand the
+            # endpoint to ssh, smbclient, xfreerdp or adb
+            "python3",
+        ),
+        cpu_limit="2.0",
+        memory_mb=1024,
+        pids_limit=512,
+        timeout_seconds=900,
+        max_output_bytes=524288,
+        stall_seconds=300,
+        network_mode="scoped",
+    ),
+    SandboxProfile(
+        id="sandbox.exploit@v1",
+        description="Exploit belt (gcc, gdb, checksec, ROPgadget, pwntools, "
+        "impacket) with the scoped proxy for the run step",
+        image="sha256:875d1ea46b20c5b9f32dc9771656b5b259e82a6ffc0c50e464e570633ecf2aac",
+        allowed_executables=(
+            "gcc",
+            "gdb",
+            "objdump",
+            "readelf",
+            "checksec",
+            "ROPgadget",
+            "python3",
+            "socat",
+            "file",
         ),
         cpu_limit="2.0",
         memory_mb=1024,
