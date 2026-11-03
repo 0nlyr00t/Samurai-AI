@@ -446,6 +446,8 @@ def test_proxy_stopped_after_use(http_server: str) -> None:
 
 
 class _ProxyUsingManager:
+    stall_seconds: float = 120.0
+
     def __init__(self, target_url: str) -> None:
         self.target_url = target_url
 
