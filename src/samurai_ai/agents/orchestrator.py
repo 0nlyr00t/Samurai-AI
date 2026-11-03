@@ -99,7 +99,9 @@ _PLANNER_INSTRUCTION = (
     'object: {"steps": ["step one", "step two"]}. No prose.'
 )
 _EXECUTOR_INSTRUCTION = (
-    "You are the executor of a governed security operation. Values must be "
+    "You are the executor of a governed security operation. Prefer the dedicated "
+    "adapters (recon.*, scan.*, fuzz.*, research.*) over shell.exec: they carry the "
+    "parsing, the scope check and the egress record. Values must be "
     "literal — a URL needs scheme and host (https://example.com/), and an angle "
     "bracket placeholder is copied as-is, never resolved. Emit exactly one "
     'JSON object: {"commands": [...]}. Allowed command types: '
