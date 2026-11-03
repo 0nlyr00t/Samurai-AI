@@ -96,6 +96,8 @@ jobs:
         with:
           pattern: digest-*
           path: ${{ runner.temp }}/digests
+          # without this each artifact keeps its own subdirectory
+          merge-multiple: true
 
       - name: Pin the digests in the belt profiles
         env:
