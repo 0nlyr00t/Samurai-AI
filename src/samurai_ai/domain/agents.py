@@ -70,6 +70,34 @@ class RecordImpactCommand(BaseModel):
     outcome: Literal["confirmed", "refuted"] = "confirmed"
 
 
+class QuestionOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=60)
+    description: str = Field(default="", max_length=200)
+    recommended: bool = False
+
+
+class OperatorQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=32, pattern=r"^[a-z0-9-]+$")
+    question: str = Field(min_length=1, max_length=400)
+    header: str = Field(default="", max_length=16)
+    options: tuple[QuestionOption, ...] = Field(min_length=2, max_length=4)
+
+
+class AskOperatorCommand(BaseModel):
+    """Ask the operator mid-run; the answer arrives as a note for the next step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["ask_operator"]
+    questions: tuple[OperatorQuestion, ...] = Field(min_length=1, max_length=3)
+    #: seconds to wait; -1 waits until the operator answers or the run stops
+    timeout: int = Field(default=120, ge=-1, le=3600)
+
+
 class CompleteTaskCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -88,6 +116,7 @@ AgentCommand = Annotated[
     | NoteCommand
     | ProposeFindingCommand
     | RecordImpactCommand
+    | AskOperatorCommand
     | CompleteTaskCommand
     | FailCommand,
     Field(discriminator="type"),
@@ -153,6 +182,8 @@ def command_summary(command: AgentCommand) -> dict[str, Any]:
     elif isinstance(command, RecordImpactCommand):
         summary["finding_id"] = command.finding_id
         summary["level"] = command.level
+    elif isinstance(command, AskOperatorCommand):
+        summary["questions"] = [question.id for question in command.questions]
     elif isinstance(command, FailCommand):
         summary["reason"] = command.reason
     return summary
