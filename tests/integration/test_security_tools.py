@@ -661,18 +661,21 @@ def test_nmap_scan_is_a_connect_scan_without_ping(tmp_path: Path) -> None:
     assert "8080" not in summary  # closed ports stay out of the summary
 
 
-def test_nmap_ports_and_profile_are_mutually_exclusive(tmp_path: Path) -> None:
+def test_nmap_ports_win_over_a_profile(tmp_path: Path) -> None:
+    """A model names both when it means "these ports, quickly"."""
     service, kernel, execution, manager = make_nmap_stack(tmp_path, NMAP_XML)
     operation = make_operation(service)
     approval_id = approve(kernel, operation.id, "scan.nmap", RiskClass.R2)
 
-    with pytest.raises(ToolValidationError, match="either 'profile' or 'ports'"):
-        execution.run_tool(
-            operation.id,
-            "scan.nmap",
-            {"targets": ["example.com"], "profile": "fast", "ports": "443"},
-            approval_id=approval_id,
-        )
+    result = execution.run_tool(
+        operation.id,
+        "scan.nmap",
+        {"targets": ["example.com"], "profile": "fast", "ports": "443"},
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    runs = [call for call in manager.calls if call[:2] == ("docker", "run")]
+    assert "-p" in runs[0] and "443" in runs[0]
     with pytest.raises(ToolValidationError, match="ports must look like"):
         execution.run_tool(
             operation.id,
@@ -687,7 +690,6 @@ def test_nmap_ports_and_profile_are_mutually_exclusive(tmp_path: Path) -> None:
             {"targets": ["example.com"], "ports": "70000"},
             approval_id=approval_id,
         )
-    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
 
     # a profile on its own is fine and maps to a fixed flag set
     execution.run_tool(
@@ -696,7 +698,8 @@ def test_nmap_ports_and_profile_are_mutually_exclusive(tmp_path: Path) -> None:
         {"targets": ["example.com"], "profile": "standard"},
         approval_id=approval_id,
     )
-    tool_args = tool_arguments(docker_run_argv(manager))
+    last = [call for call in manager.calls if call[:2] == ("docker", "run")][-1]
+    tool_args = tool_arguments(last)
     assert tool_args[tool_args.index("--top-ports") + 1] == "1000"
 
 
@@ -823,14 +826,21 @@ def test_ffuf_url_contract_is_fail_closed(tmp_path: Path) -> None:
             {"url": "https://evil-outside.com/FUZZ"},
             approval_id=approval_id,
         )
-    with pytest.raises(ToolValidationError, match="must be one of"):
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+    # any `.ext` is accepted: the closed enum made the model retry blindly
+    execution.run_tool(
+        operation.id,
+        "fuzz.ffuf",
+        {"url": "https://example.com/FUZZ", "extensions": [".jsp"]},
+        approval_id=approval_id,
+    )
+    with pytest.raises(ToolValidationError, match="must look like"):
         execution.run_tool(
             operation.id,
             "fuzz.ffuf",
-            {"url": "https://example.com/FUZZ", "extensions": [".jsp"]},
+            {"url": "https://example.com/FUZZ", "extensions": ["jsp"]},
             approval_id=approval_id,
         )
-    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
 
 
 def test_ffuf_reports_no_matches(tmp_path: Path) -> None:

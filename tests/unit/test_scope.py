@@ -141,3 +141,14 @@ def test_duplicate_rules_are_canonicalized() -> None:
     scope = ScopeContract(includes=("Example.com.", "example.com"))
 
     assert scope.includes == ("example.com",)
+
+
+def test_localhost_and_loopback_are_the_same_host() -> None:
+    """A model writes `localhost` for the port it just read; that is in scope."""
+    contract = ScopeContract(includes=("127.0.0.1",))
+    assert contract.evaluate("http://localhost:3000/").allowed
+    assert contract.evaluate("localhost").allowed
+    # and the rule may be written the other way round
+    assert ScopeContract(includes=("localhost",)).evaluate("http://127.0.0.1:8080").allowed
+    # an address is still not a domain
+    assert not ScopeContract(includes=("example.com",)).evaluate("10.0.0.1").allowed

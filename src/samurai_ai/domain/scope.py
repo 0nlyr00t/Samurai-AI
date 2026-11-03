@@ -17,6 +17,9 @@ _IPAddress = IPv4Address | IPv6Address
 _IPNetwork = IPv4Network | IPv6Network
 _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+# a model writes `localhost` for the loopback address it just read from `port`:
+# both spellings must mean the same host, or every local run trips the scope
+_LOOPBACK_ALIASES = {"localhost": "127.0.0.1", "ip6-localhost": "::1"}
 
 
 class ScopeValidationError(ValueError):
@@ -99,6 +102,7 @@ class ScopeContract(BaseModel):
                 detail=str(exc),
             )
 
+        target = _with_loopback_alias(target)
         for raw_rule in self.excludes:
             rule = _parse_rule(raw_rule)
             if _matches(rule, target):
@@ -127,6 +131,21 @@ class ScopeContract(BaseModel):
             target=target.text,
             detail="target does not match any inclusion rule",
         )
+
+
+def _with_loopback_alias(target: _Target) -> _Target:
+    """Treat `localhost` and `127.0.0.1` as the same host on both sides."""
+    alias = _LOOPBACK_ALIASES.get(target.host)
+    if alias is not None:
+        return _Target(
+            text=target.text.replace(target.host, alias),
+            host=alias,
+            is_url=target.is_url,
+            scheme=target.scheme,
+            port=target.port,
+            address=_address_of(alias),
+        )
+    return target
 
 
 def _normalize_rules(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -295,13 +314,16 @@ def _format_netloc(host: str, scheme: str, port: int) -> str:
 
 
 def _matches(rule: _Rule, target: _Target) -> bool:
+    rule_host = _LOOPBACK_ALIASES.get(rule.host or "", rule.host)
     if rule.kind == _RuleKind.DOMAIN:
-        return target.address is None and target.host == rule.host
+        # an IP rule and a URL host can meet through the loopback alias, so the
+        # comparison is on the host text, not on "is it an address"
+        return target.host == rule_host
     if rule.kind == _RuleKind.WILDCARD:
         # ``*.example.com`` covers the apex as well as every subdomain: a
         # program that publishes a wildcard means the bare domain too.
         return target.address is None and (
-            target.host == rule.host or target.host.endswith(f".{rule.host}")
+            target.host == rule_host or target.host.endswith(f".{rule_host}")
         )
     if rule.kind == _RuleKind.IP:
         return target.address == rule.address
@@ -315,6 +337,6 @@ def _matches(rule: _Rule, target: _Target) -> bool:
     return (
         target.is_url
         and target.scheme == rule.scheme
-        and target.host == rule.host
+        and target.host == rule_host
         and target.port == rule.port
     )
