@@ -326,7 +326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             access_service.require(
                 _path,
                 access_service.operation_role(
-                    getattr(args, "operation_id", None), _path
+                    _operation_id_of(args, kernel_service), _path
                 ),
             )
         except AccessError as exc:
@@ -617,6 +617,36 @@ def _handle_operation(
 _OPEN_COMMANDS = frozenset({"update", "auth", "role"})
 #: Set once in `main` so handlers outside the service wiring can reach identity.
 _ACCESS: AccessService | None = None
+
+
+_OPERATION_ID_FIELDS = ("finding_id", "finding_ids", "artifact_id")
+
+
+def _operation_id_of(args: argparse.Namespace, kernel: KernelService) -> str | None:
+    """The operation a command belongs to, from args or from the id it addresses.
+
+    Commands that name a finding or an artifact carry no operation, so the owner's
+    policy would be bypassed by `finding show <id>`. An id that resolves to
+    nothing (a typo) yields no operation: the global floor applies and the handler
+    reports the id as unknown, which reads better than a denial.
+    """
+    direct = getattr(args, "operation_id", None)
+    if direct:
+        return str(direct)
+    for field in _OPERATION_ID_FIELDS:
+        value = getattr(args, field, None)
+        if not value:
+            continue
+        for item in value if isinstance(value, list) else [value]:
+            if field == "artifact_id":
+                artifact = kernel.kernel.get_artifact(str(item))
+                if artifact is not None:
+                    return str(artifact.operation_id)
+                continue
+            finding = kernel.kernel.get_finding(str(item))
+            if finding is not None:
+                return str(finding.operation_id)
+    return None
 
 
 def _command_path(args: argparse.Namespace) -> str:
