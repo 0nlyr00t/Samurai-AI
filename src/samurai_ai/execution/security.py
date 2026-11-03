@@ -934,7 +934,7 @@ class FfufFuzzTool(_ScopedSandboxTool):
                         # guesses; any `.ext` is fine, ffuf takes them as text
                         "items": {
                             "type": "string",
-                            "pattern": r"^\.[a-z0-9]{1,8}$",
+                            "pattern": r"^\.?[a-z0-9]{1,8}$",
                         },
                         "maxItems": 8,
                     },
@@ -973,7 +973,11 @@ class FfufFuzzTool(_ScopedSandboxTool):
     _EXTENSION = re.compile(r"\.[a-z0-9]{1,8}\Z")
 
     def _validated_extensions(self, params: dict[str, Any]) -> list[str]:
-        extensions = [str(item) for item in params.get("extensions") or ()]
+        # a model writes `html` as often as `.html`; the dot is not worth a retry
+        extensions = [
+            item if item.startswith(".") else f".{item}"
+            for item in (str(value) for value in params.get("extensions") or ())
+        ]
         for item in extensions:
             if not self._EXTENSION.match(item):
                 raise ToolValidationError(
