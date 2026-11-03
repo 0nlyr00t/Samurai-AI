@@ -78,15 +78,25 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
         )
 
     async def work(handle: RunHandle) -> None:
-        await asyncio.to_thread(
-            swarm_service.start,
-            handle.operation_id,
-            handle.task_ids,
-            handle.route,
-            created_by=handle.created_by,
-            approval_resolver=(lambda _approval_id: True),
-            stop_event=handle.stop_event,
-        )
+        """Work the plan: each swarm only reaches the tasks ready when it starts."""
+        while not handle.stop_event.is_set():
+            candidates = swarm_service.ready_tasks(handle.operation_id)
+            ready = [
+                task
+                for task in candidates
+                if handle.task_ids is None or task.id in set(handle.task_ids)
+            ]
+            if not ready:
+                return
+            await asyncio.to_thread(
+                swarm_service.start,
+                handle.operation_id,
+                [task.id for task in ready],
+                handle.route,
+                created_by=handle.created_by,
+                approval_resolver=(lambda _approval_id: True),
+                stop_event=handle.stop_event,
+            )
 
     runs = RunRegistry(work, journal)
 
