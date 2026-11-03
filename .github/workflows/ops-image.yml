@@ -1,15 +1,16 @@
 name: ops-image
 
-# The operational toolbelt is only useful to an operator on another machine if
-# the image comes from a registry, so this builds it for both architectures,
-# pushes it, proves the published digest resolves, and opens a PR that pins it.
-# The pin stays a human decision: the digest decides what runs on a target.
+# The operation belts are only useful to an operator on another machine if the
+# images come from a registry, so this builds both of them for both
+# architectures, pushes them, proves the published digests resolve, and opens a
+# PR that pins them. The pin stays a human decision: the digest decides what
+# runs on a target.
 
 on:
   push:
     branches: [main]
     paths:
-      - "packaging/sandbox/ops/**"
+      - "packaging/sandbox/**"
       - ".github/workflows/ops-image.yml"
   workflow_dispatch:
 
@@ -25,8 +26,10 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
+    strategy:
+      fail-fast: false
+      matrix:
+        belt: [remote, exploit]
     steps:
       - uses: actions/checkout@v7
 
@@ -47,25 +50,27 @@ jobs:
         id: push
         uses: docker/build-push-action@v6
         with:
-          context: packaging/sandbox/ops
+          context: packaging/sandbox/${{ matrix.belt }}
           platforms: linux/amd64,linux/arm64
-          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/samurai-ops,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/samurai-${{ matrix.belt }},push-by-digest=true,name-canonical=true,push=true
           provenance: true
 
       - name: Prove the published digest resolves
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
+          BELT: ${{ matrix.belt }}
         run: |
-          image="ghcr.io/${{ github.repository_owner }}/samurai-ops@${DIGEST}"
+          image="ghcr.io/${{ github.repository_owner }}/samurai-${BELT}@${DIGEST}"
           echo "published $image"
           docker buildx imagetools inspect "$image"
+          printf '%s\n' "$DIGEST" > "${RUNNER_TEMP}/digest-${BELT}.txt"
 
       - name: Make the package public
         env:
-          DIGEST: ${{ steps.push.outputs.digest }}
+          BELT: ${{ matrix.belt }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          package="samurai-ops"
+          package="samurai-${BELT}"
           if curl -fsS -X PUT \
             -H "Authorization: Bearer ${TOKEN}" \
             -H "Accept: application/vnd.github+json" \
@@ -76,62 +81,80 @@ jobs:
             echo "::warning::could not set ${package} to public — do it once in the package settings"
           fi
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.belt }}
+          path: ${{ runner.temp }}/digest-${{ matrix.belt }}.txt
+
   pin:
     needs: publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Pin the digest in the ops profile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: ${{ runner.temp }}/digests
+
+      - name: Pin the digests in the belt profiles
         env:
-          DIGEST: ${{ needs.publish.outputs.digest }}
-          IMAGE: ghcr.io/${{ github.repository_owner }}/samurai-ops
+          OWNER: ${{ github.repository_owner }}
         run: |
-          # the profile pins registry references (repo@digest), never a bare image
+          # the profiles pin registry references (repo@digest), never a bare image
           # id: an index digest is not the local image id, so a bare sha256 would
           # only ever match a local build
-          python3 - "$IMAGE@$DIGEST" <<'PY'
+          python3 - "$OWNER" "$RUNNER_TEMP/digests" <<'PY'
           import pathlib, re, sys
 
-          reference = sys.argv[1]
+          owner, directory = sys.argv[1], pathlib.Path(sys.argv[2])
           path = pathlib.Path("src/samurai_ai/execution/sandbox.py")
           text = path.read_text()
-          pattern = re.compile(
-              r'(sandbox\.ops@v1".*?image=)"(?:sha256:[0-9a-f]{64}|[^"]*@sha256:[0-9a-f]{64})"',
-              re.S,
-          )
-          if not pattern.search(text):
-              sys.exit("ops profile image not found")
-          path.write_text(pattern.sub(rf'\1"{reference}"', text, count=1))
-          print(f"pinned {reference}")
+          for belt in ("remote", "exploit"):
+              digest = (directory / f"digest-{belt}.txt").read_text().strip()
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                  sys.exit(f"{belt}: not a digest: {digest!r}")
+              pattern = re.compile(
+                  rf'(sandbox\.{belt}@v1".*?image=)"'
+                  r'(?:sha256:[0-9a-f]{64}|[^"]*@sha256:[0-9a-f]{64})"',
+                  re.S,
+              )
+              if not pattern.search(text):
+                  sys.exit(f"{belt}: profile image not found")
+              text = pattern.sub(
+                  rf'\1"ghcr.io/{owner}/samurai-{belt}@{digest}"', text, count=1
+              )
+              print(f"pinned {belt} {digest}")
+          path.write_text(text)
           PY
 
       - name: Open the pin pull request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DIGEST: ${{ needs.publish.outputs.digest }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           branch="ops-image-pin"
-          image="ghcr.io/${{ github.repository_owner }}/samurai-ops@${DIGEST}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
-          git commit -am "ops: pin the published toolbelt image"
+          git commit -am "ops: pin the published belt images"
           git push --force origin "$branch"
-          cat > /tmp/body.md <<EOF
-          ## Summary
-
-          The toolbelt was rebuilt and published, so the profile must point at the new index digest.
-
-          \`${image}\`
-
-          Digests come from the registry index (multi-arch), and the build step pulled the published digest back to prove it resolves. Warnings stay warnings: old or broken digests here are a delivery problem, not a provenance one.
-
-          ## Testing
-
-          - workflow \`ops-image\`: multi-arch build, push, \`buildx imagetools inspect\` on the published digest
-          - CI on this PR: full suite, ruff, strict mypy
-          EOF
+          {
+            echo "## Summary"
+            echo
+            echo "Both belts were rebuilt and published, so the profiles must point at the new index digests:"
+            echo
+            for belt in remote exploit; do
+              echo "- \`ghcr.io/${OWNER}/samurai-${belt}@$(cat "$RUNNER_TEMP/digests/digest-${belt}.txt")\`"
+            done
+            echo
+            echo "Digests come from the registry index (multi-arch), and the build step inspected the published digest to prove it resolves."
+            echo
+            echo "## Testing"
+            echo
+            echo "- workflow \`ops-image\`: multi-arch build of both belts, push, \`buildx imagetools inspect\` on each published digest"
+            echo "- CI on this PR: full suite, ruff, strict mypy"
+          } > /tmp/body.md
           # a previously merged pin PR keeps the branch name, so the check must
           # look for an *open* one — otherwise the new digest lands on a branch
           # no open PR points at
@@ -140,7 +163,7 @@ jobs:
             gh pr edit "$open_pr" --body-file /tmp/body.md
             echo "updated the open pin PR $open_pr"
           elif gh pr create --base main --head "$branch" \
-            --title "ops: pin the published toolbelt image" --body-file /tmp/body.md; then
+            --title "ops: pin the published belt images" --body-file /tmp/body.md; then
             echo "opened the pin PR"
           else
             # the repo needs "Allow GitHub Actions to create pull requests"; without

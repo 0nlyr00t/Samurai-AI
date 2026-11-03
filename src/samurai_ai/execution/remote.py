@@ -55,7 +55,7 @@ raise SystemExit(subprocess.call(argv))
 class _RemoteTool(_ScopedSandboxTool):
     """A tool that needs a raw TCP connection to one in-scope host."""
 
-    profile_id = "sandbox.ops@v1"
+    profile_id = "sandbox.remote@v1"
     executable = "python3"
     default_port = 22
 

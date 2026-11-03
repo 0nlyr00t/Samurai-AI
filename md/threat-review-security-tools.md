@@ -227,10 +227,13 @@ vault placeholders.
 1. Запрещено всё, что не прошло `scope.evaluate` и не резолвится; исключённые
    адреса тоже отказ.
 2. Туннель живёт только на один запуск и закрывается после него.
-3. Белт — собственный образ `packaging/sandbox/ops` (база по digest): ssh,
-   smbclient, impacket, xfreerdp, adb, pwntools, gcc, gdb, nmap, socat. Свой
-   образ нельзя запушить без прав на реестр, поэтому профиль пиннится локальным
-   id `sha256:…`, а пересборка требует перепина (валидатор научен обоим видам).
+3. Белт разложен на два образа по назначению: `packaging/sandbox/remote`
+   (ssh, smbclient, xfreerdp, adb, nmap, curl, jq) и `packaging/sandbox/exploit`
+   (gcc, gdb, checksec, ROPgadget, pwntools, impacket). Разделение — про радиус
+   поражения: админ-сессия не тащит компилятор и отладчик, а сессия эксплойта не
+   держит в контейнере ssh-ключи и smb-креды. База у обоих по digest, набор
+   ставится из apt (без pip и `--break-system-packages`), доки и man вычищаются.
+   Образы собирает и публикует CI по digest индекса, пин приходит PR-ом.
 4. Драйверы — текстом в `python3 -c`; ключи приходят из vault плейсхолдером и
    живут в tmpfs с правами 0600.
 5. VM и эмуляторы — хостовые бинари (`VBoxManage`, `virsh`, `qemu-img`, `adb`)
