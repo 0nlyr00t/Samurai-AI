@@ -35,6 +35,9 @@ from samurai_ai.execution.egress import (
 from samurai_ai.execution.process import ProcessManager, ProcessResult
 
 DOCKER_EXECUTABLE = "docker"
+#: Escape hatch for VPN subnets a bridge cannot route to: host networking skips
+#: our proxy, so the adapter's own scope check is what stands in front.
+NETWORK_OVERRIDE_ENV = "SAMURAI_SANDBOX_NETWORK"
 _DOCKER_PROBE_TIMEOUT = 5.0
 _TIMEOUT_GRACE_SECONDS = 10.0
 _MAX_SECRET_ENV_BYTES = 8192
@@ -422,8 +425,12 @@ class DockerSandboxRunner:
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
         hosts: dict[str, str] | None = None,
+        network: str | None = None,
     ) -> list[str]:
         self.validate_invocation(profile, executable, args)
+        mode = network or _forced_network() or profile.network_mode
+        if mode not in ("none", "scoped", "direct", "host"):
+            raise SandboxError(f"unknown network mode {mode!r}")
         if secret_env:
             self.validate_secret_env(profile, secret_env)
         argv = [
@@ -438,7 +445,7 @@ class DockerSandboxRunner:
         # gets a name the sandbox DNS does not know
         for name, address in sorted((hosts or {}).items()):
             argv += ["--add-host", f"{name}:{address}"]
-        if profile.network_mode == "scoped":
+        if mode == "scoped":
             if proxy_url is None:
                 raise SandboxError(
                     f"sandbox profile {profile.id} requires a scoped egress proxy"
@@ -457,8 +464,8 @@ class DockerSandboxRunner:
                 "--env",
                 "NO_PROXY=",
             ]
-        elif profile.network_mode == "none":
-            argv += ["--network", "none"]
+        elif mode in ("none", "host"):
+            argv += ["--network", mode]
         # "direct": bridge networking as-is, no proxy of ours in the path.
         for name, value in (env or {}).items():
             argv += ["--env", f"{name}={value}"]
@@ -599,10 +606,12 @@ class DockerSandboxRunner:
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
         stdin_data: bytes | None = None,
+        network: str | None = None,
     ) -> SandboxRunOutcome:
         return asyncio.run(
             self._run(
-                profile, run_id, executable, args, scope, env, secret_env, stdin_data
+                profile, run_id, executable, args, scope, env, secret_env,
+                stdin_data, network,
             )
         )
 
@@ -617,13 +626,15 @@ class DockerSandboxRunner:
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
         stdin_data: bytes | None = None,
+        network: str | None = None,
     ) -> SandboxRunOutcome:
         """Same as `run`, for callers that already own an event loop.
 
         A tunnel or a watcher can then live in the same loop as the process.
         """
         return await self._run(
-            profile, run_id, executable, args, scope, env, secret_env, stdin_data
+            profile, run_id, executable, args, scope, env, secret_env,
+            stdin_data, network,
         )
 
     async def _run(
@@ -636,10 +647,12 @@ class DockerSandboxRunner:
         env: dict[str, str] | None = None,
         secret_env: dict[str, str] | None = None,
         stdin_data: bytes | None = None,
+        network: str | None = None,
     ) -> SandboxRunOutcome:
         proxy: EgressProxy | None = None
         proxy_url: str | None = None
-        if profile.network_mode == "scoped":
+        mode = network or _forced_network() or profile.network_mode
+        if mode == "scoped":
             if scope is None:
                 raise SandboxError(
                     f"sandbox profile {profile.id} requires the operation scope"
@@ -667,6 +680,7 @@ class DockerSandboxRunner:
             env,
             secret_env,
             hosts=scope.hosts if scope is not None else None,
+            network=network,
         )
         await self.preflight(profile)
         # the watcher is per profile: nmap and a browser legitimately go quiet
@@ -746,3 +760,13 @@ __all__ = [
     "get_profile",
     "sign_allowlist",
 ]
+
+
+def _forced_network() -> str | None:
+    """Operator override, for networks a bridge container cannot route to."""
+    value = os.environ.get(NETWORK_OVERRIDE_ENV, "").strip()
+    if value and value not in ("none", "scoped", "direct", "host"):
+        raise SandboxError(
+            f"{NETWORK_OVERRIDE_ENV} must be one of none/scoped/direct/host: {value!r}"
+        )
+    return value or None
