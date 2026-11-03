@@ -27,11 +27,14 @@ RUN apt-get update \
         nmap \
         iproute2 \
         dnsutils \
+        ncurses-base \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir --break-system-packages impacket==0.12.0
 
-# no interactive history, no default key prompts
-ENV PYTHONUNBUFFERED=1
+# pwntools reaches for curses; there is no real terminal here, and a dumb one
+# keeps it from warning on every import
+ENV PYTHONUNBUFFERED=1 \
+    TERM=dumb
 WORKDIR /work
