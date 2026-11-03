@@ -246,8 +246,8 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         id="sandbox.ops@v1",
         description="Operational toolbelt (ssh, smbclient, impacket, xfreerdp, "
         "adb, pwntools, gcc) behind the scoped proxy",
-        # locally built from packaging/sandbox/ops; a rebuild changes the id, so
-        # re-pin here after a rebuild
+        # built from packaging/sandbox/ops and published by ci as a multi-arch
+        # index; the pin comes as a pull request, never by hand
         image="sha256:c315d87c28f2d8dfe3a85c934aa1059e5b3cb19c63085fbf3173f38dab47657f",
         allowed_executables=(
             "ssh",
