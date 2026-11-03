@@ -85,18 +85,25 @@ jobs:
       - name: Pin the digest in the ops profile
         env:
           DIGEST: ${{ needs.publish.outputs.digest }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/samurai-ops
         run: |
-          python3 - "$DIGEST" <<'PY'
+          # the profile pins registry references (repo@digest), never a bare image
+          # id: an index digest is not the local image id, so a bare sha256 would
+          # only ever match a local build
+          python3 - "$IMAGE@$DIGEST" <<'PY'
           import pathlib, re, sys
 
-          digest = sys.argv[1]
+          reference = sys.argv[1]
           path = pathlib.Path("src/samurai_ai/execution/sandbox.py")
           text = path.read_text()
-          pattern = re.compile(r'(sandbox\.ops@v1".*?image=)"sha256:[0-9a-f]{64}"', re.S)
+          pattern = re.compile(
+              r'(sandbox\.ops@v1".*?image=)"(?:sha256:[0-9a-f]{64}|[^"]*@sha256:[0-9a-f]{64})"',
+              re.S,
+          )
           if not pattern.search(text):
               sys.exit("ops profile image not found")
-          path.write_text(pattern.sub(rf'\1"{digest}"', text, count=1))
-          print(f"pinned {digest}")
+          path.write_text(pattern.sub(rf'\1"{reference}"', text, count=1))
+          print(f"pinned {reference}")
           PY
 
       - name: Open the pin pull request
