@@ -37,6 +37,12 @@ def register_agent_commands(
     run.add_argument("--max-steps", dest="max_steps", type=int, default=8)
     run.add_argument("--approval-id", dest="approval_id")
     run.add_argument(
+        "--auto-approve",
+        dest="auto_approve",
+        action="store_true",
+        help="approve every tool call in place — for unattended runs",
+    )
+    run.add_argument(
         "--workspace",
         dest="workspace",
         default=None,
@@ -80,6 +86,11 @@ def register_agent_commands(
         metavar="ID=TEXT",
         help="free-form answer for one question; repeatable",
     )
+
+
+def _always_approve(_approval_id: str) -> bool:
+    """An unattended run has nobody to click; the operator said so up front."""
+    return True
 
 
 def _wall_deadline(settings: Any | None) -> float | None:
@@ -181,6 +192,9 @@ def handle_agent_command(
                 approval_id=args.approval_id,
                 workspace=args.workspace,
                 skill_names=tuple(args.skills),
+                approval_resolver=(
+                    _always_approve if args.auto_approve else None
+                ),
             )
         except ApprovalRequiredError as exc:
             print(

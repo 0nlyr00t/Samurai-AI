@@ -272,3 +272,34 @@ def test_a_setting_caps_the_run_deadline(tmp_path: Path, capsys) -> None:
     assert _wall_deadline(Settings("0")) is None
     assert _wall_deadline(Settings("nonsense")) is None
     assert _wall_deadline(Settings("120")) == 120.0
+
+
+def test_auto_approve_runs_a_tool_without_a_pre_granted_approval(
+    home: Path, capsys, llm_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unattended runs have nobody to click: the flag approves in place."""
+    database = str(home / "auto.db")
+    operation_id = setup_operation(database, llm_server, capsys, monkeypatch)
+    # the tool's own approval never happens, yet the run keeps the result
+    RESPONSES.extend(
+        [
+            '{"steps": ["s"]}',
+            '{"commands": [{"type": "request_tool_run", "tool_id": "local.echo",'
+            ' "params": {"text": "unattended"}}, {"type": "complete_task"}]}',
+        ]
+    )
+    assert (
+        main(
+            [
+                "--db", database, "agent", "run", operation_id, "probe",
+                "--model", "fake/agent@v1", "--auto-approve",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "completed" in out
+    # the tool really ran, and no approval event was needed on the way
+    assert main(["--db", database, "--json", "agent", "list", operation_id]) == 0
+    runs = json.loads(capsys.readouterr().out)
+    assert runs and runs[-1]["status"] == "completed"
