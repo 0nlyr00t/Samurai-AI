@@ -104,7 +104,7 @@ bare standalone binary). ADB и VBoxManage проверены только mock-
 - `samurai sandbox verify` — сходится ли подпись профилей, без записи.
 - `samurai report generate <op> --min-impact 3` — не выпускать отчёт по находкам ниже порога импакта.
 - `samurai policy set|list|rm <op>` — поднять роль, нужную для команды внутри одной операции (только ужесточение, владелец).
-- Образ операционного белта публикуется из CI (`ghcr.io/<owner>/samurai-ops`, amd64+arm64, по digest индекса); локально — `packaging/sandbox/ops/build.sh`. Пакет в GHCR один раз переключается в public вручную: токен `GITHUB_TOKEN` не даёт менять видимость.
+- Образ операционного белта публикуется из CI (`ghcr.io/<owner>/samurai-ops`, amd64+arm64, по digest индекса); локально — `packaging/sandbox/ops/build.sh`. Пакет в GHCR один раз переключается в public вручную: токен `GITHUB_TOKEN` не даёт менять видимость, а `pull` из закрытого пакета требует `docker login ghcr.io` с токеном, у которого есть `read:packages`. PR с пином от бота требует approve прогона проверок (PR создан `GITHUB_TOKEN`).
 
 
 ## Установка
@@ -123,6 +123,10 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh
 samurai update          # проверить и обновить
 samurai update --check  # только проверить наличие новой версии
 ```
+
+После обновления набор sandbox-профилей мог измениться: `samurai sandbox verify`
+(0 — подпись валидна), при расхождении — `samurai sandbox sign`. Первый запуск
+sandbox-инструмента переподпишет набор сам и скажет об этом.
 
 Состояние — база, ключ vault, темы и биндинги — лежит в `~/.config/samurai`
 (`$XDG_CONFIG_HOME`, переопределяется `SAMURAI_HOME`). Если рядом осталась старая
