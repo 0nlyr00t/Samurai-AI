@@ -21,6 +21,12 @@ def register_report_commands(
         "--format", choices=[item.value for item in ReportFormat], default="markdown"
     )
     generate.add_argument("--actor", default="operator")
+    generate.add_argument(
+        "--min-impact",
+        type=int,
+        default=None,
+        help="refuse when a validated finding is below this impact level (points)",
+    )
     listing = report_commands.add_parser("list", help="List reports of an operation")
     listing.add_argument("operation_id")
     show = report_commands.add_parser("show", help="Show report metadata and content")
@@ -45,7 +51,10 @@ def handle_report_command(
         return None
     if args.report_command == "generate":
         report = reports.generate(
-            args.operation_id, ReportFormat(args.format), created_by=args.actor
+            args.operation_id,
+            ReportFormat(args.format),
+            created_by=args.actor,
+            min_impact_points=args.min_impact,
         )
         _emit(report, args.json_output)
         return 0

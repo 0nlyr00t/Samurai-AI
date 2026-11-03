@@ -245,3 +245,23 @@ def test_a_report_shows_the_graded_impact(tmp_path: Path) -> None:
     report = stack.reports.generate(operation.id)
     text = (tmp_path / report.path).read_text(encoding="utf-8")
     assert "impact: auth-bypass (3 points, reportable)" in text
+
+
+def test_a_threshold_refuses_a_low_impact_report(tmp_path: Path) -> None:
+    from samurai_ai.domain.impact import ImpactLevel
+    from samurai_ai.services.impact import ImpactService
+
+    stack = Stack(tmp_path / "impact-threshold.db")
+    impact = ImpactService(stack.operations, stack.kernel)
+    stack.reports.impact = impact
+    operation = make_operation(stack)
+    finding_id = add_validated_finding(stack, operation.id)
+    artifact = stack.kernel.get_finding_by_id(finding_id).evidence_ids[0]
+    drive_to_verification(stack, operation.id)
+    impact.record(finding_id, ImpactLevel.READ, (artifact,))
+
+    with pytest.raises(ReportStateError, match="impact below 3 points"):
+        stack.reports.generate(operation.id, min_impact_points=3)
+
+    impact.record(finding_id, ImpactLevel.AUTH_BYPASS, (artifact,), rollback="undo")
+    assert stack.reports.generate(operation.id, min_impact_points=3) is not None

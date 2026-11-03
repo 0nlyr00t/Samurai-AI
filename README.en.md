@@ -104,6 +104,7 @@ available).
 - `samurai rules list|add|rm` — argument-level `allow|ask|deny` rules.
 - `samurai tool install <file> --trusted` and `tool manifests` — tools as manifests, an edit after install shows as `tampered`.
 - `samurai sandbox verify` — whether the profile signature matches, without writing.
+- `samurai report generate <op> --min-impact 3` — refuse a report when a finding is below the impact threshold.
 
 
 ## Installation
