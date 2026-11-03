@@ -128,7 +128,11 @@ jobs:
           if gh pr view "$branch" --json number >/dev/null 2>&1; then
             gh pr edit "$branch" --body-file /tmp/body.md
             echo "updated the open pin PR"
+          elif gh pr create --base main --head "$branch" \
+            --title "ops: pin the published toolbelt image" --body-file /tmp/body.md; then
+            echo "opened the pin PR"
           else
-            gh pr create --base main --head "$branch" \
-              --title "ops: pin the published toolbelt image" --body-file /tmp/body.md
+            # the repo needs "Allow GitHub Actions to create pull requests"; without
+            # it the branch is still pushed and the pin is one click away
+            echo "::warning::could not open the pin PR; compare: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1"
           fi
