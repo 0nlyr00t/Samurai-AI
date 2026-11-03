@@ -49,6 +49,7 @@ from samurai_ai.domain.execution import (
     ToolExecutionError,
     ToolNotFoundError,
 )
+from samurai_ai.domain.genes import GeneStatus
 from samurai_ai.domain.kernel import (
     ArtifactError,
     FindingSeverity,
@@ -59,6 +60,7 @@ from samurai_ai.domain.models import CapabilityError, ModelCapability, ModelErro
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.services.execution import ToolExecutionService
+from samurai_ai.services.genes import GeneService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -154,6 +156,7 @@ class AgentOrchestrator:
         redactor: SecretRedactor | None = None,
         memory: CampaignMemoryService | None = None,
         skills: SkillService | None = None,
+        genes: GeneService | None = None,
     ) -> None:
         self.models = models
         self.kernel = kernel
@@ -163,6 +166,7 @@ class AgentOrchestrator:
         self.redactor = redactor or SecretRedactor()
         self.memory = memory
         self.skills = skills
+        self.genes = genes
 
     def get_run(self, run_id: str) -> AgentRun:
         run = self.runs.get(run_id)
@@ -657,6 +661,7 @@ class AgentOrchestrator:
         blackboard = Blackboard.from_events(self.operations.events(operation_id))
         prompt = (
             f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
+            f"{self._genes_excerpt()}"
             f"{self._tools_excerpt()}\n"
             f"{rejection_notes}"
             f"Current step: {step}\n"
@@ -895,6 +900,20 @@ class AgentOrchestrator:
             "agent.run.finish",
             {"run_id": run.id, "status": status.value, "reason": reason},
         )
+
+    def _genes_excerpt(self) -> str:
+        """Active genes are the evolved part of the prompt, above the tools.
+
+        Only `active` genes get here: `shadow` ones exist but prove nothing yet.
+        """
+        if self.genes is None:
+            return ""
+        blocks = [
+            f"- [{gene.slot}] {gene.body}" for gene in self.genes.list_genes(GeneStatus.ACTIVE)
+        ]
+        if not blocks:
+            return ""
+        return "[evolved hints]\n" + "\n".join(blocks) + "\n\n"
 
     def _tools_excerpt(self) -> str:
         lines = [

@@ -705,3 +705,35 @@ def test_the_wall_deadline_ends_a_slow_run(
         if event.event_type == "agent.run.finish"
     ]
     assert finished and "deadline" in finished[-1]["reason"]
+
+
+def test_active_genes_reach_the_executor_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.config import genes_path
+    from samurai_ai.services.genes import GeneService, GeneStore
+
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    genes = GeneService(GeneStore(genes_path()))
+    active = genes.create("planner", "prompt-block", "Hint", "check the robots.txt first")
+    genes.record_fitness(active.id, samples=3, median_solve_rate=0.9)
+    genes.promote(active.id)
+    shadow = genes.create("planner", "prompt-block", "Other", "a shadow hint")
+    _ = shadow
+    orchestrator.genes = genes
+
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+    orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    prompts = [
+        message.content for message in fake.requests[-1].messages if message.role == "user"
+    ]
+    joined = "\n".join(prompts)
+    assert "check the robots.txt first" in joined
+    assert "a shadow hint" not in joined

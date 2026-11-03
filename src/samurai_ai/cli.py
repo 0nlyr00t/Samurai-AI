@@ -33,7 +33,7 @@ from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_team import handle_team_command
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
-from samurai_ai.config import default_database_path, vault_key_path
+from samurai_ai.config import default_database_path, genes_path, vault_key_path
 from samurai_ai.domain.access import AccessError, Principal, Role
 from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
 from samurai_ai.domain.ctf import (
@@ -82,7 +82,9 @@ from samurai_ai.services.access import AccessService
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.exports import IntegrationExportService
+from samurai_ai.services.genes import GeneService, GeneStore
 from samurai_ai.services.goals import GoalNotFoundError, GoalService
+from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.mcp import McpService
 from samurai_ai.services.memory import CampaignMemoryService
@@ -349,7 +351,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if recovery_result is not None:
             return recovery_result
-        kernel_result = handle_kernel_command(args, kernel_service)
+        impact_service = ImpactService(operation_service, kernel_service)
+        kernel_result = handle_kernel_command(args, kernel_service, impact_service)
         if kernel_result is not None:
             return kernel_result
         execution_result = handle_execution_command(args, execution_service, settings_service)
@@ -664,6 +667,7 @@ def _make_services(
         AgentRunRepository(database),
         memory=memory_service,
         skills=skill_service,
+        genes=GeneService(GeneStore(genes_path())),
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
     reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)

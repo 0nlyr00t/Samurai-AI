@@ -110,6 +110,7 @@ _MINIMUM: dict[str, Role] = {
     "task": Role.OPERATOR,
     "task.list": Role.VIEWER,
     "finding": Role.OPERATOR,
+    "finding.impact": Role.OPERATOR,
     "finding.list": Role.VIEWER,
     "finding.show": Role.VIEWER,
     "report": Role.OPERATOR,

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
+from samurai_ai.domain.impact import ImpactError, ImpactLevel
 from samurai_ai.domain.kernel import (
     Approval,
     ApprovalStatus,
@@ -16,6 +18,7 @@ from samurai_ai.domain.kernel import (
     RiskClass,
     StageGate,
 )
+from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import KernelService
 
 
@@ -95,6 +98,27 @@ def register_kernel_commands(
     )
     finding_duplicate.add_argument("finding_id")
     finding_duplicate.add_argument("original_id")
+    finding_impact = finding_commands.add_parser(
+        "impact", help="Escalate and grade the impact of a validated finding"
+    )
+    impact_commands = finding_impact.add_subparsers(
+        dest="impact_command", required=True
+    )
+    impact_attempt = impact_commands.add_parser(
+        "attempt", help="Record an escalation attempt"
+    )
+    impact_attempt.add_argument("finding_id")
+    impact_attempt.add_argument(
+        "level", choices=[level.value for level in ImpactLevel]
+    )
+    impact_attempt.add_argument(
+        "--evidence", action="append", required=True, help="traffic pair or artifact id"
+    )
+    impact_attempt.add_argument("--rollback", default="")
+    impact_attempt.add_argument("--refuted", action="store_true")
+    impact_attempt.add_argument("--requests", type=int, default=1)
+    impact_grade = impact_commands.add_parser("grade", help="Show the graded impact")
+    impact_grade.add_argument("finding_id")
     finding_propose = finding_commands.add_parser(
         "propose", help="Propose a finding with dedup against the playbook ledger"
     )
@@ -132,7 +156,11 @@ def register_kernel_commands(
     approval_reject.add_argument("--actor", default="operator")
 
 
-def handle_kernel_command(args: argparse.Namespace, kernel: KernelService) -> int | None:
+def handle_kernel_command(
+    args: argparse.Namespace,
+    kernel: KernelService,
+    impact: ImpactService | None = None,
+) -> int | None:
     if args.command == "plan":
         return _handle_plan(args, kernel)
     if args.command == "task":
@@ -149,6 +177,11 @@ def handle_kernel_command(args: argparse.Namespace, kernel: KernelService) -> in
     if args.command == "artifact":
         return _handle_artifact(args, kernel)
     if args.command == "finding":
+        if args.finding_command == "impact":
+            if impact is None:
+                print("impact needs the escalation service", file=sys.stderr)
+                return 2
+            return _handle_impact(args, impact)
         if args.finding_command == "propose":
             return None
         return _handle_finding(args, kernel)
@@ -243,6 +276,37 @@ def _handle_finding(args: argparse.Namespace, kernel: KernelService) -> int:
     else:
         finding = kernel.mark_duplicate(args.finding_id, args.original_id)
     _emit(finding, args.json_output)
+    return 0
+
+
+def _handle_impact(args: argparse.Namespace, impact: ImpactService) -> int:
+    try:
+        if args.impact_command == "grade":
+            state = impact.grade(args.finding_id)
+            level = state.level.value if state.level else "-"
+            nxt = state.next_level()
+            print(
+                f"{state.finding_id}\tlevel={level}\tpoints={state.points}\t"
+                f"reportable={'yes' if state.reportable else 'no'}\t"
+                f"attempts={state.budget.attempts}/{state.budget.max_attempts}\t"
+                f"next={nxt.value if nxt else '-'}"
+            )
+            return 0
+        state = impact.record(
+            args.finding_id,
+            args.level,
+            tuple(args.evidence),
+            rollback=args.rollback,
+            outcome="refuted" if args.refuted else "confirmed",
+            requests=args.requests,
+        )
+    except ImpactError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"{state.finding_id}\tlevel={state.level.value if state.level else '-'}\t"
+        f"points={state.points}\tattempts={state.budget.attempts}"
+    )
     return 0
 
 
