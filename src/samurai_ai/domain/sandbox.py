@@ -52,6 +52,9 @@ class SandboxProfile(BaseModel):
     memory_mb: int = Field(default=256, ge=16)
     pids_limit: int = Field(default=128, ge=16)
     timeout_seconds: int = Field(default=60, ge=1)
+    #: kill the tool after this long without new output (0 disables). Scanners
+    #: and browsers stay quiet for minutes, so this is per profile.
+    stall_seconds: int = Field(default=120, ge=0)
     max_output_bytes: int = Field(default=65536, ge=1)
     network_mode: str = "none"
     #: container UID:GID; the default drops to nobody, a browser needs root to

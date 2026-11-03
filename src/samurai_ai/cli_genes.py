@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
 from samurai_ai.config import genes_path
 from samurai_ai.domain.genes import GeneError, GeneGateError, GeneKind, GeneStatus
@@ -26,14 +28,27 @@ def register_gene_commands(
     )
     fitness = commands.add_parser("fitness", help="Record eval fitness for a gene")
     fitness.add_argument("gene_id")
-    fitness.add_argument("--samples", type=int, required=True)
-    fitness.add_argument("--solve-rate", type=float, required=True)
+    fitness.add_argument("--samples", type=int)
+    fitness.add_argument("--solve-rate", type=float)
+    fitness.add_argument("--report", type=Path, help="eval report JSON to read medians from")
     fitness.add_argument("--invalid-actions", type=float, default=0.0)
     fitness.add_argument("--cost-usd", type=float, default=0.0)
     promote = commands.add_parser("promote", help="Pass the gate and activate a gene")
     promote.add_argument("gene_id")
     rollback = commands.add_parser("rollback", help="Retire the active gene, restore previous")
     rollback.add_argument("slot")
+
+
+def _fitness_from_report(path: Path) -> tuple[int, float, float, float]:
+    """Read a suite report into fitness: repeats are the sample count."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    aggregate = raw.get("aggregate") or {}
+    config = raw.get("config") or {}
+    samples = int(config.get("repeats") or 1) * len(raw.get("results") or [])
+    solve = float(aggregate.get("solve_rate") or 0.0)
+    invalid = float(aggregate.get("total_invalid_actions") or 0.0)
+    cost = float(aggregate.get("total_cost_usd") or 0.0)
+    return samples, solve, invalid, cost
 
 
 def handle_gene_command(args: argparse.Namespace) -> int | None:
@@ -58,14 +73,26 @@ def handle_gene_command(args: argparse.Namespace) -> int | None:
             print(f"added\t{gene.id}\tv{gene.version}")
             return 0
         if args.gene_command == "fitness":
+            samples = args.samples
+            solve_rate = args.solve_rate
+            if args.report is not None:
+                samples, solve_rate, invalid, cost = _fitness_from_report(args.report)
+            else:
+                invalid, cost = args.invalid_actions, args.cost_usd
+            if samples is None or solve_rate is None:
+                print(
+                    "error: pass --report or both --samples and --solve-rate",
+                    file=sys.stderr,
+                )
+                return 2
             service.record_fitness(
                 args.gene_id,
-                samples=args.samples,
-                median_solve_rate=args.solve_rate,
-                median_invalid_actions=args.invalid_actions,
-                median_cost_usd=args.cost_usd,
+                samples=samples,
+                median_solve_rate=solve_rate,
+                median_invalid_actions=invalid,
+                median_cost_usd=cost,
             )
-            print(f"fitness\t{args.gene_id}")
+            print(f"fitness\t{args.gene_id}\tsamples={samples}\tsolve={solve_rate}")
             return 0
         if args.gene_command == "promote":
             gene = service.promote(args.gene_id)

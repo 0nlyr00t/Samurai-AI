@@ -238,6 +238,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         pids_limit=128,
         timeout_seconds=300,
         max_output_bytes=262144,
+        stall_seconds=300,
         network_mode="scoped",
         proxy_flag="-x",
     ),
@@ -264,6 +265,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         pids_limit=512,
         timeout_seconds=900,
         max_output_bytes=524288,
+        stall_seconds=300,
         network_mode="scoped",
     ),
     SandboxProfile(
@@ -280,6 +282,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         pids_limit=512,
         timeout_seconds=600,
         max_output_bytes=524288,
+        stall_seconds=300,
         network_mode="scoped",
         # the browser build lives under /root/.cache (mode 700)
         user="0:0",
@@ -629,6 +632,9 @@ class DockerSandboxRunner:
             profile, run_id, executable, args, proxy_url, env, secret_env
         )
         await self.preflight(profile)
+        # the watcher is per profile: nmap and a browser legitimately go quiet
+        previous_stall = self.manager.stall_seconds
+        self.manager.stall_seconds = float(profile.stall_seconds)
         child_env = {**(env or {}), **(secret_env or {})} or None
         extra: dict[str, Any] = {}
         if child_env:
@@ -642,6 +648,7 @@ class DockerSandboxRunner:
                 **extra,
             )
         finally:
+            self.manager.stall_seconds = previous_stall
             if proxy is not None:
                 await proxy.stop()
         outcome = SandboxRunOutcome(
