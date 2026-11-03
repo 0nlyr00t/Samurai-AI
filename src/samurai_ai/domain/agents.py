@@ -56,6 +56,20 @@ class ProposeFindingCommand(BaseModel):
     artifact_ids: tuple[str, ...] = ()
 
 
+class RecordImpactCommand(BaseModel):
+    """Escalate a finding's impact; the ladder rules live in the service."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["record_impact"]
+    finding_id: str = Field(min_length=1, max_length=64)
+    level: Literal["read", "write", "auth-bypass", "data-export", "rce"]
+    evidence: tuple[str, ...] = Field(min_length=1, max_length=8)
+    #: how to undo it; required for every level except `read`
+    rollback: str = Field(default="", max_length=1024)
+    outcome: Literal["confirmed", "refuted"] = "confirmed"
+
+
 class CompleteTaskCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -73,6 +87,7 @@ AgentCommand = Annotated[
     RequestToolRunCommand
     | NoteCommand
     | ProposeFindingCommand
+    | RecordImpactCommand
     | CompleteTaskCommand
     | FailCommand,
     Field(discriminator="type"),
@@ -135,6 +150,9 @@ def command_summary(command: AgentCommand) -> dict[str, Any]:
         summary["title"] = command.title
         summary["severity"] = command.severity
         summary["artifact_ids"] = list(command.artifact_ids)
+    elif isinstance(command, RecordImpactCommand):
+        summary["finding_id"] = command.finding_id
+        summary["level"] = command.level
     elif isinstance(command, FailCommand):
         summary["reason"] = command.reason
     return summary

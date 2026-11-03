@@ -22,7 +22,14 @@ from samurai_ai.domain.agents import (
 
 MAX_PARSE_RETRIES = 2
 _COMMAND_TYPES = frozenset(
-    {"request_tool_run", "note", "propose_finding", "complete_task", "fail"}
+    {
+        "request_tool_run",
+        "note",
+        "propose_finding",
+        "record_impact",
+        "complete_task",
+        "fail",
+    }
 )
 
 

@@ -40,6 +40,7 @@ from samurai_ai.domain.agents import (
     FailCommand,
     NoteCommand,
     ProposeFindingCommand,
+    RecordImpactCommand,
     RequestToolRunCommand,
     command_summary,
 )
@@ -50,6 +51,7 @@ from samurai_ai.domain.execution import (
     ToolNotFoundError,
 )
 from samurai_ai.domain.genes import GeneStatus
+from samurai_ai.domain.impact import ImpactError
 from samurai_ai.domain.kernel import (
     ArtifactError,
     FindingSeverity,
@@ -61,6 +63,7 @@ from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.genes import GeneService
+from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -159,6 +162,7 @@ class AgentOrchestrator:
         memory: CampaignMemoryService | None = None,
         skills: SkillService | None = None,
         genes: GeneService | None = None,
+        impact: ImpactService | None = None,
     ) -> None:
         self.models = models
         self.kernel = kernel
@@ -169,6 +173,7 @@ class AgentOrchestrator:
         self.memory = memory
         self.skills = skills
         self.genes = genes
+        self.impact = impact
 
     def get_run(self, run_id: str) -> AgentRun:
         run = self.runs.get(run_id)
@@ -788,6 +793,8 @@ class AgentOrchestrator:
                     return reason
             elif isinstance(command, ProposeFindingCommand):
                 self._command_propose_finding(operation_id, run, command)
+            elif isinstance(command, RecordImpactCommand):
+                self._command_record_impact(run, command)
             elif isinstance(command, CompleteTaskCommand):
                 # re-affirming completion is not a mistake worth a refusal
                 if self._task_done(operation_id, run.task_id):
@@ -807,7 +814,32 @@ class AgentOrchestrator:
         except (KernelError, ArtifactError) as exc:
             self._reject(operation_id, run, command, str(exc))
             return str(exc)
+        except ImpactError as exc:
+            self._reject(operation_id, run, command, str(exc))
+            return str(exc)
         return None
+
+    def _command_record_impact(self, run: AgentRun, command: RecordImpactCommand) -> None:
+        """The model escalates impact itself; the ladder decides what counts."""
+        if self.impact is None:
+            raise AgentError("impact escalation is not wired into this harness")
+        self.impact.record(
+            command.finding_id,
+            command.level,
+            tuple(command.evidence),
+            rollback=command.rollback,
+            outcome=command.outcome,
+        )
+        self._append(
+            run.operation_id,
+            "agent.command.impact",
+            {
+                "run_id": run.id,
+                "finding_id": command.finding_id,
+                "level": command.level,
+                "outcome": command.outcome,
+            },
+        )
 
     def _is_read_only(self, tool_id: str) -> bool:
         try:
