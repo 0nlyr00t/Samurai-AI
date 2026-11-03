@@ -104,6 +104,7 @@ bare standalone binary). ADB и VBoxManage проверены только mock-
 - `samurai sandbox verify` — сходится ли подпись профилей, без записи.
 - `samurai report generate <op> --min-impact 3` — не выпускать отчёт по находкам ниже порога импакта.
 - `samurai policy set|list|rm <op>` — поднять роль, нужную для команды внутри одной операции (только ужесточение, владелец).
+- Образ операционного белта публикуется из CI (`ghcr.io/<owner>/samurai-ops`, amd64+arm64, по digest индекса); локально — `packaging/sandbox/ops/build.sh`.
 
 
 ## Установка

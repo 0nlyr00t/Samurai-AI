@@ -1,0 +1,134 @@
+name: ops-image
+
+# The operational toolbelt is only useful to an operator on another machine if
+# the image comes from a registry, so this builds it for both architectures,
+# pushes it, proves the published digest resolves, and opens a PR that pins it.
+# The pin stays a human decision: the digest decides what runs on a target.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packaging/sandbox/ops/**"
+      - ".github/workflows/ops-image.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ops-image
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # the daemon cannot see the digest of an index it imported
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push both architectures
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: packaging/sandbox/ops
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/samurai-ops,push-by-digest=true,name-canonical=true,push=true
+          provenance: true
+
+      - name: Prove the published digest resolves
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          image="ghcr.io/${{ github.repository_owner }}/samurai-ops@${DIGEST}"
+          echo "published $image"
+          docker buildx imagetools inspect "$image"
+
+      - name: Make the package public
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="samurai-ops"
+          if curl -fsS -X PUT \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/user/packages/container/${package}/visibility" \
+            -d '{"visibility":"public"}' >/dev/null; then
+            echo "package ${package} is public"
+          else
+            echo "::warning::could not set ${package} to public — do it once in the package settings"
+          fi
+
+  pin:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pin the digest in the ops profile
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          python3 - "$DIGEST" <<'PY'
+          import pathlib, re, sys
+
+          digest = sys.argv[1]
+          path = pathlib.Path("src/samurai_ai/execution/sandbox.py")
+          text = path.read_text()
+          pattern = re.compile(r'(sandbox\.ops@v1".*?image=)"sha256:[0-9a-f]{64}"', re.S)
+          if not pattern.search(text):
+              sys.exit("ops profile image not found")
+          path.write_text(pattern.sub(rf'\1"{digest}"', text, count=1))
+          print(f"pinned {digest}")
+          PY
+
+      - name: Open the pin pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          branch="ops-image-pin"
+          image="ghcr.io/${{ github.repository_owner }}/samurai-ops@${DIGEST}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -am "ops: pin the published toolbelt image"
+          git push --force origin "$branch"
+          cat > /tmp/body.md <<EOF
+          ## Summary
+
+          The toolbelt was rebuilt and published, so the profile must point at the new index digest.
+
+          \`${image}\`
+
+          Digests come from the registry index (multi-arch), and the build step pulled the published digest back to prove it resolves. Warnings stay warnings: old or broken digests here are a delivery problem, not a provenance one.
+
+          ## Testing
+
+          - workflow \`ops-image\`: multi-arch build, push, \`buildx imagetools inspect\` on the published digest
+          - CI on this PR: full suite, ruff, strict mypy
+          EOF
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            gh pr edit "$branch" --body-file /tmp/body.md
+            echo "updated the open pin PR"
+          else
+            gh pr create --base main --head "$branch" \
+              --title "ops: pin the published toolbelt image" --body-file /tmp/body.md
+          fi
