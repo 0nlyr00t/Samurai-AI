@@ -244,15 +244,14 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
     ),
     SandboxProfile(
         id="sandbox.remote@v1",
-        description="Remote administration belt (ssh, smbclient, xfreerdp, "
-        "adb, nmap, curl, jq) behind the scoped proxy",
+        description="Remote administration belt (ssh, smbclient, adb, nmap, "
+        "curl, jq) behind the scoped proxy",
         # built from packaging/sandbox/remote and published by ci as a
         # multi-arch index; the pin comes as a pull request, never by hand
         image="ghcr.io/0nlyr00t/samurai-remote@sha256:82b895dde43b37389837ddf165850a0ed87c8e9b06a0f166952f989bc737971f",
         allowed_executables=(
             "ssh",
             "smbclient",
-            "xfreerdp",
             "adb",
             "nmap",
             "curl",

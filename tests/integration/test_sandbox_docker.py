@@ -624,7 +624,7 @@ RDP_IMAGE = (
 def test_rdp_check_reaches_a_real_xrdp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """RDP rides the tunnel: an xrdp server must answer the auth-only probe."""
+    """RDP rides the tunnel: an xrdp server must answer the X.224 probe."""
     if shutil.which("docker") is None:
         pytest.skip("docker is not installed")
     if asyncio.run(_docker_available()) is False:
@@ -675,7 +675,9 @@ def test_rdp_check_reaches_a_real_xrdp(
             operation.id, "remote.rdp-check", params, approval_id=caught.value.approval_id
         )
         assert result.run.status is ToolRunStatus.COMPLETED, result.stderr[-300:]
-        assert "exit status 0" in (result.stdout + result.stderr)
+        # the probe reports what the server negotiated instead of an exit code
+        assert "answered X.224" in result.stdout
+        assert "negotiation:" in result.stdout
         assert "allowed" in result.stderr
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)

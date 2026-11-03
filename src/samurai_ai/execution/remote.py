@@ -254,8 +254,8 @@ class RdpCheckTool(_RemoteTool):
             id="remote.rdp-check",
             version=1,
             kind=ToolKind.SANDBOX,
-            description="Check that an in-scope host answers RDP and whether TLS/NLA "
-            "is offered, without opening a session",
+            description="Check that an in-scope host answers RDP, which security "
+            "mode it asks for and what certificate it presents, without a session",
             risk_class=RiskClass.R2,
             read_only=True,
             network=NetworkAccess.PROXIED,
@@ -277,8 +277,7 @@ class RdpCheckTool(_RemoteTool):
     def build_env(
         self, params: dict[str, Any]
     ) -> tuple[dict[str, str], dict[str, str]]:
-        # the tunnel already is the proxy; freerdp would re-resolve the tunnel
-        # host through the host's env proxy and fail, so keep it direct
+        # the tunnel already is the proxy; keep the driver off the env proxy too
         return {
             "HOME": "/tmp",
             "TMPDIR": "/tmp",
@@ -292,15 +291,76 @@ class RdpCheckTool(_RemoteTool):
 
 
 _RDP_DRIVER = r"""
-import subprocess, sys
+import socket, ssl, sys
+
 endpoint = sys.argv[1]
 host, port = endpoint.rsplit(":", 1)
-# xfreerdp needs an X display even for /auth-only, so it runs under Xvfb
-argv = [
-    "xvfb-run", "-a", "xfreerdp", "/v:%s:%s" % (host, port), "/sec:tls",
-    "/cert:ignore", "/auth-only", "/u:probe", "/p:probe", "/timeout:10000",
-]
-raise SystemExit(subprocess.call(argv))
+port = int(port)
+
+# X.224 connection request carrying an RDP negotiation request: TLS, NLA and
+# NLA-with-EX. The cookie is what a real client sends; some servers ignore the
+# request without one.
+cookie = b"Cookie: mstshash=probe\r\n"
+# RDP_NEG_REQ: type 1, flags 0, length 8, requested protocols TLS|NLA|NLA-EX
+neg = bytes((1, 0)) + (8).to_bytes(2, "little") + (11).to_bytes(4, "little")
+x224 = b"\x0e\xe0\x00\x00\x00\x00\x00"
+body = x224 + cookie + neg
+request = (len(body) + 4).to_bytes(2, "big") + b"\x00\x00" + body
+
+try:
+    connection = socket.create_connection((host, port), timeout=10)
+except OSError as error:
+    print("rdp: no connection: %s" % error)
+    raise SystemExit(1)
+
+connection.sendall(request)
+try:
+    header = connection.recv(4)
+except OSError as error:
+    print("rdp: no answer to the connection request: %s" % error)
+    raise SystemExit(1)
+if len(header) < 4:
+    print("rdp: short answer, not RDP")
+    raise SystemExit(1)
+length = int.from_bytes(header[2:4], "big")
+answer = b""
+while len(answer) < length - 4:
+    chunk = connection.recv(length - 4 - len(answer))
+    if not chunk:
+        break
+    answer += chunk
+print("rdp: host answered X.224")
+
+# [0:7] x224 confirmation, then the negotiation structure: type, flags, length, value
+structure = answer[7:]
+kind = structure[0] if structure else 0
+# an answer of any kind means the host speaks RDP, so the check is satisfied:
+# what it answered belongs in the output, not in the exit code
+if kind == 3:  # RDP_NEG_FAILURE
+    code = int.from_bytes(structure[4:8], "little")
+    print("negotiation: refused by the server, failure code 0x%x" % code)
+    raise SystemExit(0)
+
+selected = int.from_bytes(structure[4:8], "little") if kind in (2, 4) else 0
+names = {0: "legacy RDP security", 1: "TLS", 2: "HYBRID (NLA)", 8: "HYBRID-EX (NLA)"}
+print("negotiation: %s" % names.get(selected, "unknown 0x%x" % selected))
+
+if selected:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        secured = context.wrap_socket(connection, server_hostname=host)
+    except OSError as error:
+        print("tls: handshake failed: %s" % error)
+        raise SystemExit(0)
+    print("tls: handshake ok, %s" % secured.version())
+    certificate = secured.getpeercert()
+    subject = dict(item[0] for item in certificate.get("subject", ()))
+    print("certificate: %s, expires %s" % (
+        subject.get("commonName") or subject.get("organizationName") or "unnamed",
+        certificate.get("notAfter"),
+    ))
 """
 
 
