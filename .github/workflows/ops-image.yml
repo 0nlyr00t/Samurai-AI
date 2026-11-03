@@ -132,9 +132,13 @@ jobs:
           - workflow \`ops-image\`: multi-arch build, push, \`buildx imagetools inspect\` on the published digest
           - CI on this PR: full suite, ruff, strict mypy
           EOF
-          if gh pr view "$branch" --json number >/dev/null 2>&1; then
-            gh pr edit "$branch" --body-file /tmp/body.md
-            echo "updated the open pin PR"
+          # a previously merged pin PR keeps the branch name, so the check must
+          # look for an *open* one — otherwise the new digest lands on a branch
+          # no open PR points at
+          open_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')
+          if [ -n "$open_pr" ]; then
+            gh pr edit "$open_pr" --body-file /tmp/body.md
+            echo "updated the open pin PR $open_pr"
           elif gh pr create --base main --head "$branch" \
             --title "ops: pin the published toolbelt image" --body-file /tmp/body.md; then
             echo "opened the pin PR"
