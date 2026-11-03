@@ -25,6 +25,8 @@ PROFILE_ID = "sandbox.default@v1"
 
 
 class FakeManager:
+    stall_seconds: float = 120.0
+
     def __init__(self, run_result: ProcessResult | None = None) -> None:
         self.run_result = run_result or ProcessResult(
             exit_code=0, stdout="sandboxed-output", stderr=""
