@@ -93,7 +93,8 @@ class AskOperatorCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["ask_operator"]
-    questions: tuple[OperatorQuestion, ...] = Field(min_length=1, max_length=3)
+    #: models batch four questions without blinking; three was a needless wall
+    questions: tuple[OperatorQuestion, ...] = Field(min_length=1, max_length=4)
     #: seconds to wait; -1 waits until the operator answers or the run stops
     timeout: int = Field(default=120, ge=-1, le=3600)
 
