@@ -248,7 +248,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         "curl, jq) behind the scoped proxy",
         # built from packaging/sandbox/remote and published by ci as a
         # multi-arch index; the pin comes as a pull request, never by hand
-        image="ghcr.io/0nlyr00t/samurai-remote@sha256:82b895dde43b37389837ddf165850a0ed87c8e9b06a0f166952f989bc737971f",
+        image="ghcr.io/0nlyr00t/samurai-remote@sha256:95f4cb6ffe8459c447bab301ad8b6cfa2243fc52366559d735bea2e085fcd164",
         allowed_executables=(
             "ssh",
             "smbclient",
@@ -273,7 +273,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         id="sandbox.exploit@v1",
         description="Exploit belt (gcc, gdb, checksec, ROPgadget, pwntools, "
         "impacket) with the scoped proxy for the run step",
-        image="ghcr.io/0nlyr00t/samurai-exploit@sha256:199ad05b0ac6b586bf66852ec12a20f3bfe30e9863c6e03cb776528bf64caade",
+        image="ghcr.io/0nlyr00t/samurai-exploit@sha256:471c4878871ec0cd9a36714b909cbdf72b47b0bfa3f410b711e12b4af242a910",
         allowed_executables=(
             "gcc",
             "gdb",
