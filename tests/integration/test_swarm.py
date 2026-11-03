@@ -473,3 +473,37 @@ def test_swarm_persists_across_reopen(
     members = AgentRunRepository(database).list_swarm_members(swarm.id)
     assert len(members) == 2
     assert all(member.status is AgentRunStatus.COMPLETED for member in members)
+
+
+def test_a_preset_stop_event_cancels_the_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_server: str
+) -> None:
+    """The daemon stops a run by setting an event the worker threads already hold."""
+    import threading
+
+    operations, kernel, swarms, _, operation_id = make_stack(
+        tmp_path, monkeypatch, fake_server, two_tasks()
+    )
+    approval_id = approve_model_calls(kernel, operation_id)
+    queue_answers(PLANNER_ANSWER, PLANNER_ANSWER)
+    queue_executor_answers(EXECUTOR_ANSWER, EXECUTOR_ANSWER)
+    stop_event = threading.Event()
+    stop_event.set()
+
+    swarm = swarms.start(
+        operation_id,
+        None,
+        ["fake/agent@v1"],
+        workers=2,
+        approval_id=approval_id,
+        stop_event=stop_event,
+    )
+
+    assert swarm.status is SwarmStatus.FAILED
+    members = swarms.members(swarm.id)
+    assert all(member.status is AgentRunStatus.FAILED for member in members)
+    events = operations.events(operation_id)
+    assert any(
+        event.event_type == "agent.run.finish" and "cancelled" in str(event.payload)
+        for event in events
+    )

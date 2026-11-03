@@ -56,15 +56,39 @@ def _socket_of(args: argparse.Namespace) -> Path:
 
 
 # -- daemon ---------------------------------------------------------------
-def _build_methods(database_path: Path | None) -> RpcServer:
+def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
     from samurai_ai.cli import _make_services
     from samurai_ai.domain.operations import OperationEvent
     from samurai_ai.services.rpc.peer import Peer
+    from samurai_ai.services.rpc.runs import RunBusy, RunHandle, RunRegistry
     from samurai_ai.services.rpc.server import EventFeed, MethodError, RpcServer
 
     services = _make_services(database_path)
     operations = services[0]
     repository = operations.repository
+    swarm_service = services[14]
+
+    def journal(operation_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        from samurai_ai.domain.operations import OperationEvent
+
+        repository.append_event(
+            OperationEvent(
+                operation_id=operation_id, event_type=event_type, payload=payload
+            )
+        )
+
+    async def work(handle: RunHandle) -> None:
+        await asyncio.to_thread(
+            swarm_service.start,
+            handle.operation_id,
+            handle.task_ids,
+            handle.route,
+            created_by=handle.created_by,
+            approval_resolver=(lambda _approval_id: True),
+            stop_event=handle.stop_event,
+        )
+
+    runs = RunRegistry(work, journal)
 
     async def operation_list(_peer: Peer, _params: dict[str, Any]) -> list[dict[str, Any]]:
         return [
@@ -94,19 +118,49 @@ def _build_methods(database_path: Path | None) -> RpcServer:
         )
         return {"operation_id": operation.id, "text": text}
 
+    async def run_start(peer: Peer, params: dict[str, Any]) -> dict[str, Any]:
+        operation = operations.get(str(params.get("operation_id") or ""))
+        route = [str(params.get("model_id") or "")]
+        if not route[0]:
+            raise MethodError("missing", "model_id is required")
+        task_ids = params.get("task_ids")
+        try:
+            handle = runs.start(
+                operation.id,
+                route,
+                [str(task) for task in task_ids] if task_ids else None,
+                peer.label,
+            )
+        except RunBusy as exc:
+            raise MethodError("busy", str(exc)) from exc
+        return handle.as_frame()
+
+    async def run_list(_peer: Peer, params: dict[str, Any]) -> list[dict[str, Any]]:
+        return runs.listing(params.get("operation_id"))
+
+    async def run_cancel(_peer: Peer, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            handle = runs.cancel(str(params.get("run_id") or ""))
+        except KeyError as exc:
+            raise MethodError("unknown-run", "no such run") from exc
+        return handle.as_frame()
+
     server = RpcServer(EventFeed(repository.events_since))
+    server.register("run.start", run_start, write=True)
+    server.register("run.list", run_list)
+    server.register("run.cancel", run_cancel, write=True)
     server.register("operation.list", operation_list)
     server.register("operation.show", operation_show)
     server.register("events.subscribe", events_subscribe)
     server.register("send.message", send_message, write=True)
-    return server
+    return server, runs
 
 
 async def _run_daemon(args: argparse.Namespace) -> int:
     from samurai_ai.services.rpc.carriers import UnixSocketCarrier
 
     socket_path = _socket_of(args)
-    server = _build_methods(getattr(args, "db", None))
+    server, runs = _build_methods(getattr(args, "db", None))
     carrier = UnixSocketCarrier(socket_path)
     await server.start()
     await carrier.start(server.serve)
@@ -127,6 +181,7 @@ async def _run_daemon(args: argparse.Namespace) -> int:
             with_suppress.call_soon_threadsafe(stop.set)
     await stop.wait()
     await carrier.stop()
+    await runs.drain()
     await server.aclose()
     pidfile.unlink(missing_ok=True)
     return 0
