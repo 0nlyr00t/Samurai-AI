@@ -104,7 +104,7 @@ bare standalone binary). ADB и VBoxManage проверены только mock-
 - `samurai sandbox verify` — сходится ли подпись профилей, без записи.
 - `samurai report generate <op> --min-impact 3` — не выпускать отчёт по находкам ниже порога импакта.
 - `samurai policy set|list|rm <op>` — поднять роль, нужную для команды внутри одной операции (только ужесточение, владелец).
-- Образ операционного белта публикуется из CI (`ghcr.io/<owner>/samurai-ops`, amd64+arm64, по digest индекса); локально — `packaging/sandbox/ops/build.sh`. Пакет в GHCR по умолчанию приватный. Видимость переключается вручную на странице пакета (`Settings` → `Change visibility`): ни `GITHUB_TOKEN`, ни токен `gh` через REST её не меняют (эндпоинт видимости отвечает 404). Пока пакет закрыт, `pull` требует `docker login ghcr.io` с токеном, у которого есть `read:packages`. PR с пином от бота требует approve прогона проверок (PR создан `GITHUB_TOKEN`).
+- Белт разложен на два образа — `remote` (админка) и `exploit` (компилятор и библиотеки); оба публикуются из CI (`ghcr.io/<owner>/samurai-*`, amd64+arm64, по digest индекса), локально — `packaging/sandbox/build.sh remote|exploit`. Пакет в GHCR по умолчанию приватный. Видимость переключается вручную на странице пакета (`Settings` → `Change visibility`): ни `GITHUB_TOKEN`, ни токен `gh` через REST её не меняют (эндпоинт видимости отвечает 404). Пока пакет закрыт, `pull` требует `docker login ghcr.io` с токеном, у которого есть `read:packages`. PR с пином от бота требует approve прогона проверок (PR создан `GITHUB_TOKEN`).
 
 
 ## Установка
