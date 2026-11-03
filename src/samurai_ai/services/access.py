@@ -33,6 +33,7 @@ from samurai_ai.domain.access import (
 from samurai_ai.services.settings import SettingsService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.access import AccessRepository
+from samurai_ai.storage.access_policy import OperationPolicyRepository
 
 ISSUER_KEY = "auth.issuer"
 CLIENT_ID_KEY = "auth.client_id"
@@ -82,10 +83,12 @@ class AccessService:
         access: AccessRepository,
         transport: Transport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        policies: OperationPolicyRepository | None = None,
     ) -> None:
         self.settings = settings
         self.vault = vault
         self.access = access
+        self.policies = policies
         self.transport = transport or _urllib_transport
         self.sleep = sleep
         self._jwks: dict[str, Any] = {}
@@ -321,10 +324,17 @@ class AccessService:
             self.vault.remove(name)
         self.vault.add(name, value)
 
-    def require(self, path: str) -> Principal:
+    def require(self, path: str, operation_role: Role | None = None) -> Principal:
         principal = self.current()
-        require(principal, path)
+        require(principal, path, operation_role)
         return principal
+
+    def operation_role(self, operation_id: str | None, path: str) -> Role | None:
+        """The operation's own floor for this path, when one is set."""
+        if operation_id is None or self.policies is None:
+            return None
+        found = self.policies.role_for(operation_id, path)
+        return found
 
     def logout(self) -> bool:
         for name in (ACCESS_SECRET, REFRESH_SECRET):

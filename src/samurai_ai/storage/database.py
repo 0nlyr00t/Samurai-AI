@@ -854,6 +854,15 @@ CREATE INDEX IF NOT EXISTS operation_notes_target
 ON operation_notes(operation_id, target_kind, target_id);
 """
 
+_MIGRATION_28 = """
+CREATE TABLE IF NOT EXISTS operation_role_policies (
+    operation_id TEXT NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+    path         TEXT NOT NULL,
+    role         TEXT NOT NULL,
+    PRIMARY KEY (operation_id, path)
+);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -882,6 +891,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (25, _MIGRATION_25),
     (26, _MIGRATION_26),
     (27, _MIGRATION_27),
+    (28, _MIGRATION_28),
 )
 
 

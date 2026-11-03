@@ -158,8 +158,20 @@ def minimum_role(path: str) -> Role:
     return _MINIMUM.get(group, Role.OPERATOR)
 
 
-def require(principal: Principal, path: str) -> None:
-    needed = minimum_role(path)
+def combined_minimum(path: str, operation_role: Role | None) -> Role:
+    """Global floor and operation floor: the stricter one wins.
+
+    An operation can only tighten: membership rows and policies never lower the
+    global requirement, so a guest operator cannot widen the harness.
+    """
+    base = minimum_role(path)
+    if operation_role is None:
+        return base
+    return operation_role if operation_role.rank > base.rank else base
+
+
+def require(principal: Principal, path: str, operation_role: Role | None = None) -> None:
+    needed = combined_minimum(path, operation_role)
     if principal.role.rank < needed.rank:
         raise ForbiddenError(
             f"{path} needs the {needed.value} role; {principal.label} is "

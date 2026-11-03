@@ -103,6 +103,7 @@ bare standalone binary). ADB и VBoxManage проверены только mock-
 - `samurai tool install <file> --trusted` и `tool manifests` — инструменты манифестами, правка после установки видна как `tampered`.
 - `samurai sandbox verify` — сходится ли подпись профилей, без записи.
 - `samurai report generate <op> --min-impact 3` — не выпускать отчёт по находкам ниже порога импакта.
+- `samurai policy set|list|rm <op>` — поднять роль, нужную для команды внутри одной операции (только ужесточение, владелец).
 
 
 ## Установка
