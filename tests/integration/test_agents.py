@@ -786,3 +786,71 @@ def test_active_genes_reach_the_planner_prompt(
         message.content for message in fake.requests[0].messages if message.role == "user"
     )
     assert "always start with crtsh" in first_prompt
+
+
+def test_the_model_can_escalate_impact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.domain.kernel import ArtifactKind
+    from samurai_ai.services.impact import ImpactService
+
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    artifact = kernel.register_artifact(
+        operation_id, ArtifactKind.COMMAND_OUTPUT, "proof", summary="proof"
+    )
+    finding = kernel.create_finding(operation_id, "IDOR", summary="read orders")
+    kernel.attach_evidence(finding.id, artifact.id)
+    kernel.validate_finding(finding.id)
+    orchestrator.impact = ImpactService(service, kernel)
+
+    fake.queue(
+        '{"steps": ["escalate"]}',
+        '{"commands": ['
+        f'{{"type": "record_impact", "finding_id": "{finding.id}", '
+        '"level": "auth-bypass", "evidence": ["'
+        f'{artifact.id}"], "rollback": "delete created user"}},'
+        '{"type": "complete_task"}]}',
+    )
+    orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    state = orchestrator.impact.state(finding.id)
+    assert state.level is not None and state.level.value == "auth-bypass"
+    events = [event.event_type for event in service.events(operation_id)]
+    assert "agent.command.impact" in events
+    assert "impact.attempt" in events
+
+
+def test_a_bad_impact_command_is_refused_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.domain.kernel import ArtifactKind
+    from samurai_ai.services.impact import ImpactService
+
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    artifact = kernel.register_artifact(
+        operation_id, ArtifactKind.COMMAND_OUTPUT, "proof", summary="proof"
+    )
+    finding = kernel.create_finding(operation_id, "IDOR")
+    kernel.attach_evidence(finding.id, artifact.id)
+    kernel.validate_finding(finding.id)
+    orchestrator.impact = ImpactService(service, kernel)
+
+    # write without a rollback note is refused, the run survives
+    fake.queue(
+        '{"steps": ["escalate"]}',
+        '{"commands": ['
+        f'{{"type": "record_impact", "finding_id": "{finding.id}", '
+        f'"level": "write", "evidence": ["{artifact.id}"]}}]}}',
+        '{"commands": [{"type": "complete_task"}]}',
+    )
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    assert run.status.value == "completed"
+    rejected = [
+        event for event in service.events(operation_id)
+        if event.event_type == "agent.command.rejected"
+    ]
+    assert rejected and "rollback" in str(rejected[0].payload)

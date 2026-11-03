@@ -670,6 +670,7 @@ def _make_services(
         memory=memory_service,
         skills=skill_service,
         genes=GeneService(GeneStore(genes_path())),
+        impact=ImpactService(operations, kernel),
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
     reports = ReportService(
