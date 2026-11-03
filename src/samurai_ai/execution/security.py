@@ -813,9 +813,9 @@ class NmapScanTool(_ScopedSandboxTool):
         ports = params.get("ports")
         profile = params.get("profile")
         if ports is not None and profile is not None:
-            raise ToolValidationError(
-                f"{self.definition.id}: use either 'profile' or 'ports', not both"
-            )
+            # a model names both when it means "these ports, quickly": the
+            # explicit list is the more specific answer, so it wins
+            profile = None
         if ports is None and profile is None:
             return None
         if ports is not None:
@@ -930,8 +930,13 @@ class FfufFuzzTool(_ScopedSandboxTool):
                     "url": {"type": "string", "minLength": 1},
                     "extensions": {
                         "type": "array",
-                        "items": {"type": "string", "enum": list(self._EXTENSIONS)},
-                        "maxItems": len(self._EXTENSIONS),
+                        # a closed enum made the model retry with its own
+                        # guesses; any `.ext` is fine, ffuf takes them as text
+                        "items": {
+                            "type": "string",
+                            "pattern": r"^\.[a-z0-9]{1,8}$",
+                        },
+                        "maxItems": 8,
                     },
                 },
                 "required": ["url"],
@@ -965,12 +970,14 @@ class FfufFuzzTool(_ScopedSandboxTool):
             )
         return [url]
 
+    _EXTENSION = re.compile(r"\.[a-z0-9]{1,8}\Z")
+
     def _validated_extensions(self, params: dict[str, Any]) -> list[str]:
         extensions = [str(item) for item in params.get("extensions") or ()]
         for item in extensions:
-            if item not in self._EXTENSIONS:
+            if not self._EXTENSION.match(item):
                 raise ToolValidationError(
-                    f"{self.definition.id}: unknown extension {item!r}"
+                    f"{self.definition.id}: extension must look like .php: {item!r}"
                 )
         return list(dict.fromkeys(extensions))
 
