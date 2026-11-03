@@ -760,3 +760,29 @@ def test_a_run_gets_a_wall_deadline_by_default(
     orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert seen == [module.DEFAULT_MAX_WALL_SECONDS]
     _ = orchestrator_run
+
+
+def test_active_genes_reach_the_planner_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.config import genes_path
+    from samurai_ai.services.genes import GeneService, GeneStore
+
+    service, kernel, models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    genes = GeneService(GeneStore(genes_path()))
+    gene = genes.create("planner", "prompt-block", "Hint", "always start with crtsh")
+    genes.record_fitness(gene.id, samples=3, median_solve_rate=0.9)
+    genes.promote(gene.id)
+    orchestrator.genes = genes
+
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue('{"steps": ["probe"]}', '{"commands": [{"type": "complete_task"}]}')
+    orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    # the planner call is the first one: the hint must be there already
+    first_prompt = "\n".join(
+        message.content for message in fake.requests[0].messages if message.role == "user"
+    )
+    assert "always start with crtsh" in first_prompt
