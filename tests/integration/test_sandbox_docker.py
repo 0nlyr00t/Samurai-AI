@@ -1,6 +1,9 @@
 import asyncio
 import os
+import shutil
+import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -12,6 +15,7 @@ from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessManager
 from samurai_ai.execution.registry import SandboxExecTool, ToolRegistry
+from samurai_ai.execution.remote import SshExecTool
 from samurai_ai.execution.sandbox import (
     DockerSandboxRunner,
     get_profile,
@@ -391,3 +395,125 @@ def test_research_read_renders_through_the_proxy(
     pairs = traffic.for_operation(operation.id)
     assert pairs and pairs[0].url == "https://example.com/"
     assert pairs[0].created_by == "tool:research.read"
+
+
+SSHD_IMAGE = (
+    "linuxserver/openssh-server@sha256:"
+    "0b46c755aac07057908077f2c7ff14f0ad923970bb6a3a67bcd008e72fa60050"
+)
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_ssh_exec_reaches_a_real_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tunnel is only proven by a real sshd: start one, ssh into it."""
+    if shutil.which("docker") is None:
+        pytest.skip("docker is not installed")
+    if asyncio.run(_docker_available()) is False:
+        pytest.skip("docker daemon is not available")
+    if asyncio.run(_image_present(SSHD_IMAGE)) is False:
+        pytest.skip(f"target image not pulled: {SSHD_IMAGE}")
+
+    key_path = tmp_path / "id_ed25519"
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+        check=True,
+        capture_output=True,
+    )
+    port = _free_port()
+    name = f"samurai-sshd-{port}"
+    subprocess.run(
+        [
+            "docker", "run", "-d", "--rm", "--name", name,
+            "-p", f"{port}:2222",
+            "-e", "PUID=1000", "-e", "PGID=1000",
+            "-e", f"PUBLIC_KEY={key_path.with_suffix('.pub').read_text().strip()}",
+            "-e", "USER_NAME=ops", SSHD_IMAGE,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    try:
+        assert _wait_for_banner(port), "the target sshd never answered"
+        monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+        sign_allowlist(sandbox_allowlist_path(), load_master_key(vault_key_path()))
+        database = Database(tmp_path / "ssh.db")
+        service = OperationService(OperationRepository(database))
+        kernel = KernelService(service, KernelRepository(database))
+        recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+        runner = DockerSandboxRunner(
+            ProcessManager(allowed_executables=frozenset({"docker"})),
+            sandbox_allowlist_path(),
+            lambda: load_master_key(vault_key_path()),
+        )
+        execution = ToolExecutionService(
+            service,
+            kernel,
+            recovery,
+            ToolRunRepository(database),
+            registry=ToolRegistry(adapters=(SshExecTool(runner),)),
+        )
+        operation = service.create(
+            "ssh lab", OperationMode.RED_TEAM, ScopeContract(includes=("127.0.0.1",))
+        )
+        params = {
+            "host": "127.0.0.1",
+            "port": port,
+            "user": "ops",
+            "command": "id -un",
+            "key": key_path.read_text(),
+        }
+        with pytest.raises(ApprovalRequiredError) as caught:
+            execution.run_tool(operation.id, "remote.ssh-exec", params)
+        kernel.approve(caught.value.approval_id, decided_by="operator")
+        result = execution.run_tool(
+            operation.id, "remote.ssh-exec", params, approval_id=caught.value.approval_id
+        )
+        assert result.run.status is ToolRunStatus.COMPLETED, result.stderr[-400:]
+        assert "ops" in result.stdout
+        assert "allowed" in result.stderr
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+
+
+def _wait_for_banner(port: int, timeout: float = 30.0) -> bool:
+    """An open port is not an sshd yet: wait until it actually greets us."""
+    import socket
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as conn:
+                if conn.recv(16).startswith(b"SSH-"):
+                    return True
+        except OSError:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+async def _docker_available() -> bool:
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: b"x" * 32,
+    )
+    return await runner.docker_available()
+
+
+async def _image_present(image: str) -> bool:
+    runner = DockerSandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"docker"})),
+        sandbox_allowlist_path(),
+        lambda: b"x" * 32,
+    )
+    return await runner.image_present(image)
