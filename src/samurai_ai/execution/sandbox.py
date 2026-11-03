@@ -248,7 +248,7 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         "adb, pwntools, gcc) behind the scoped proxy",
         # built from packaging/sandbox/ops and published by ci as a multi-arch
         # index; the pin comes as a pull request, never by hand
-        image="ghcr.io/0nlyr00t/samurai-ops@sha256:b8e40c3d2e427c4af7c6b001b600bd0c0ebf08ba2702db5838070f051670fd9d",
+        image="ghcr.io/0nlyr00t/samurai-ops@sha256:803c61331ff1404c283fde5e72984cbeb491b9a3b7c3d1b4ad835e80fcf8c3a3",
         allowed_executables=(
             "ssh",
             "smbclient",
