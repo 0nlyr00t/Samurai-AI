@@ -106,7 +106,7 @@ available).
 - `samurai sandbox verify` — whether the profile signature matches, without writing.
 - `samurai report generate <op> --min-impact 3` — refuse a report when a finding is below the impact threshold.
 - `samurai policy set|list|rm <op>` — raise the role a command needs inside one operation (tighten only, owner).
-- The operational toolbelt image is published from CI (`ghcr.io/<owner>/samurai-ops`, amd64+arm64, by index digest); locally — `packaging/sandbox/ops/build.sh`.
+- The belt is split in two images — `remote` (admin) and `exploit` (compiler and libraries); both are published from CI (`ghcr.io/<owner>/samurai-*`, amd64+arm64, by index digest), locally — `packaging/sandbox/build.sh remote|exploit`.
 
 
 ## Installation
