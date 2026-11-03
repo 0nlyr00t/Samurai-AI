@@ -672,7 +672,10 @@ def _make_services(
         genes=GeneService(GeneStore(genes_path())),
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
-    reports = ReportService(operations, kernel, playbooks, ReportRepository(database), vault)
+    reports = ReportService(
+        operations, kernel, playbooks, ReportRepository(database), vault,
+        impact=ImpactService(operations, kernel),
+    )
     ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     planning = PlanningService(operations, kernel, PlanningRepository(database), vault)
