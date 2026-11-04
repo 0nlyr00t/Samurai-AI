@@ -72,7 +72,7 @@ def test_approve_all_clears_the_pending_queue(tmp_path: Path, capsys) -> None:
 def test_run_reports_an_unregistered_model_cleanly(tmp_path: Path, capsys) -> None:
     database = str(tmp_path / "run.db")
     assert main(["--db", database, "run", "Box", "--mode", "bug-bounty",
-                 "--include", "10.10.10.10", "--task", "Scan",
+                 "--include", "10.10.10.10", "--task", "Scan", "--no-preflight",
                  "--model", "ghost/model@v1"]) == 2
     assert "ghost/model@v1" in capsys.readouterr().err
 
@@ -80,5 +80,6 @@ def test_run_reports_an_unregistered_model_cleanly(tmp_path: Path, capsys) -> No
 def test_run_without_tasks_is_a_usage_error(tmp_path: Path, capsys) -> None:
     database = str(tmp_path / "run.db")
     assert main(["--db", database, "run", "Box", "--mode", "bug-bounty",
-                 "--include", "10.10.10.10", "--model", "missing/model@v1"]) == 2
+                 "--include", "10.10.10.10", "--no-preflight",
+                 "--model", "missing/model@v1"]) == 2
     assert "missing/model@v1" in capsys.readouterr().err
