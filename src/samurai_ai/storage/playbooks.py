@@ -237,6 +237,13 @@ class PlaybookRepository:
                 ),
             )
 
+    def remove_custom_playbook(self, name: str) -> bool:
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM custom_playbooks WHERE name = ?", (name,)
+            )
+        return cursor.rowcount > 0
+
     def get_custom_playbook(self, name: str) -> PlaybookTemplate | None:
         with self.database.connect() as connection:
             row = connection.execute(

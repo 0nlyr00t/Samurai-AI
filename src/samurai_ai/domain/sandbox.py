@@ -10,7 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from samurai_ai.domain.execution import ToolExecutionError
 
-_PROFILE_ID = re.compile(r"sandbox\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?@v[1-9][0-9]*\Z")
+#: `<namespace>.<name>@v<N>`: the core uses the `sandbox` namespace, a plugin
+#: profile carries the plugin's own namespace.
+_PROFILE_ID = re.compile(
+    r"[a-z][a-z0-9-]*\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?@v[1-9][0-9]*\Z"
+)
 #: repo@sha256:<digest> from a registry, or a bare local image id (a locally
 #: built toolbelt has no registry to pull from until it is pushed).
 _PINNED_IMAGE = re.compile(
@@ -77,7 +81,7 @@ class SandboxProfile(BaseModel):
     def validate_id(cls, value: str) -> str:
         if not _PROFILE_ID.fullmatch(value):
             raise SandboxProfileError(
-                f"sandbox profile id must look like sandbox.<name>@v<N>: {value!r}"
+                f"sandbox profile id must look like <name>.<tool>@v<N>: {value!r}"
             )
         return value
 
