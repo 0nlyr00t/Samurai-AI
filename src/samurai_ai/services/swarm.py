@@ -9,6 +9,7 @@ swarm report can quantify wall time against the sequential estimate.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -100,6 +101,7 @@ class SwarmService:
         workspace: str | None = None,
         skill_names: Sequence[str] = (),
         approval_resolver: Callable[[str], bool] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> SwarmRun:
         if not route:
             raise SwarmError("swarm requires at least one model candidate")
@@ -162,6 +164,7 @@ class SwarmService:
                     workspace,
                     tuple(skill_names),
                     approval_resolver,
+                    stop_event,
                 )
                 for task in selected
             }
@@ -259,6 +262,7 @@ class SwarmService:
         workspace: str | None,
         skill_names: tuple[str, ...],
         approval_resolver: Callable[[str], bool] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> AgentRunStatus:
         try:
             run = self.orchestrator.run_task(
@@ -272,6 +276,7 @@ class SwarmService:
                 workspace=workspace,
                 skill_names=skill_names,
                 approval_resolver=approval_resolver,
+                stop_event=stop_event,
             )
         except Exception as exc:
             self._append(

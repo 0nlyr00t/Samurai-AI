@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime
+from typing import Any
 
 from samurai_ai.domain.operations import Operation, OperationEvent
 from samurai_ai.storage.database import Database
@@ -114,6 +115,23 @@ class OperationRepository:
             )
             for row in rows
         ]
+
+    def events_since(
+        self, operation_id: str, after_id: int, limit: int
+    ) -> list[tuple[int, str, dict[str, Any]]]:
+        """Forward page of the journal: the event feed's only buffer."""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, event_type, payload
+                FROM operation_events
+                WHERE operation_id = ? AND id > ?
+                ORDER BY id
+                LIMIT ?
+                """,
+                (operation_id, after_id, limit),
+            ).fetchall()
+        return [(row["id"], row["event_type"], json.loads(row["payload"])) for row in rows]
 
     @staticmethod
     def _append_event(connection: sqlite3.Connection, event: OperationEvent) -> None:

@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from samurai_ai.domain.swarm import AgentSpecialization
 
@@ -85,6 +85,12 @@ class OperatorQuestion(BaseModel):
     question: str = Field(min_length=1, max_length=400)
     header: str = Field(default="", max_length=16)
     options: tuple[QuestionOption, ...] = Field(min_length=2, max_length=4)
+
+    @field_validator("header", mode="before")
+    @classmethod
+    def _trim_header(cls, value: object) -> object:
+        """A chip that is two characters long must not fail the whole turn."""
+        return value[:16].rstrip() if isinstance(value, str) else value
 
 
 class AskOperatorCommand(BaseModel):

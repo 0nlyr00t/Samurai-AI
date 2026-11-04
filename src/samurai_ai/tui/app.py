@@ -28,6 +28,7 @@ from textual.widgets.option_list import Option
 from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
+from samurai_ai.config import serve_socket_path
 from samurai_ai.domain.access import AccessError, Role
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.constraints import ConstraintKind
@@ -106,6 +107,7 @@ from samurai_ai.tui.screens import (
     NewOperationScreen,
     TrustDirectoryScreen,
 )
+from samurai_ai.tui.screens.attach import AttachScreen
 from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
 from samurai_ai.tui.sessions import SessionController
 from samurai_ai.tui.theme import (
@@ -307,6 +309,7 @@ class SamuraiApp(
         Binding("f1", "show_help", "Keys", show=False),
         Binding("ctrl+i", "inspect_last_run", "Inspect run", show=False, priority=True),
         Binding("ctrl+g", "open_sessions", "Subagent sessions", show=False, priority=True),
+        Binding("ctrl+t", "attach_session", "Attach to session", show=False, priority=True),
         Binding("ctrl+t", "open_task_board", "Plan board", show=False, priority=True),
         Binding("ctrl+f", "open_finding_board", "Findings board", show=False, priority=True),
         Binding("ctrl+s", "steer", "Steer the running turn", show=False, priority=True),
@@ -1523,6 +1526,17 @@ class SamuraiApp(
 
     def action_open_sessions(self) -> None:
         self._show_sessions()
+
+    def action_attach_session(self) -> None:
+        """Follow the daemon's stream for this operation from inside the TUI."""
+        if self.operation is None:
+            self._write_line("[attach] " + self.translator.t("status.no-operation"))
+            return
+        socket_path = serve_socket_path()
+        if not socket_path.exists():
+            self._write_line("[attach] " + self.translator.t("attach.no-daemon"))
+            return
+        self.push_screen(AttachScreen(self.translator, socket_path, self.operation.id))
 
     def action_open_task_board(self) -> None:
         self._show_task_board()

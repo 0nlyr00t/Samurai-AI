@@ -30,7 +30,9 @@ from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_c
 from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
 from samurai_ai.cli_reports import handle_report_command, register_report_commands
 from samurai_ai.cli_rules import handle_rules_command, register_rules_commands
+from samurai_ai.cli_run import add_run_command
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
+from samurai_ai.cli_serve import add_serve_commands
 from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_team import handle_team_command
@@ -171,6 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action=_VersionAction)
     parser.add_argument("--db", type=Path, help="Path to the Samurai SQLite database")
     parser.add_argument("--json", action="store_true", dest="json_output")
+    parser.add_argument(
+        "--socket", default=None, help="session daemon socket (serve/attach/send/call)"
+    )
     subcommands = parser.add_subparsers(dest="command")
 
     update = subcommands.add_parser(
@@ -252,6 +257,13 @@ def build_parser() -> argparse.ArgumentParser:
     host_list = host_commands.add_parser("list", help="List name mappings")
     host_list.add_argument("operation_id")
 
+    scope_add = scope_commands.add_parser("add", help="Add an inclusion rule")
+    scope_add.add_argument("operation_id")
+    scope_add.add_argument("targets", nargs="+")
+    scope_rm = scope_commands.add_parser("rm", help="Remove an inclusion rule")
+    scope_rm.add_argument("operation_id")
+    scope_rm.add_argument("targets", nargs="+")
+
     check = scope_commands.add_parser("check", help="Check a target against operation scope")
     check.add_argument("operation_id")
     check.add_argument("target")
@@ -301,6 +313,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_rules_commands(subcommands)
     register_gene_commands(subcommands)
     register_policy_commands(subcommands)
+    add_serve_commands(subcommands, subcommands.add_parser)
+    add_run_command(subcommands, subcommands.add_parser)
     return parser
 
 
@@ -310,6 +324,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "update":
         # Self-update needs no database or services.
         return run_update(check=args.check)
+    if args.command in {"serve", "attach", "send", "call", "run"}:
+        return int(args.handler(args) or 0)
     (
         operation_service,
         kernel_service,
@@ -458,6 +474,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _handle_operation(
                 args, operation_service, kernel_service, export_service, team_service
             )
+        if args.command == "scope" and args.scope_command in {"add", "rm"}:
+            code = _handle_scope_rules(args, operation_service)
+            if code is not None:
+                return code
         if args.command == "scope" and args.scope_command == "host":
             code = _handle_scope_host(args, operation_service, args.json_output)
             if code is not None:
@@ -670,6 +690,35 @@ def _operation_id_of(args: argparse.Namespace, kernel: KernelService) -> str | N
             if finding is not None:
                 return str(finding.operation_id)
     return None
+
+
+def _handle_scope_rules(args: argparse.Namespace, operations: Any) -> int | None:
+    """Bare `scope add/rm`: the shortest path between "I have a target" and work."""
+    operation = operations.get(args.operation_id)
+    includes = list(operation.scope.includes)
+    for target in args.targets:
+        if args.scope_command == "add":
+            if target in includes:
+                print(f"already in scope: {target}", file=sys.stderr)
+                continue
+            includes.append(target)
+        elif target not in includes:
+            print(f"not in scope: {target}", file=sys.stderr)
+            return 1
+        else:
+            includes.remove(target)
+    try:
+        scope = ScopeContract(
+            includes=tuple(includes),
+            excludes=operation.scope.excludes,
+            hosts=operation.scope.hosts,
+        )
+    except ScopeValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    updated = operations.replace_scope(operation.id, scope)
+    print(f"scope: {' '.join(updated.scope.includes) or '(empty)'}")
+    return 0
 
 
 def _handle_scope_host(
