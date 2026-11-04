@@ -29,6 +29,11 @@ def add_run_command(subcommands: Any, add_parser: Any) -> None:
     run.add_argument("--exclude", action="append", dest="excludes", default=[])
     run.add_argument("--task", action="append", dest="tasks", default=[], metavar="TITLE")
     run.add_argument("--objective", default="")
+    run.add_argument(
+        "--offline",
+        action="store_true",
+        help="the harness has no internet: local models only, no outside tools",
+    )
     run.add_argument("--model", dest="model_id", required=True)
     run.add_argument("--workers", type=int, default=2)
     run.add_argument("--socket", default=argparse.SUPPRESS)
@@ -42,7 +47,9 @@ def add_run_command(subcommands: Any, add_parser: Any) -> None:
 
 def _prepare(args: argparse.Namespace, operations: Any, kernel: Any) -> tuple[str, str]:
     scope = ScopeContract(includes=tuple(args.includes), excludes=tuple(args.excludes))
-    operation = operations.create(args.name, _mode(args.mode), scope, objective=args.objective)
+    operation = operations.create(
+        args.name, _mode(args.mode), scope, objective=args.objective, offline=args.offline
+    )
     tasks = [title.strip() for title in args.tasks if title.strip()]
     if not tasks:
         raise ValueError("give at least one --task to work through")
