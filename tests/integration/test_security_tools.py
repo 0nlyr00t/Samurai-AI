@@ -235,7 +235,7 @@ def test_params_validation_is_fail_closed(tmp_path: Path) -> None:
             {"targets": ["example.com"], "profile": "everything"},
             approval_id=approval_id,
         )
-    with pytest.raises(ToolValidationError):
+    with pytest.raises((ToolScopeError, ToolValidationError)):
         execution.run_tool(
             operation.id, "recon.httpx-probe",
             {"targets": ["example.com,evil.com"]},
@@ -571,7 +571,7 @@ def test_dnsx_scope_and_param_contract(tmp_path: Path) -> None:
             {"hosts": ["example.com"], "types": ["TXT"]},
             approval_id=approval_id,
         )
-    with pytest.raises(ToolValidationError):
+    with pytest.raises((ToolScopeError, ToolValidationError)):
         execution.run_tool(
             operation.id,
             "recon.dnsx-resolve",
@@ -1048,3 +1048,24 @@ def test_research_search_lists_results(tmp_path: Path) -> None:
     tool_args = tool_arguments(docker_run_argv(manager))
     assert tool_args[2] == "demo" and tool_args[3] == "3"
     assert "Result one\thttps://example.org/1" in result.stdout
+
+
+def test_a_forgotten_adapter_check_still_cannot_leave_the_scope(tmp_path: Path) -> None:
+    """The central guard is the second line: it reads every parameter, not just target."""
+    database_path = tmp_path / "guard.db"
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = FakeManager(ProcessResult(exit_code=0, stdout="", stderr=""))
+    service, kernel, execution = make_stack(database_path, manager)
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "recon.httpx-probe", RiskClass.R2)
+
+    with pytest.raises(ToolScopeError, match="outside the operation scope"):
+        execution.run_tool(
+            operation.id,
+            "recon.httpx-probe",
+            {"targets": ["example.com", "8.8.8.8"]},
+            approval_id=approval_id,
+        )
+    # the refusal is still visible in the history
+    assert [run for run in execution.list_runs(operation.id) if run.status.value == "failed"]
+    assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
