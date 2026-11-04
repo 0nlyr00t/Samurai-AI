@@ -38,6 +38,7 @@ from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_team import handle_team_command
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
+from samurai_ai.cli_web import handle_web_command, register_web_commands
 from samurai_ai.config import default_database_path, genes_path, vault_key_path
 from samurai_ai.domain.access import AccessError, Principal, Role
 from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
@@ -315,6 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_gene_commands(subcommands)
     register_policy_commands(subcommands)
     register_plugin_commands(subcommands)
+    register_web_commands(subcommands)
     add_serve_commands(subcommands, subcommands.add_parser)
     add_run_command(subcommands, subcommands.add_parser)
     return parser
@@ -401,6 +403,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         gene_result = handle_gene_command(args)
         if gene_result is not None:
             return gene_result
+        web_result = handle_web_command(args, _SERVICES)
+        if web_result is not None:
+            return web_result
         plugin_result = handle_plugin_command(args, _SERVICES)
         if plugin_result is not None:
             return plugin_result
