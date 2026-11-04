@@ -80,6 +80,9 @@ jobs:
         if: matrix.kind == 'native-linux' || matrix.kind == 'native-macos'
         shell: bash
         run: ./dist/binary/${{ matrix.bin }} --help
+      - name: Take ownership of the container build output
+        if: matrix.kind == 'qemu-linux'
+        run: sudo chown -R "$(id -u):$(id -g)" dist build
       - name: Smoke test binary (arm64, under QEMU)
         if: matrix.kind == 'qemu-linux'
         shell: bash
