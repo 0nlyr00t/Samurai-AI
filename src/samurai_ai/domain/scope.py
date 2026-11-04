@@ -153,6 +153,71 @@ class ScopeContract(BaseModel):
             detail="target does not match any inclusion rule",
         )
 
+    def evaluate_network(self, raw_network: str) -> ScopeDecision:
+        """Judge a whole network argument: it must fit inside the authorized scope.
+
+        A tool that takes a range (a sweep, a scan over a subnet) can otherwise widen
+        a /32 authorization to a /16 just by its argument.
+        """
+        try:
+            parsed_network = ip_network(raw_network.strip(), strict=False)
+        except ValueError as exc:
+            return ScopeDecision(
+                allowed=False,
+                reason=ScopeDecisionReason.INVALID_TARGET,
+                target=raw_network,
+                detail=f"not a network: {exc}",
+            )
+        network: _IPNetwork = parsed_network
+        text = str(network)
+
+        for raw_rule in self.excludes:
+            rule = _parse_rule(raw_rule)
+            if rule.kind is _RuleKind.NETWORK and rule.network is not None:
+                if _inside(rule.network, network) or _inside(network, rule.network):
+                    return ScopeDecision(
+                        allowed=False,
+                        reason=ScopeDecisionReason.EXCLUDED,
+                        target=text,
+                        matched_rule=rule.text,
+                        detail=f"network overlaps exclusion {rule.text}",
+                    )
+
+        for raw_rule in self.includes:
+            rule = _parse_rule(raw_rule)
+            if rule.kind is _RuleKind.NETWORK and rule.network is not None:
+                if _inside(network, rule.network):
+                    return ScopeDecision(
+                        allowed=True,
+                        reason=ScopeDecisionReason.ALLOWED,
+                        target=text,
+                        matched_rule=rule.text,
+                        detail=f"network fits inside {rule.text}",
+                    )
+            if rule.kind is _RuleKind.IP and rule.address is not None:
+                if network.num_addresses == 1 and network.network_address == rule.address:
+                    return ScopeDecision(
+                        allowed=True,
+                        reason=ScopeDecisionReason.ALLOWED,
+                        target=text,
+                        matched_rule=rule.text,
+                        detail=f"single address matches {rule.text}",
+                    )
+
+        return ScopeDecision(
+            allowed=False,
+            reason=ScopeDecisionReason.OUT_OF_SCOPE,
+            target=text,
+            detail=f"network {text} is not inside any included network",
+        )
+
+
+def _inside(inner: _IPNetwork, outer: _IPNetwork) -> bool:
+    """Is ``inner`` fully inside ``outer``? (``subnet_of`` trips the union in mypy.)"""
+    if inner.version != outer.version:
+        return False
+    return inner.prefixlen >= outer.prefixlen and inner.network_address in outer
+
 
 def _with_alias(contract: ScopeContract, target: _Target) -> _Target:
     """An aliased name is judged as the address it stands for."""

@@ -19,6 +19,7 @@ from samurai_ai.domain.execution import (
 from samurai_ai.domain.kernel import Approval, ApprovalStatus, ArtifactKind, RiskClass
 from samurai_ai.domain.offline import check_tool
 from samurai_ai.domain.operations import OperationEvent
+from samurai_ai.domain.scope_guard import ScopeGuardError, guard
 from samurai_ai.domain.vault import secret_references
 from samurai_ai.execution.registry import ToolOutput, ToolRegistry, default_registry
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
@@ -142,6 +143,28 @@ class ToolExecutionService:
         )
 
         expected_version = run.version
+        # second line of defence: adapters check their own targets too, but a forgotten
+        # check must not become a hole — the guard sees every host-shaped literal. It
+        # runs once the run row exists, so a refusal is still visible in the history.
+        try:
+            guard(
+                operation.scope,
+                validated,
+                exempt=tuple(getattr(adapter, "scope_exempt", ())),
+            )
+        except ScopeGuardError as exc:
+            run.start()
+            run.fail()
+            self.runs.save_run(
+                run,
+                expected_version,
+                OperationEvent(
+                    operation_id=operation_id,
+                    event_type="tool.run.failed",
+                    payload={"run_id": run.id, "reason": str(exc)},
+                ),
+            )
+            raise
         run.start()
         self.runs.save_run(
             run,
