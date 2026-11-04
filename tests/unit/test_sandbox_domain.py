@@ -15,8 +15,10 @@ from samurai_ai.domain.sandbox import (
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.sandbox import (
+    NETWORK_OVERRIDE_ENV,
     SANDBOX_PROFILES,
     DockerSandboxRunner,
+    SandboxError,
     get_profile,
     sign_allowlist,
 )
@@ -100,8 +102,8 @@ def test_profile_requires_digest_pinned_image() -> None:
 
 
 def test_profile_network_mode_fail_closed() -> None:
-    for bad in ("bridge", "host", "Scoped"):
-        with pytest.raises(ValidationError, match="'none', 'scoped' or 'direct'"):
+    for bad in ("bridge", "Scoped", "HOST"):
+        with pytest.raises(ValidationError, match="'none', 'scoped', 'direct' or 'host'"):
             make_profile(network_mode=bad)
     assert make_profile().network_mode == "none"
     assert make_profile(network_mode="scoped").network_mode == "scoped"
@@ -501,3 +503,33 @@ def test_the_stall_watchdog_follows_the_profile(tmp_path: Path) -> None:
     runner.run(profile, "run_stall2", "echo", ["hi"])
     # the preflight probes run first; the actual run is the last value and 600
     assert seen[-1] == 600.0
+
+
+def test_host_network_is_a_known_mode() -> None:
+    profile = make_profile(network_mode="host")
+    assert profile.network_mode == "host"
+
+
+def test_the_network_override_reaches_the_docker_argv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = make_profile(network_mode="none")
+    plain = runner.build_argv(profile, "run_abc123", "echo", ["hi"])
+    assert "host" not in plain
+    monkeypatch.setenv(NETWORK_OVERRIDE_ENV, "host")
+    forced = runner.build_argv(profile, "run_abc123", "echo", ["hi"])
+    assert forced[forced.index("--network") + 1] == "host"
+    monkeypatch.setenv(NETWORK_OVERRIDE_ENV, "sideways")
+    with pytest.raises(SandboxError, match="none/scoped/direct/host"):
+        runner.build_argv(profile, "run_abc123", "echo", ["hi"])
+
+
+def test_an_explicit_network_argument_beats_the_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, _ = make_runner(tmp_path)
+    profile = make_profile(network_mode="none")
+    monkeypatch.setenv(NETWORK_OVERRIDE_ENV, "host")
+    argv = runner.build_argv(profile, "run_abc123", "echo", ["hi"], network="direct")
+    assert "host" not in argv

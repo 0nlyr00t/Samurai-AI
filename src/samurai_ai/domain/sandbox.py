@@ -101,9 +101,10 @@ class SandboxProfile(BaseModel):
     @field_validator("network_mode")
     @classmethod
     def validate_network_mode(cls, value: str) -> str:
-        if value not in ("none", "scoped", "direct"):
+        if value not in ("none", "scoped", "direct", "host"):
             raise SandboxProfileError(
-                f"sandbox network_mode must be 'none', 'scoped' or 'direct': {value!r}"
+                f"sandbox network_mode must be 'none', 'scoped', 'direct' or 'host': "
+                f"{value!r}"
             )
         return value
 
