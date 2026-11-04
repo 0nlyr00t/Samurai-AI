@@ -227,6 +227,7 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
         route = [str(params.get("model_id") or "")]
         if not route[0]:
             raise MethodError("missing", "model_id is required")
+        route += [str(item) for item in (params.get("fallbacks") or []) if item]
         task_ids = params.get("task_ids")
         try:
             handle = runs.start(
