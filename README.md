@@ -83,17 +83,53 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v17, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 1118 unit/integration/CLI/TUI tests.
+- 1193 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
 CALDERA/VECTR (только export), secondary-источники вне матрицы (
 технические блокеры в `md/threat-review-security-tools.md`), LLM streaming,
 doom-loop guard для авторазрешённых петель, shell-режим в фоне на уровне ОС,
 extension seams/плагины (инструменты уже добавляются манифестами),
-web-поверхность операции, distributed runners и air-gapped модели, полный
+web-поверхность операции (сокет-демон уже есть), distributed runners и air-gapped модели, полный
 egress enforcement на Docker Desktop for Mac и OS-пакеты installers (есть
 bare standalone binary). ADB и VBoxManage проверены только mock-прогонами,
 гены пока не мерялись полевой серией — см. `md/night-wave-report.md`.
+
+## Живая сессия: демон и второй терминал
+
+Работа больше не умирает вместе с командой. `samurai serve` поднимает сессионный
+демон на unix-сокете `~/.config/samurai/run/serve.sock` (0600), к нему
+подключаются с другого терминала:
+
+```bash
+samurai serve &                                        # демон
+samurai attach <op>                                    # поток событий, read-only
+samurai send <op> --message "смотри 22 порт"           # записка в журнал
+samurai send <op> --approve                            # одобрить ожидающий шаг
+samurai send <op> --answer <call> --pick target=app    # ответить агенту
+```
+
+`attach --from <seq>` продолжает с курсора, `--once` печатает накопленное и
+выходит. В TUI то же самое открывает `Ctrl-T`. Обрыв клиента работу не
+останавливает; остановка — отдельно, `samurai call run.cancel --params …`.
+Сокет локальный: право подключения равно праву читать state-каталог, права не
+размываются — read-only пир не может писать, и всё равно решает общая таблица
+доступа.
+
+## От цели до прогона одной командой
+
+```bash
+samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
+  --include flight.htb --task "Скан портов" --task "Разобрать веб"   --model kimi/kimi-k2-turbo-preview@v1
+```
+
+Команда создаёт операцию, план-цепочку, одобряет план и ведёт работу до конца
+плана. `--detach` оставляет её демону. Vhost без DNS описывается алиасом —
+`samurai scope host add <op> flight.htb 10.129.98.19` (имя резолвится внутри
+песочницы, scope судит его по адресу). Если что-то не отвечает вообще,
+`samurai sandbox check <op>` покажет, с какой стороны обрыв; для подсетей,
+которые не роутит бридж, есть `SAMURAI_SANDBOX_NETWORK=host` (мимо прокси, но
+проверка scope остаётся).
 
 ## Операторские команды ночной волны
 

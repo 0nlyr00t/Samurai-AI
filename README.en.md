@@ -87,7 +87,7 @@ Implemented:
 - RU/EN first-run language selection and `/lang` switching;
 - SQLite migrations v1–v17, append-only events, and optimistic concurrency;
 - CLI and TUI with real kernel/recovery/tool/agent/playbook views;
-- 1118 unit/integration/CLI/TUI tests.
+- 1193 unit/integration/CLI/TUI tests.
 
 Not implemented yet: PDF reports (no stdlib path), live CALDERA/VECTR API
 integrations (export-only), further security tools (
@@ -96,6 +96,43 @@ LLM streaming, a doom-loop guard for auto-allowed loops,
 OS-level background shell jobs, extension seams/plugins, an operation web surface, full egress enforcement on
 Docker Desktop for Mac, and OS package installers (a bare standalone binary is
 available).
+
+## A live session: daemon and a second terminal
+
+Work no longer dies with the command. `samurai serve` starts a session daemon on
+the unix socket `~/.config/samurai/run/serve.sock` (0600), and another terminal
+attaches to it:
+
+```bash
+samurai serve &                                        # daemon
+samurai attach <op>                                    # event stream, read-only
+samurai send <op> --message "check port 22"            # a note in the journal
+samurai send <op> --approve                            # approve the waiting step
+samurai send <op> --answer <call> --pick target=app    # answer the agent
+```
+
+`attach --from <seq>` resumes from a cursor, `--once` prints the backlog and
+leaves. In the TUI the same screen is `Ctrl-T`. A dropped client does not stop
+the work; stopping is separate, `samurai call run.cancel --params …`. The socket
+is local: being able to connect means being able to read the state directory, and
+privileges are not diluted — a read-only peer cannot write, and the shared access
+table decides anyway.
+
+## From a target to a run in one command
+
+```bash
+samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
+  --include flight.htb --task "Port scan" --task "Pull the web app" \
+  --model kimi/kimi-k2-turbo-preview@v1
+```
+
+It creates the operation, a chained plan, approves the plan and works it to the
+end. `--detach` leaves it with the daemon. A vhost with no DNS is an alias —
+`samurai scope host add <op> flight.htb 10.129.98.19` (the name resolves inside
+the sandbox and scope judges it by address). If something does not answer at all,
+`samurai sandbox check <op>` shows which side is broken; for subnets a bridge
+cannot route there is `SAMURAI_SANDBOX_NETWORK=host` (past the proxy, still scope
+checked).
 
 ## Operator commands from the nightly wave
 
