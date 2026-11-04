@@ -129,6 +129,10 @@ samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
 
 
 
+## PDF-отчёт
+
+`samurai report generate <op> --format pdf` печатает HTML-отчёт закреплённым headless-Chromium внутри песочницы (профиль `sandbox.pdf@v1`, сеть `none`, `nobody`) и кладёт PDF рядом с исходным `.source.html`; PDF регистрируется артефактом с sha256. `--min-impact` работает так же, как для остальных форматов.
+
 ## Плагины
 
 Расширение без правки ядра и без чужого Python: `samurai plugin install <каталог> --trusted` ставит пакет с `plugin.json` — инструменты-манифесты, профили, плейбуки, sha256 на каждый файл. Имя инструмента обязано начинаться с имени плагина, профиль держит жёсткость и закреплённый образ, занятое имя — отказ. `plugin list|show|check` показывают состав и ловят правку как `tampered`, `plugin rm` снимает всё принесённое и не трогает чужое. Пример — `examples/plugins/demo-webscan`.
