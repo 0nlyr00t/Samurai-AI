@@ -21,7 +21,8 @@ _PINNED_IMAGE = re.compile(
     r"(?:[a-zA-Z0-9][a-zA-Z0-9._/-]*@|)sha256:[0-9a-f]{64}\Z"
 )
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
-_PROXY_FLAG = re.compile(r"-[a-z][a-z-]{0,31}\Z")
+#: tools spell it `-proxy` or `--proxy`; both are one flag
+_PROXY_FLAG = re.compile(r"--?[a-z][a-z-]{0,30}\Z")
 _EGRESS_HOST = re.compile(
     r"(?:\*\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
     r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\Z"
@@ -66,6 +67,8 @@ class SandboxProfile(BaseModel):
     user: str = "65534:65534"
     # Secret env variables this profile may receive; values never enter argv.
     env_names: tuple[str, ...] = ()
+    #: plain env the tool needs (HOME on the tmpfs, a cache dir)
+    env: dict[str, str] = Field(default_factory=dict)
     # Flag through which the tool takes the egress proxy URL, e.g. "-proxy".
     proxy_flag: str | None = None
     # How the proxy URL is addressed: HTTP CONNECT (default) or SOCKS5.

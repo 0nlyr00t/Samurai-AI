@@ -56,6 +56,10 @@ def _wordlist_dir() -> Path:
 _FUZZ_MATCH_CODES = "200-299,301,302,307,401,403,405,500"
 
 
+#: parameter key the executor uses to carry vault-resolved env to the tool
+_SECRET_ENV_KEY = "_secret_env"
+
+
 class _ScopedSandboxTool:
     profile_id: str = ""
     executable: str = ""
@@ -136,6 +140,10 @@ class _ScopedSandboxTool:
         targets = self._validated_targets(params, scope)
         args = self.build_args({**params, "targets": targets})
         env, secret_env = self.build_env(params)
+        # env the executor already resolved from the vault (declared names only)
+        extra = params.get(_SECRET_ENV_KEY) or {}
+        if isinstance(extra, dict):
+            secret_env = {**secret_env, **{str(k): str(v) for k, v in extra.items()}}
         run_id = uuid4().hex[:12]
         outcome = self.runner.run(
             profile,

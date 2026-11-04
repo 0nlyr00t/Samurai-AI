@@ -103,6 +103,17 @@ class VaultService:
                 f"secret not found in scope {scope}: {name!r}"
             )
 
+    def exists(self, name: str, operation_id: str | None = None) -> bool:
+        return self.repository.find_visible(name, operation_id) is not None
+
+    def set(
+        self, name: str, value: str, operation_id: str | None = None
+    ) -> SecretMetadata:
+        """Replace an existing secret's value in place (its scope stays)."""
+        self.get(name, operation_id)
+        self.remove(name, operation_id)
+        return self.add(name, value, operation_id)
+
     def list_metadata(self, operation_id: str | None = None) -> list[SecretMetadata]:
         if operation_id is not None and self.operations.get(operation_id) is None:
             raise OperationNotFoundError(f"operation not found: {operation_id}")

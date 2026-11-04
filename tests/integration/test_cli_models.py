@@ -288,8 +288,8 @@ def test_cli_model_fallback_budget_usage(
 def test_cli_model_add_and_remove_custom_model(home: Path, capsys) -> None:
     database = str(home / "custom-model.db")
 
-    assert main(["--db", database, "model", "add", "moonshot/kimi-k3"]) == 0
-    assert "added\tmoonshot/kimi-k3@v1" in capsys.readouterr().out
+    assert main(["--db", database, "model", "add", "moonshot/kimi-k2-0905-preview"]) == 0
+    assert "added\tmoonshot/kimi-k2-0905-preview@v1" in capsys.readouterr().out
 
     assert (
         main(
@@ -298,16 +298,16 @@ def test_cli_model_add_and_remove_custom_model(home: Path, capsys) -> None:
         == 0
     )
     ids = {model["id"] for model in json.loads(capsys.readouterr().out)}
-    assert "moonshot/kimi-k3@v1" in ids
+    assert "moonshot/kimi-k2-0905-preview@v1" in ids
     assert "moonshot/kimi-k2@v1" in ids
 
-    assert main(["--db", database, "model", "add", "moonshot/kimi-k3"]) == 2
+    assert main(["--db", database, "model", "add", "moonshot/kimi-k2-0905-preview"]) == 2
     assert "already exists" in capsys.readouterr().err
 
     assert main(["--db", database, "model", "add", "moonshot/kimi-k2@v1"]) == 2
     assert "already registered" in capsys.readouterr().err
 
-    assert main(["--db", database, "model", "remove", "moonshot/kimi-k3"]) == 0
+    assert main(["--db", database, "model", "remove", "moonshot/kimi-k2-0905-preview"]) == 0
     capsys.readouterr()
     assert (
         main(
@@ -316,9 +316,9 @@ def test_cli_model_add_and_remove_custom_model(home: Path, capsys) -> None:
         == 0
     )
     ids = {model["id"] for model in json.loads(capsys.readouterr().out)}
-    assert "moonshot/kimi-k3@v1" not in ids
+    assert "moonshot/kimi-k2-0905-preview@v1" not in ids
 
-    assert main(["--db", database, "model", "remove", "moonshot/kimi-k3"]) == 2
+    assert main(["--db", database, "model", "remove", "moonshot/kimi-k2-0905-preview"]) == 2
     assert "not found" in capsys.readouterr().err
 
 
