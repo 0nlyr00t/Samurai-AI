@@ -87,6 +87,9 @@ class Operation(BaseModel):
     mode: OperationMode
     status: OperationStatus = OperationStatus.DRAFT
     scope: ScopeContract
+    #: the harness has no internet: model calls must be local, tools that reach
+    #: the outside are refused instead of failing halfway
+    offline: bool = False
     version: int = Field(default=1, ge=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

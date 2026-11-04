@@ -38,6 +38,7 @@ from samurai_ai.domain.models import (
     ProviderUnavailableError,
     parse_model_id,
 )
+from samurai_ai.domain.offline import check_model
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.vault import SecretNotFoundError
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
@@ -291,9 +292,12 @@ class ModelService:
         router: ModelRouter | None = None,
         extra_payload: dict[str, Any] | None = None,
     ) -> ChatResponse:
-        self.operations.get(operation_id)
+        operation = self.operations.get(operation_id)
         model, provider = self._resolve_model(model_id)
         candidates = [model.id, *fallbacks]
+        if operation.offline:
+            # ProviderDefinition carries the base URL for every family
+            check_model(model.id, provider.base_url, True)
         risk = RiskClass.R2 if self._any_remote(candidates) else RiskClass.R1
         self._check_budget(operation_id)
         self._resolve_approval(operation_id, model, risk, approval_id)
