@@ -8,220 +8,87 @@
 
 # Samurai AI
 
-Samurai AI — local-first TUI harness для авторизованных Red Team-операций, Bug Bounty, CTF/HTB и Operation Planning. Продукт строится вокруг управляемой операции, а не вокруг неограниченного чата с инструментами. Знак — самурай с катаной в красном росчерке-кольце: один заход, много целей. Логотип живёт только здесь и в пакете — в терминале ни знака, ни слогана.
+Локальный харнесс для авторизованных атак: Red Team, Bug Bounty, CTF/HTB и планирование операций. Ведёт операцию как процесс — границы, план, доказательства, отчёт — и держит агента внутри этого процесса, вместо того чтобы отдавать модели неограниченный чат с инструментами.
 
-## Принципы
+Терминальный интерфейс, всё состояние на машине оператора, ключи в локальном vault. Каждый инструмент — контейнер с закреплённым digest, каждый выход за scope и каждое опасное действие проходят через политику, а не через доверие к модели.
 
-- **Scope before action** — сначала границы и правила, затем выполнение.
-- **Workflow before autonomy** — автономность только внутри понятного процесса.
-- **Evidence before finding** — результат сканера еще не является уязвимостью.
-- **Operator stays in control** — оператор может проверить, остановить и восстановить работу.
-- **Policy outside the model** — scope, approvals и переходы не делегируются LLM.
-
-## Текущее состояние
-
-Завершены **Stage 0**, **Stage 1/1b**, **Stage 2a/2b**, **Stage 3**, **Stage 4 целиком — Bug Bounty, CTF/HTB, Red Team и Operation Planning playbooks**, **Stage 5 целиком — параллельные специализированные агенты, campaign memory, custom playbooks/skills, CALDERA/VECTR exports, headless/CI и HTML reports** и **Stage 6a — evaluation harness с метриками и regression-гейтами**, **Stage 6b — fault injection, prompt-injection containment, soak и migration/backup/restore suites** и **Stage 6c — standalone binary, воспроизводимые сборки, подписанные релизы и политика совместимости (`md/compatibility.md`)** и **Этап 7 (волна 1) — governed security tools adapters `recon.httpx-probe` и `scan.nuclei` по threat review**, **Этап 7 (волна 2) — env-канал секретов и `recon.subfinder-passive` (ключи уезжают именем, а не значением)**, **Этап 7 (волна 3) — `recon.dnsx-resolve` через закреплённый DoH и SOCKS5-вход egress-прокси** и **Этап 7 (волна 3b) — подпись allowlist без ручного шага (`sandbox verify`)** и **Этап 7 (волна 4) — сканер портов `scan.nmap` и класс сети `direct`**, **Этап 7 (волна 5) — фаззер путей `fuzz.ffuf`**, **разведка через браузер `research.search`/`research.read` с цитатами**, **операционная волна — туннели, ssh/SMB/RDP/ADB, виртуалки, сборка эксплойтов, лестница импакта и гены** и **Этап 8 — TUI UX: стрелочная навигация (выбор языка, `/model` picker модели и reasoning), чёрная тема по умолчанию и цветной журнал** , **Stage 8+ — вкладки Журнал/План/Находки/Доступ, автодополнение slash-команд, выделение и копирование текста, режим `/yolo`, доверие к директории (`/trust`) и отображение cwd в статус-баре** и **Этап 9 — harness UX: режимы разрешений, plan mode, goal mode, steering, shell-режим, `/undo` и `/compact`**.
-
-Уже реализовано:
-
-- четыре режима операций и проверяемый lifecycle;
-- include/exclude scope для domain, wildcard, URL origins и IP/CIDR;
-- plans, tasks, dependencies, stage gates и artifact requirements;
-- approvals R0–R4 и approval-gated tool execution;
-- immutable evidence artifacts с SHA-256 и redaction;
-- findings workflow от candidate до reported;
-- snapshots/restore/fork, recovery reconcile и plan/scope diff;
-- versioned tool registry, `process.exec` без shell и `http.fetch` через scope broker;
-- Docker sandbox profiles со signed allowlist, scoped egress proxy с DNS pinning;
-- MCP stdio/HTTP client и persistent secrets vault (AES-256-GCM);
-- prompt-injection warnings и `untrusted-external` trust label;
-- LLM provider abstraction (openai-compatible, anthropic, gemini, ollama),
-  ModelRouter с retry/fallback, per-operation budgets и оркестратор
-  Planner/Executor/Parser/Verifier с закрытой command schema;
-- Bug Bounty playbook: program rules, scope-enforced asset ledger с diff,
-  dedup находок по fingerprint, governed gates;
-- отчеты (Markdown/JSON) только из validated findings, evidence package
-  с manifest SHA-256, redaction секретов и блокировка out-of-scope данных;
-- CTF/HTB playbook: категории по BRD, hypothesis log с конечным автоматом,
-  immutable flag ledger с regex-валидацией формата и proof-артефактами,
-  replay из журнала событий, writeup (Markdown/JSON) с redaction и export;
-- Red Team playbook: ROE с blocking approval до старта исполнения, attack path
-  с ATT&CK mapping и зависимостями, detection expectations и outcomes,
-  checkpoints, debrief с open gaps, redaction и SHA-256 export;
-- Operation Planning playbook: сценарии без активных действий, test cases
-  с ATT&CK/kill chain mapping и detection expectations, stop points,
-  runbook (Markdown/JSON) в статусе planning с redaction и export;
-- параллельные специализированные агенты (swarm): bounded thread pool по
-  независимым задачам плана, специализации general/recon/testing/analysis
-  (prompt-level, governance идентичен), авто-выбор ready-задач, preflight
-  model approval, отчет wall time vs sequential estimate со speedup,
-  SQLite v13, CLI `swarm ready/run/list/show` и TUI `/swarm`;
-- campaign memory: workspace-scoped записи (methodology/decision/failure/note)
-  с retention и удалением, read-only для агентов (bounded redacted digest в
-  prompts, аудит в agent.run.start), CLI `memory` и TUI `/memory`;
-- custom playbooks (JSON templates со структурной валидацией, immutable
-  хранилище, `playbook install/use/list-custom`) и trusted versioned skills
-  (`--trusted` обязателен, sha256, инжекция в executor prompt), TUI
-  `/playbooks` и `/skills`, SQLite v17;
-- стабильный контракт exit codes (0/1/2, зафиксирован тестами), экспорт
-  журнала в NDJSON (`events export`), headless mode для CI (`headless run`
-  с JSON summary), GitHub Actions CI (ruff, strict mypy, pytest, build);
-- CALDERA export (adversary pack из executed attack steps с ATT&CK tactics)
-  и VECTR export (`vectr-campaign@v1` JSON) с redaction и sha256 manifest;
-- HTML bug bounty report и self-contained read-only HTML dossier операции
-  (`operation export --format html`) с escaping и redaction;
-- evaluation harness (Stage 6a): декларативные JSON-сьюты сценариев на
-  детерминированном scripted provider, метрики solve/validation rate, cost,
-  wall time, interventions, invalid actions и false positives из журнала
-  событий, сравнение с baseline для регрессий (`eval run`, `eval compare`),
-  smoke-сьют `evals/smoke.json` в CI;
-- режимы разрешений `ask`/`yolo`/`never` с переиспользованием approval и бейджами чувствительных путей, plan mode (`Shift-Tab`) по признаку `read_only`, goal mode с бюджетом шагов и времени, steering `Ctrl-S`, shell-режим `!`, `/undo` и `/compact`;
-- три темы (тёмная, светлая, высокий контраст) и свои файлы тем, перебиндинг глобальных клавиш;
-- доски плана и находок (`/tasks`, `/findings`) с действиями и деталями;
-- сессии субагентов `/subagent` и `Ctrl-G`: субагент берёт задачу плана, работает в фоне, виден, останавливается;
-- палитра всех действий `Ctrl-P`, оверлей клавиш `?`, инспектор запуска (`/inspect`, `Ctrl-I`) на восемь групп с пере-проверкой scope, экран приветствия и пустые состояния;
-- RU/EN first-run выбор языка и переключение через `/lang`;
-- SQLite migrations v1–v17, append-only events и optimistic concurrency;
-- CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
-- 1193 unit/integration/CLI/TUI tests.
-
-Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции
-CALDERA/VECTR (только export), secondary-источники вне матрицы (
-технические блокеры в `md/threat-review-security-tools.md`), LLM streaming,
-doom-loop guard для авторазрешённых петель, shell-режим в фоне на уровне ОС,
-extension seams/плагины (инструменты уже добавляются манифестами),
-web-поверхность операции (сокет-демон уже есть), distributed runners и air-gapped модели, полный
-egress enforcement на Docker Desktop for Mac и OS-пакеты installers (есть
-bare standalone binary). ADB и VBoxManage проверены только mock-прогонами,
-гены пока не мерялись полевой серией — см. `md/night-wave-report.md`.
-
-## Живая сессия: демон и второй терминал
-
-Работа больше не умирает вместе с командой. `samurai serve` поднимает сессионный
-демон на unix-сокете `~/.config/samurai/run/serve.sock` (0600), к нему
-подключаются с другого терминала:
-
-```bash
-samurai serve &                                        # демон
-samurai attach <op>                                    # поток событий, read-only
-samurai send <op> --message "смотри 22 порт"           # записка в журнал
-samurai send <op> --approve                            # одобрить ожидающий шаг
-samurai send <op> --answer <call> --pick target=app    # ответить агенту
-```
-
-`attach --from <seq>` продолжает с курсора, `--once` печатает накопленное и
-выходит. В TUI то же самое открывает `Ctrl-T`. Обрыв клиента работу не
-останавливает; остановка — отдельно, `samurai call run.cancel --params …`.
-Сокет локальный: право подключения равно праву читать state-каталог, права не
-размываются — read-only пир не может писать, и всё равно решает общая таблица
-доступа.
-
-## От цели до прогона одной командой
-
-```bash
-samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
-  --include flight.htb --task "Скан портов" --task "Разобрать веб"   --model kimi/kimi-k2-turbo-preview@v1
-```
-
-Команда создаёт операцию, план-цепочку, одобряет план и ведёт работу до конца
-плана. `--detach` оставляет её демону. Vhost без DNS описывается алиасом —
-`samurai scope host add <op> flight.htb 10.129.98.19` (имя резолвится внутри
-песочницы, scope судит его по адресу). Если что-то не отвечает вообще,
-`samurai sandbox check <op>` покажет, с какой стороны обрыв; для подсетей,
-которые не роутит бридж, есть `SAMURAI_SANDBOX_NETWORK=host` (мимо прокси, но
-проверка scope остаётся).
-
-## Операторские команды ночной волны
-
-- `samurai finding impact attempt <id> <read|write|auth-bypass|data-export|rce> --evidence <id> [--rollback "…"]` — поднять импакт находки; `finding impact grade <id>` показывает уровень, баллы, порог отчётности и бюджет.
-- `samurai gene list|add|fitness|promote|rollback` — пул эволюционирующих подсказок: ген рождается в тени, фитнес берётся из отчёта eval (`--report`), в промпт идут только активные.
-- `samurai rules list|add|rm` — поаргументные правила `allow|ask|deny`.
-- `samurai tool install <file> --trusted` и `tool manifests` — инструменты манифестами, правка после установки видна как `tampered`.
-- `samurai sandbox verify` — сходится ли подпись профилей, без записи.
-- `samurai report generate <op> --min-impact 3` — не выпускать отчёт по находкам ниже порога импакта.
-- `samurai policy set|list|rm <op>` — поднять роль, нужную для команды внутри одной операции (только ужесточение, владелец).
-- `samurai agent questions <op>` / `samurai agent answer <call> --select id=Метка` — открытые вопросы агента и ответы на них (вопрос ждёт ограниченно и не останавливает прогон).
-- Белт разложен на два образа — `remote` (админка) и `exploit` (компилятор и библиотеки); RDP-проба своя, на X.224 и TLS, поэтому freerdp и Xvfb в образах нет; оба публикуются из CI (`ghcr.io/<owner>/samurai-*`, amd64+arm64, по digest индекса), локально — `packaging/sandbox/build.sh remote|exploit`. Пакет в GHCR по умолчанию приватный. Видимость переключается вручную на странице пакета (`Settings` → `Change visibility`): ни `GITHUB_TOKEN`, ни токен `gh` через REST её не меняют (эндпоинт видимости отвечает 404). Пока пакет закрыт, `pull` требует `docker login ghcr.io` с токеном, у которого есть `read:packages`. PR с пином от бота требует approve прогона проверок (PR создан `GITHUB_TOKEN`).
-
+<p align="center">
+  <img src="assets/samurai-tui.ru.png" width="1080" alt="TUI Samurai AI: журнал операции с инструментами, находкой и ожидающим одобрением, план 1/3 и строка команд">
+</p>
 
 ## Установка
+
+macOS и Linux, без root и без Python на машине:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh | bash
 ```
 
-Скрипт ставит uv (если его нет) и устанавливает `samurai` через
-`uv tool install` из этого репозитория — Python 3.12+ подтянется
-автоматически. Конкретный релиз: `... | bash -s -- --ref v0.3.0`.
+Установщик берёт подписанный бинарник последнего релиза, **обязательно** сверяет sha256 и, если в системе есть `cosign`, проверяет Sigstore-подпись с привязкой к identity release-workflow. Несовпадение — отказ до установки. Ставит в `~/.local/bin` и дописывает этот каталог в PATH вашего shell.
 
-Обновление до свежего релиза:
+- конкретный релиз: `... | bash -s -- --ref v0.3.0`
+- без бинарника (например, linux/arm64): скрипт сам уйдёт на сборку через uv и скажет об этом
+- `--dry-run` — показать план и ничего не менять
 
-```bash
-samurai update          # проверить и обновить
-samurai update --check  # только проверить наличие новой версии
-```
+Для песочницы нужен Docker: инструменты исполняются в контейнерах, а не на хосте.
 
-После обновления набор sandbox-профилей мог измениться: `samurai sandbox verify`
-(0 — подпись валидна), при расхождении — `samurai sandbox sign`. Первый запуск
-sandbox-инструмента переподпишет набор сам и скажет об этом.
+Обновление: `samurai update` (`--check` — только проверить версию). Проверка подписей артефактов релиза — `md/compatibility.md`.
 
-Состояние — база, ключ vault, темы и биндинги — лежит в `~/.config/samurai`
-(`$XDG_CONFIG_HOME`, переопределяется `SAMURAI_HOME`). Если рядом осталась старая
-`.samurai/`, приложение скажет об этом и подскажет `--db`.
-
-## Быстрый старт для разработки
-
-Требования: Python 3.12+ и uv.
+## Удаление
 
 ```bash
-git clone https://github.com/0nlyr00t/Samurai-AI.git
-cd Samurai-AI
-uv sync --locked
-uv run pytest
+curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/uninstall.sh | bash
 ```
 
-Создать операцию и открыть TUI:
+Сносит бинарник, PATH-блок, состояние (`~/.config/samurai`: база, ключ vault, настройки) и образы белтов. `--keep-state` оставляет состояние, `--yes` не спрашивает (обязателен при `curl | bash`), `--dry-run` показывает план.
 
-```bash
-uv run samurai operation create "Lab" \
-  --mode ctf-htb \
-  --objective "Solve the authorized lab" \
-  --include 192.0.2.10
+## Возможности
 
-uv run samurai tui
-```
+**Операция как объект.** Четыре режима (Bug Bounty, CTF/HTB, Red Team, Operation Planning), проверяемый lifecycle, include/exclude scope для домена, wildcard, URL origin и IP/CIDR, неизменяемые доказательства с SHA-256, находки от кандидата до отчёта, снимки/откат/форк и сверка восстановления.
 
-Проверки качества:
+**План и одобрения.** Задачи с зависимостями, стадии и гейты, артефакты-требования, риски R0–R4. Опасное исполнение ждёт одобрения оператора; режимы `ask`, `yolo`, `never` и поаргументные правила `allow|ask|deny` держат политику вне модели.
 
-```bash
-uv run ruff check .
-uv run mypy src
-uv build
-```
+**Инструменты.** Разведка (`recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`), сканирование (`scan.nmap`, `scan.nuclei`), фаззинг (`fuzz.ffuf`), разведка через браузер с цитатами (`research.search`, `research.read`), администрирование и удалённый доступ (ssh, SMB, RDP-проба, ADB), виртуалки и диски, сборка и запуск эксплойтов. Новый инструмент описывается JSON-манифестом и подписывается в общий allowlist, без нового кода.
 
-## Целевая поставка
+**Песочница.** Docker-профили с закреплённым digest, `--cap-drop ALL`, read-only корень, лимиты CPU/памяти/PID, scoped egress-прокси с DNS pinning и аудитом каждого соединения. Белт разложен по радиусу поражения: админский образ без компилятора, exploit-образ без чужих ключей.
 
-Продукт поставляется как standalone per-platform `samurai` executable (PyInstaller one-file, без Python и uv на целевой машине): локальная сборка — `bash packaging/build_binary.sh`, релизные сборки linux-x86_64/darwin-arm64/windows-x86_64 собираются в `.github/workflows/release.yml` по тегу `v*` и подписываются Sigstore keyless (проверка — `md/compatibility.md`). sdist/wheel воспроизводимы побитно (`packaging/check_reproducible.sh` в CI). Docker, security tools, MCP servers и Ollama остаются optional dependencies с health checks.
+**Импакт и доказательства.** Лестница `read → write → auth-bypass → data-export → rce` с баллами, порогом отчётности и бюджетом эскалации; отчёт не выпускается по находкам ниже порога (`report generate --min-impact`). Трафик, вывод и файлы ложатся артефактами, а не цитатами в чат.
 
-## Модели
+**Живая сессия.** Демон на локальном unix-сокете: работа переживает закрытый терминал, второй терминал или TUI-экран (`Ctrl-T`) подключается к потоку, отвечает на вопросы агента, одобряет шаги и отваливается без потери работы. Сокет 0600, read-only клиенты, права решает общая таблица доступа.
 
-На этапе LLM orchestration будет реализован расширяемый model provider registry с capability negotiation: OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock, DeepSeek, xAI, Qwen, Moonshot/Kimi, Mistral, OpenRouter, OpenAI-compatible endpoints и first-class Ollama.
+**Одна команда до прогона.** `samurai run "<имя>" --mode … --include … --task … --model …` создаёт операцию, план и ведёт его до конца; `--detach` оставляет работу демону. `scope host add` описывает vhost без DNS, `sandbox check` показывает, с какой стороны оборвана достижимость цели.
 
-Playbook не должен зависеть от vendor-specific API.
+**Отчёты и экспорт.** Markdown/JSON/HTML отчёты и досье операции только из проверенных находок, redaction секретов, экспорт журнала в NDJSON, экспорт кампании в CALDERA и VECTR.
 
-## Локализация
+**Автономность под контролем.** Субагенты на задачах плана, память кампании, genes с фитнесом из eval, evaluation harness с регрессиями, headless-режим для CI. Агент спрашивает оператора посреди шага и не встаёт, если ответа нет.
 
-Продукт должен предлагать выбор **RU/EN** при первом запуске, сохранять выбранный язык и позволять переключать его позже. Все новые operator-facing строки добавляются одновременно в русские и английские ресурсы.
+**Интерфейс.** TUI с вкладками журнала, плана, находок и доступа, палитрой действий, инспектором запуска, досками и оверлеем клавиш; RU/EN; три темы; перебиндинг клавиш. Плюс полный CLI для скриптов и CI с устойчивым контрактом кодов возврата.
+
+## Как это устроено
+
+1. **Операция** фиксирует режим, цель и scope.
+2. **План** разбивает работу на задачи с зависимостями и гейтами.
+3. **Агент** предлагает шаги; риск выше R0 ждёт одобрения.
+4. **Инструмент** исполняется в контейнере, выход за scope режет прокси.
+5. **Результат** становится артефактом с хешем и парой трафика.
+6. **Находка** поднимается по лестнице импакта только с доказательством.
+7. **Отчёт** собирается из того, что подтверждено, и ничего больше.
+
+Подробности, реализованные мелочи, поставка и политика модели — [`md/capabilities.md`](md/capabilities.md).
 
 ## Документация
 
-- `md/requirements.md` — бизнес-требования.
-- `md/development-plan.md` — roadmap, этапы и acceptance criteria.
-- `md/compatibility.md` — политика совместимости, проверка подписей релизов.
-- `md/threat-review-security-tools.md` — threat review расширенного набора security tools.
-- `Agent.md` — handoff для продолжения разработки.
-- `README.en.md` — English README.
+- [`md/requirements.md`](md/requirements.md) — требования.
+- [`md/development-plan.md`](md/development-plan.md) — этапы, acceptance criteria, статус.
+- [`md/threat-review-security-tools.md`](md/threat-review-security-tools.md) — разбор каждого инструмента: что разрешено, чем платим.
+- [`md/compatibility.md`](md/compatibility.md) — совместимость и проверка подписей релизов.
+- [`md/capabilities.md`](md/capabilities.md) — полный перечень возможностей и команды оператора.
+- [`Agent.md`](Agent.md) — handoff для продолжения разработки.
 
-## Безопасное использование
+## Состояние
 
-Samurai AI предназначен только для авторизованных security research, CTF/HTB, Bug Bounty в рамках правил программы и Red Team/adversary emulation с явным разрешением владельцев систем. Не используйте продукт вне согласованного scope.
+Продукт в активной разработке: 1193 автотеста, зелёные CI-гейты (ruff, strict mypy, pytest, сборка), подписанные релизы. Не сделано: PDF-отчёты, web-поверхность операции, distributed runners, air-gapped модели, плагины; ADB и VBoxManage проверены mock-прогонами; гены ещё не мерялись полевой серией (`md/night-wave-report.md`).
+
+## Авторизация
+
+Samurai AI рассчитан на авторизованный security research, CTF/HTB, Bug Bounty в рамках правил программы и Red Team/adversary emulation с явным разрешением владельцев систем. Вне согласованного scope не используйте.
