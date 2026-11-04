@@ -23,9 +23,13 @@ class OperationService:
         name: str,
         mode: OperationMode,
         scope: ScopeContract,
+        *,
+        offline: bool = False,
         objective: str = "",
     ) -> Operation:
-        operation = Operation(name=name, mode=mode, scope=scope, objective=objective)
+        operation = Operation(
+            name=name, mode=mode, scope=scope, objective=objective, offline=offline
+        )
         event = OperationEvent(
             operation_id=operation.id,
             event_type="operation.created",
@@ -33,6 +37,7 @@ class OperationService:
                 "name": operation.name,
                 "mode": operation.mode.value,
                 "scope": operation.scope.model_dump(mode="json"),
+                "offline": operation.offline,
             },
         )
         self.repository.add(operation, event)
