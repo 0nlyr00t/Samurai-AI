@@ -3,7 +3,8 @@
 import socket
 import threading
 
-from samurai_ai.cli_sandbox import _is_address, _probe_host
+from samurai_ai.services.reachability import is_address as _is_address
+from samurai_ai.services.reachability import probe_host as _probe_host
 
 
 def test_only_real_addresses_are_probed() -> None:

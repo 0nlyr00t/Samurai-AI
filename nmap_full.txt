@@ -1,0 +1,2 @@
+# Nmap 7.991 scan initiated Wed Nov  4 19:57:14 2026 as: nmap -p- --min-rate 10000 -oN nmap_full.txt 10.129.98.80
+# Nmap done at Wed Nov  4 19:57:16 2026 -- 1 IP address (0 hosts up) scanned in 2.04 seconds

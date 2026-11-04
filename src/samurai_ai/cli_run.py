@@ -30,6 +30,19 @@ def add_run_command(subcommands: Any, add_parser: Any) -> None:
     run.add_argument("--task", action="append", dest="tasks", default=[], metavar="TITLE")
     run.add_argument("--objective", default="")
     run.add_argument(
+        "--fallback",
+        action="append",
+        default=[],
+        dest="fallbacks",
+        metavar="MODEL_ID",
+        help="try this model when the first one is unavailable",
+    )
+    run.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="start even when no target answers",
+    )
+    run.add_argument(
         "--offline",
         action="store_true",
         help="the harness has no internet: local models only, no outside tools",
@@ -78,9 +91,35 @@ def _mode(value: str) -> Any:
     return OperationMode(value)
 
 
+def _preflight(args: argparse.Namespace) -> bool:
+    """Ask the cheap question first: does anything answer at all?"""
+    from samurai_ai.services.reachability import preflight
+
+    report = preflight(list(args.includes))
+    for probe in report.silent:
+        where = probe.address or probe.target
+        print(f"warn: {where} does not answer on {_port_list()}", file=sys.stderr)
+    if report.dead and not args.no_preflight:
+        print(
+            "error: no target answers — check the VPN/route, or start with "
+            "--no-preflight",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _port_list() -> str:
+    from samurai_ai.services.reachability import PROBE_PORTS
+
+    return "/".join(str(port) for port in PROBE_PORTS)
+
+
 def _run(args: argparse.Namespace) -> int:
     from samurai_ai.cli import _make_services
 
+    if not _preflight(args):
+        return 2
     services = _make_services(getattr(args, "db", None))
     operations, kernel, swarms, models = services[0], services[1], services[14], services[7]
     from samurai_ai.domain.models import ModelNotFoundError
@@ -89,6 +128,8 @@ def _run(args: argparse.Namespace) -> int:
         # a bad model id should cost a second, not a half-built operation
         models.list_models()
         _require_model(models, args.model_id)
+        for fallback in args.fallbacks:
+            _require_model(models, fallback)
         operation_id, plan_id = _prepare(args, operations, kernel)
     except ModelNotFoundError as exc:
         print(
@@ -121,7 +162,7 @@ def _through_daemon(
             started = await client.call(
                 "run.start",
                 {"operation_id": operation_id, "model_id": args.model_id,
-                 "workers": args.workers},
+                 "workers": args.workers, "fallbacks": list(args.fallbacks)},
             )
             print(f"operation {operation_id}, plan {plan_id}, run {started['run_id']}")
             if args.detach:
@@ -145,12 +186,17 @@ def _through_daemon(
 
 
 def _inline(args: argparse.Namespace, swarms: Any, operation_id: str) -> int:
-    approval = swarms.prepare_model_approval(operation_id, [args.model_id])
-    return _swarm_until_done(args, swarms, operation_id, approval.id)
+    route = [args.model_id, *args.fallbacks]
+    approval = swarms.prepare_model_approval(operation_id, route)
+    return _swarm_until_done(args, swarms, operation_id, approval.id, route)
 
 
 def _swarm_until_done(
-    args: argparse.Namespace, swarms: Any, operation_id: str, approval_id: str
+    args: argparse.Namespace,
+    swarms: Any,
+    operation_id: str,
+    approval_id: str,
+    route: list[str],
 ) -> int:
     """A plan is a chain: one swarm only reaches its ready tasks, so loop."""
     from samurai_ai.domain.kernel import TaskStatus
@@ -164,7 +210,7 @@ def _swarm_until_done(
         swarm = swarms.start(
             operation_id,
             [task.id for task in ready],
-            [args.model_id],
+            route,
             workers=args.workers,
             approval_id=approval_id,
             approval_resolver=lambda _id: True,
