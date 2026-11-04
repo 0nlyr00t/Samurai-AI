@@ -343,13 +343,26 @@ def all_profiles() -> tuple[SandboxProfile, ...]:
     Manifests add profiles at runtime, so signing and lookup must see the union
     — otherwise a manifest tool could never pass the signature check.
     """
-    from samurai_ai.config import tools_directory
+    from samurai_ai.config import profiles_directory, tools_directory
     from samurai_ai.services.manifests import ManifestStore
 
     extra = tuple(
         manifest.profile() for manifest in ManifestStore(tools_directory()).load_all()
     )
-    return (*SANDBOX_PROFILES, *extra)
+    return (*SANDBOX_PROFILES, *extra, *load_profile_files(profiles_directory()))
+
+
+def load_profile_files(directory: Path) -> tuple[SandboxProfile, ...]:
+    """Profiles installed as files (plugin packages); a broken one is skipped."""
+    if not directory.exists():
+        return ()
+    profiles: list[SandboxProfile] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            profiles.append(SandboxProfile.model_validate_json(path.read_text()))
+        except Exception:
+            continue
+    return tuple(profiles)
 
 
 def get_profile(profile_id: str) -> SandboxProfile:

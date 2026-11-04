@@ -18,6 +18,10 @@ from samurai_ai.domain.playbooks import PlaybookTemplate
 from samurai_ai.domain.plugin import PluginError, PluginFile, PluginManifest
 from samurai_ai.domain.sandbox import SandboxProfile, SandboxProfileError
 from samurai_ai.domain.tool_manifest import ToolManifest
+from samurai_ai.execution.sandbox import load_profile_files
+from samurai_ai.services.manifests import ManifestStore
+from samurai_ai.services.playbooks import PlaybookService
+from samurai_ai.storage.plugins import PluginFileRow, PluginRepository
 
 MANIFEST_NAME = "plugin.json"
 _IGNORED = {".DS_Store"}
@@ -32,6 +36,10 @@ class Package:
     tools: tuple[ToolManifest, ...]
     profiles: tuple[SandboxProfile, ...]
     playbooks: tuple[PlaybookTemplate, ...]
+    #: ident -> path inside the package, so installation does not guess layout
+    tool_paths: dict[str, str]
+    profile_paths: dict[str, str]
+    playbook_paths: dict[str, str]
 
     @property
     def name(self) -> str:
@@ -146,14 +154,20 @@ def validate_package(directory: Path) -> Package:
     tools: list[ToolManifest] = []
     profiles: list[SandboxProfile] = []
     playbooks: list[PlaybookTemplate] = []
+    tool_paths: dict[str, str] = {}
+    profile_paths: dict[str, str] = {}
+    playbook_paths: dict[str, str] = {}
     for item in manifest.files:
         loaded = _load(directory, item, manifest.name)
         if isinstance(loaded, ToolManifest):
             tools.append(loaded)
+            tool_paths[loaded.id] = item.path
         elif isinstance(loaded, SandboxProfile):
             profiles.append(loaded)
+            profile_paths[loaded.id] = item.path
         else:
             playbooks.append(loaded)
+            playbook_paths[loaded.name] = item.path
 
     if len({tool.id for tool in tools}) != len(tools):
         raise PluginError("two tools share the same id")
@@ -163,6 +177,9 @@ def validate_package(directory: Path) -> Package:
         tools=tuple(tools),
         profiles=tuple(profiles),
         playbooks=tuple(playbooks),
+        tool_paths=tool_paths,
+        profile_paths=profile_paths,
+        playbook_paths=playbook_paths,
     )
 
 
@@ -179,6 +196,9 @@ def copy_package(package: Package, target: Path) -> Path:
 
 __all__ = [
     "MANIFEST_NAME",
+    "InstalledPlugin",
+    "PluginStore",
+    "PluginStoreError",
     "Package",
     "PluginError",
     "SandboxProfileError",
@@ -186,3 +206,144 @@ __all__ = [
     "digest_of",
     "validate_package",
 ]
+
+
+class PluginStoreError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class InstalledPlugin:
+    name: str
+    version: str
+    directory: Path
+    tool_ids: tuple[str, ...]
+    profile_ids: tuple[str, ...]
+    playbook_names: tuple[str, ...]
+
+
+class PluginStore:
+    """Install, list, check and remove plugin packages.
+
+    Installation is the trust boundary: ``trusted=True`` says the operator read
+    the package, and every file's digest is recorded so a later edit shows up as
+    ``tampered``.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        manifests: ManifestStore,
+        playbooks: PlaybookService,
+        profiles: Path,
+        repository: PluginRepository,
+    ) -> None:
+        self.root = root
+        self.manifests = manifests
+        self.playbooks = playbooks
+        self.profiles = profiles
+        self.repository = repository
+
+    def install(self, source: Path, *, trusted: bool, by: str = "operator") -> InstalledPlugin:
+        if not trusted:
+            raise PluginStoreError(
+                "installing a plugin needs --trusted after you read the package"
+            )
+        package = validate_package(source)
+        if self.repository.get(package.name) is not None:
+            raise PluginStoreError(
+                f"plugin {package.name} is already installed; remove it first"
+            )
+        self._check_collisions(package)
+
+        target = self.root / package.name / package.manifest.version
+        if target.exists():
+            shutil.rmtree(target)
+        copy_package(package, target)
+
+        for tool in package.tools:
+            self.manifests.install(target / package.tool_paths[tool.id], trusted=True)
+        for profile in package.profiles:
+            self.profiles.mkdir(parents=True, exist_ok=True)
+            (self.profiles / f"{profile.id}.json").write_text(
+                json.dumps(profile.model_dump(mode="json"), indent=2), encoding="utf-8"
+            )
+        for playbook in package.playbooks:
+            self.playbooks.install_custom(
+                target / package.playbook_paths[playbook.name], created_by=by
+            )
+
+        assets = [
+            *[("tool", tool.id) for tool in package.tools],
+            *[("profile", profile.id) for profile in package.profiles],
+            *[("playbook", name) for name in package.playbook_names],
+        ]
+        self.repository.add(
+            package.name,
+            package.manifest.version,
+            [
+                PluginFileRow(path=item.path, kind=item.kind, sha256=item.sha256)
+                for item in package.manifest.files
+            ],
+            assets,
+            description=package.manifest.description,
+            author=package.manifest.author,
+            installed_by=by,
+        )
+        return InstalledPlugin(
+            name=package.name,
+            version=package.manifest.version,
+            directory=target,
+            tool_ids=package.tool_ids,
+            profile_ids=package.profile_ids,
+            playbook_names=package.playbook_names,
+        )
+
+    def _check_collisions(self, package: Package) -> None:
+        known_tools = {manifest.id for manifest in self.manifests.load_all()}
+        known_profiles = {
+            profile.id for profile in load_profile_files(self.profiles)
+        }
+        for tool in package.tools:
+            if tool.id in known_tools:
+                raise PluginStoreError(f"tool {tool.id} is already installed")
+        for profile in package.profiles:
+            if profile.id in known_profiles:
+                raise PluginStoreError(f"profile {profile.id} is already installed")
+        for name in package.playbook_names:
+            if self.playbooks.playbooks.get_custom_playbook(name) is not None:
+                raise PluginStoreError(f"playbook {name} is already installed")
+
+    def integrity(self, name: str) -> list[str]:
+        """Paths that no longer match the recorded digest."""
+        directory = self._package_directory(name)
+        if directory is None:
+            return []
+        broken: list[str] = []
+        for item in self.repository.files(name):
+            path = directory / item.path
+            if not path.exists() or digest_of(path) != item.sha256:
+                broken.append(item.path)
+        return broken
+
+    def remove(self, name: str) -> None:
+        for kind, ident in self.repository.assets(name):
+            if kind == "tool":
+                self.manifests.remove(ident)
+            elif kind == "profile":
+                (self.profiles / f"{ident}.json").unlink(missing_ok=True)
+            elif kind == "playbook":
+                self.playbooks.playbooks.remove_custom_playbook(ident)
+        directory = self._package_directory(name)
+        if directory is not None:
+            shutil.rmtree(directory.parent, ignore_errors=True)
+        self.repository.remove(name)
+
+    def _package_directory(self, name: str) -> Path | None:
+        row = self.repository.get(name)
+        if row is None:
+            return None
+        return self.root / name / row.version
+
+
+__all__ = ["InstalledPlugin", "PluginStore", "PluginStoreError"]

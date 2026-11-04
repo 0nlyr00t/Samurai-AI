@@ -881,6 +881,38 @@ CREATE INDEX IF NOT EXISTS agent_questions_by_operation
     ON agent_questions (operation_id, status, asked_at);
 """
 
+_MIGRATION_30 = """
+CREATE TABLE IF NOT EXISTS plugins (
+    name        TEXT PRIMARY KEY,
+    version     TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    author      TEXT NOT NULL DEFAULT '',
+    installed_at TEXT NOT NULL,
+    installed_by TEXT NOT NULL DEFAULT 'operator'
+);
+
+CREATE TABLE IF NOT EXISTS plugin_files (
+    plugin_name TEXT NOT NULL REFERENCES plugins(name) ON DELETE CASCADE,
+    path        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    sha256      TEXT NOT NULL,
+    PRIMARY KEY (plugin_name, path)
+);
+
+CREATE TABLE IF NOT EXISTS plugin_assets (
+    plugin_name TEXT NOT NULL REFERENCES plugins(name) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    ident       TEXT NOT NULL,
+    PRIMARY KEY (plugin_name, kind, ident)
+);
+"""
+
+_MIGRATION_31 = """
+-- custom playbooks stay immutable in content, but a plugin removal has to be
+-- able to drop the row it installed
+DROP TRIGGER IF EXISTS custom_playbooks_no_delete;
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -911,6 +943,8 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (27, _MIGRATION_27),
     (28, _MIGRATION_28),
     (29, _MIGRATION_29),
+    (30, _MIGRATION_30),
+    (31, _MIGRATION_31),
 )
 
 

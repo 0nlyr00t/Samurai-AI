@@ -25,6 +25,7 @@ from samurai_ai.cli_memory import handle_memory_command, register_memory_command
 from samurai_ai.cli_models import handle_model_command, register_model_commands
 from samurai_ai.cli_planning import handle_planning_command, register_planning_commands
 from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_commands
+from samurai_ai.cli_plugins import handle_plugin_command, register_plugin_commands
 from samurai_ai.cli_policy import handle_policy_command, register_policy_commands
 from samurai_ai.cli_recovery import handle_recovery_command, register_recovery_commands
 from samurai_ai.cli_redteam import handle_redteam_command, register_redteam_commands
@@ -313,6 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_rules_commands(subcommands)
     register_gene_commands(subcommands)
     register_policy_commands(subcommands)
+    register_plugin_commands(subcommands)
     add_serve_commands(subcommands, subcommands.add_parser)
     add_run_command(subcommands, subcommands.add_parser)
     return parser
@@ -350,6 +352,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         team_service,
         question_service,
     ) = _make_services(args.db)
+    global _SERVICES
+    _SERVICES = (
+        operation_service, kernel_service, settings_service, recovery_service,
+        execution_service, vault_service, mcp_service, model_service,
+        agent_orchestrator, playbook_service, report_service, ctf_service,
+        redteam_service, planning_service, swarm_service, goal_service,
+        memory_service, skill_service, export_service, access_service,
+        team_service, question_service,
+    )
     operation_policies = OperationPolicyRepository(
         Database(args.db or default_database_path())
     )
@@ -390,6 +401,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         gene_result = handle_gene_command(args)
         if gene_result is not None:
             return gene_result
+        plugin_result = handle_plugin_command(args, _SERVICES)
+        if plugin_result is not None:
+            return plugin_result
         try:
             policy_result = handle_policy_command(
                 args, operation_policies, operation_service, team_service,
@@ -762,6 +776,9 @@ def _handle_scope_host(
     else:
         print(f"removed\t{args.name}")
     return 0
+
+
+_SERVICES: tuple[Any, ...] = ()
 
 
 def _command_path(args: argparse.Namespace) -> str:
