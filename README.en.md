@@ -56,6 +56,8 @@ It removes the binary, the PATH block, the state directory (`~/.config/samurai`:
 
 **A live session.** A daemon on a local unix socket: work survives a closed terminal, a second terminal or the TUI screen (`Ctrl-D`) attaches to the stream, answers the agent, approves steps and detaches without losing the work. The socket is 0600, clients are read-only by default, and the shared access table decides.
 
+**A browser view.** `samurai web <op>` serves a local surface: summary, journal, plan, findings and report downloads. `127.0.0.1` only, a one-off token in the link, nothing is written.
+
 **One command to a run.** `samurai run "<name>" --mode … --include … --task … --model …` creates the operation, chains the plan and works it to the end; `--detach` leaves it with the daemon. `scope host add` describes a vhost with no DNS, `sandbox check` shows which side of a broken path is broken.
 
 **Reports and export.** Markdown/JSON/HTML/PDF reports and an operation dossier built only from validated findings, secret redaction, PDF is printed by pinned headless Chromium and stays a hashed artifact, NDJSON journal export, CALDERA and VECTR campaign export.
