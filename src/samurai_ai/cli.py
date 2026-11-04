@@ -23,6 +23,7 @@ from samurai_ai.cli_kernel import handle_kernel_command, register_kernel_command
 from samurai_ai.cli_mcp import handle_mcp_command, register_mcp_commands
 from samurai_ai.cli_memory import handle_memory_command, register_memory_commands
 from samurai_ai.cli_models import handle_model_command, register_model_commands
+from samurai_ai.cli_offline import handle_offline_command, register_offline_commands
 from samurai_ai.cli_planning import handle_planning_command, register_planning_commands
 from samurai_ai.cli_playbooks import handle_playbook_command, register_playbook_commands
 from samurai_ai.cli_plugins import handle_plugin_command, register_plugin_commands
@@ -198,6 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--objective", default="")
     create.add_argument("--include", action="append", dest="includes", required=True)
     create.add_argument("--exclude", action="append", dest="excludes", default=[])
+    create.add_argument(
+        "--offline",
+        action="store_true",
+        help="the harness has no internet: local models only, no outside tools",
+    )
 
     operation_commands.add_parser("list", help="List operations")
 
@@ -317,6 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_policy_commands(subcommands)
     register_plugin_commands(subcommands)
     register_web_commands(subcommands)
+    register_offline_commands(subcommands)
     add_serve_commands(subcommands, subcommands.add_parser)
     add_run_command(subcommands, subcommands.add_parser)
     return parser
@@ -403,6 +410,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         gene_result = handle_gene_command(args)
         if gene_result is not None:
             return gene_result
+        offline_result = handle_offline_command(args, _SERVICES)
+        if offline_result is not None:
+            return offline_result
         web_result = handle_web_command(args, _SERVICES)
         if web_result is not None:
             return web_result
@@ -619,7 +629,13 @@ def _handle_operation(
 
     if args.operation_command == "create":
         scope = ScopeContract(includes=tuple(args.includes), excludes=tuple(args.excludes))
-        operation = service.create(args.name, OperationMode(args.mode), scope, args.objective)
+        operation = service.create(
+            args.name,
+            OperationMode(args.mode),
+            scope,
+            objective=args.objective,
+            offline=args.offline,
+        )
         if actor is not None:
             team.claim_owner(operation.id, actor)
         _emit_operation(operation, args.json_output)
@@ -922,6 +938,8 @@ def _print_operation(operation: Operation) -> None:
     print(f"scope: {', '.join(operation.scope.includes)}")
     if operation.scope.excludes:
         print(f"excludes: {', '.join(operation.scope.excludes)}")
+    if operation.offline:
+        print("network: offline (local models only, no outside tools)")
 
 
 def _print_json(payload: object) -> None:
