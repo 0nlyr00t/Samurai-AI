@@ -323,6 +323,25 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
             "github.com",
         ),
     ),
+    SandboxProfile(
+        id="sandbox.pdf@v1",
+        description="Print report HTML to PDF in the pinned browser; the document "
+        "is local, so nothing leaves the container",
+        image=(
+            "etriasnl/camoufox@sha256:"
+            "f9d586d5e4c9f6a826afa8479a61dbbd42eedb69d522718fbe2ce64fc008e5a9"
+        ),
+        allowed_executables=("python3",),
+        cpu_limit="2.0",
+        memory_mb=1024,
+        pids_limit=256,
+        timeout_seconds=300,
+        # a base64 PDF rides on stdout: 3 MiB of document is ~4 MiB encoded
+        max_output_bytes=4 * 1024 * 1024,
+        network_mode="none",
+        # the browser build lives under /root/.cache (mode 700)
+        user="0:0",
+    ),
 )
 
 

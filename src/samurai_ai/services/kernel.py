@@ -331,7 +331,10 @@ class KernelService:
         gate_id: str | None = None,
         finding_id: str | None = None,
         created_by: str = "system",
+        data: bytes | None = None,
+        extension: str = "txt",
     ) -> Artifact:
+        """Register evidence. ``data`` carries binary evidence (a PDF, an image)."""
         self.operations.get(operation_id)
         if task_id is not None:
             plan = self._get_plan(operation_id)
@@ -348,9 +351,9 @@ class KernelService:
                     f"finding {finding_id} does not belong to operation {operation_id}"
                 )
 
-        data = content.encode("utf-8")
+        payload = data if data is not None else content.encode("utf-8")
         artifact_id = f"art_{uuid4().hex[:12]}"
-        relative_path = f"artifacts/{operation_id}/{artifact_id}.txt"
+        relative_path = f"artifacts/{operation_id}/{artifact_id}.{extension}"
         artifact = Artifact(
             id=artifact_id,
             operation_id=operation_id,
@@ -360,14 +363,14 @@ class KernelService:
             task_id=task_id,
             gate_id=gate_id,
             finding_id=finding_id,
-            sha256=hashlib.sha256(data).hexdigest(),
-            size_bytes=len(data),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size_bytes=len(payload),
             path=relative_path,
             created_by=created_by,
         )
         directory = self.kernel.artifact_root / operation_id
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{artifact.id}.txt").write_bytes(data)
+        (directory / f"{artifact.id}.{extension}").write_bytes(payload)
         event = OperationEvent(
             operation_id=operation_id,
             event_type="artifact.registered",

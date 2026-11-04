@@ -27,6 +27,9 @@ class ReportFormat(StrEnum):
     MARKDOWN = "markdown"
     JSON = "json"
     HTML = "html"
+    #: the HTML document printed by the pinned browser, with the HTML kept next
+    #: to it so the PDF can always be reproduced
+    PDF = "pdf"
 
 
 class ManifestFile(BaseModel):
