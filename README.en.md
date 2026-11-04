@@ -32,7 +32,7 @@ The installer takes the signed binary of the latest release, **always** checks i
 
 The sandbox needs Docker: tools run in containers, not on the host.
 
-Releases are built for linux-x86_64, linux-arm64, darwin-arm64, darwin-x86_64 and windows-x86_64. Update with `samurai update` (`--check` only reports a newer version). Verifying release artifacts is covered in `md/compatibility.md`.
+Releases are built for linux-x86_64, linux-arm64, darwin-arm64 and windows-x86_64; on Intel Macs the installer builds from the tag via uv. Update with `samurai update` (`--check` only reports a newer version). Verifying release artifacts is covered in `md/compatibility.md`.
 
 ## Uninstall
 
