@@ -66,5 +66,21 @@ class OperationService:
         self.get(operation_id)
         return self.repository.events(operation_id)
 
+    def replace_scope(self, operation_id: str, scope: ScopeContract) -> Operation:
+        """Swap the scope wholesale; callers validate the contract first."""
+        operation = self.get(operation_id)
+        expected_version = operation.version
+        operation.scope = scope
+        event = OperationEvent(
+            operation_id=operation.id,
+            event_type="operation.scope.changed",
+            payload={
+                "scope": operation.scope.model_dump(mode="json"),
+                "hosts": operation.scope.hosts,
+            },
+        )
+        self.repository.update(operation, expected_version, event)
+        return operation
+
     def check_scope(self, operation_id: str, target: str) -> ScopeDecision:
         return self.get(operation_id).scope.evaluate(target)

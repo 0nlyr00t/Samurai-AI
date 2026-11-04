@@ -11,7 +11,7 @@ from ipaddress import (
 )
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _IPAddress = IPv4Address | IPv6Address
 _IPNetwork = IPv4Network | IPv6Network
@@ -77,6 +77,10 @@ class ScopeContract(BaseModel):
 
     includes: tuple[str, ...]
     excludes: tuple[str, ...] = ()
+    #: name → IP (or domain) for targets that only resolve on the target's own
+    #: network: an HTB vhost, a box's internal DNS name. Both scope matching and
+    #: the sandbox consult this, so `flight.htb` behaves like the address it names.
+    hosts: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("includes")
     @classmethod
@@ -91,6 +95,23 @@ class ScopeContract(BaseModel):
     def validate_excludes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return _normalize_rules(value)
 
+    @field_validator("hosts")
+    @classmethod
+    def validate_hosts(cls, value: dict[str, str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for name, target in value.items():
+            alias = _normalize_host(name)
+            if _address_of(alias) is not None:
+                raise ScopeValidationError(
+                    f"host alias must be a name, not an address: {name!r}"
+                )
+            normalized[alias] = _parse_target(target).host
+        return normalized
+
+    def resolve_host(self, host: str) -> str:
+        """The host a target actually means, following one alias hop."""
+        return self.hosts.get(_normalize_host(host), host)
+
     def evaluate(self, raw_target: str) -> ScopeDecision:
         try:
             target = _parse_target(raw_target)
@@ -102,7 +123,7 @@ class ScopeContract(BaseModel):
                 detail=str(exc),
             )
 
-        target = _with_loopback_alias(target)
+        target = _with_loopback_alias(_with_alias(self, target))
         for raw_rule in self.excludes:
             rule = _parse_rule(raw_rule)
             if _matches(rule, target):
@@ -131,6 +152,21 @@ class ScopeContract(BaseModel):
             target=target.text,
             detail="target does not match any inclusion rule",
         )
+
+
+def _with_alias(contract: ScopeContract, target: _Target) -> _Target:
+    """An aliased name is judged as the address it stands for."""
+    mapped = contract.hosts.get(target.host)
+    if mapped is None:
+        return target
+    return _Target(
+        text=target.text.replace(target.host, mapped),
+        host=mapped,
+        is_url=target.is_url,
+        scheme=target.scheme,
+        port=target.port,
+        address=_address_of(mapped),
+    )
 
 
 def _with_loopback_alias(target: _Target) -> _Target:

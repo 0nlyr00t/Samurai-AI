@@ -450,11 +450,13 @@ class _ProxyUsingManager:
 
     def __init__(self, target_url: str) -> None:
         self.target_url = target_url
+        self.calls: list[tuple[str, ...]] = []
 
     async def run(
         self, argv: list[str] | tuple[str, ...], timeout_seconds: float | None = None
     ) -> ProcessResult:
         arguments = tuple(argv)
+        self.calls.append(arguments)
         if arguments[:2] != ("docker", "run"):
             return ProcessResult(exit_code=0, stdout="ok", stderr="")
         proxy_url = next(
@@ -555,3 +557,52 @@ def test_socks5_ipv6_target_is_scope_checked_with_brackets() -> None:
 def test_connect_target_accepts_a_bracketed_ipv6_literal() -> None:
     scheme, host, port, _ = parse_request_target("CONNECT", "[::1]:443")
     assert (scheme, host, port) == ("https", "::1", 443)
+
+
+def test_an_aliased_host_reaches_its_address(
+    tmp_path: Path, http_server: str
+) -> None:
+    """A vhost that only exists on the target network is proxied as its IP."""
+    server_port = int(http_server.rsplit(":", 1)[1])
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    database = Database(tmp_path / "alias.db")
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    manager = _ProxyUsingManager(f"{http_server}/data")
+    runner = DockerSandboxRunner(
+        manager,  # type: ignore[arg-type]
+        tmp_path / "sandbox-allowlist.sig",
+        lambda: MASTER_KEY,
+        egress_allowed_ports=frozenset({server_port}),
+    )
+    execution = ToolExecutionService(
+        service,
+        kernel,
+        recovery,
+        ToolRunRepository(database),
+        registry=ToolRegistry(adapters=(SandboxExecTool(runner),)),
+    )
+    # the vhost resolves nowhere on this machine, only the alias makes it work
+    operation = service.create(
+        "Alias lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(
+            includes=("127.0.0.1",), hosts={"box.htb": "127.0.0.1"}
+        ),
+    )
+    params = {
+        "profile": "sandbox.scoped@v1",
+        "executable": "wget",
+        "args": ["-q", "-O-", f"http://box.htb:{server_port}/data"],
+    }
+    with pytest.raises(ApprovalRequiredError) as caught:
+        execution.run_tool(operation.id, "sandbox.exec", params)
+    kernel.approve(caught.value.approval_id, decided_by="operator")
+    result = execution.run_tool(
+        operation.id, "sandbox.exec", params, approval_id=caught.value.approval_id
+    )
+    assert result.run.status is ToolRunStatus.COMPLETED
+    assert result.stdout == "egress-ok"
+    argv = [call for call in manager.calls if call[:2] == ("docker", "run")][-1]
+    assert "--add-host" in argv
