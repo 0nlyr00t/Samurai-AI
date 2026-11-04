@@ -25,21 +25,31 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "assets"
 SIZE = (120, 36)
 
+# The journal is what the product really prints: events stay English, and the
+# agent lines show it deciding the next move rather than filling in a document.
 JOURNAL = [
     "[events] operation created",
     "[scope] includes 127.0.0.1, juice-shop",
     "[attach] connected to the session daemon",
     "[tool] scan.nmap -sT -Pn -p 1-1000 127.0.0.1 … 3 open",
+    "[agent] chose 3000/http over 22/ssh — wider surface for one step",
     "[approval] model.call kimi/kimi-k2-turbo-preview@v1 — waiting",
-    "[agent] step 1: read the shop landing page",
     "[tool] research.read http://juice-shop/ — 200, 4 links",
     "[finding] reflected XSS in the search box (candidate)",
+    "[agent] a read is cheap; replaying it with a token stealer is not",
     "[impact] read → auth-bypass, evidence art_7f3a",
-    "[agent] step 2: write the writeup",
+    "[agent] next: dump the user table, then prove it in the report",
 ]
 
+TASKS = {
+    "ru": ["Найти вход", "Пробить и закрепиться", "Поднять импакт и собрать отчёт"],
+    "en": ["Find the way in", "Break in and hold", "Raise the impact and report"],
+}
 
-def build_stack(database: Path, home: Path) -> tuple[tuple[Any, ...], Any, Any]:
+
+def build_stack(
+    database: Path, home: Path, language: str = "ru"
+) -> tuple[tuple[Any, ...], Any, Any]:
     """A throwaway operation with a bit of history, nothing live."""
     os.environ["SAMURAI_HOME"] = str(home)
     from samurai_ai.cli import _make_services
@@ -58,11 +68,7 @@ def build_stack(database: Path, home: Path) -> tuple[tuple[Any, ...], Any, Any]:
     plan = kernel.create_plan(
         operation.id,
         "Takeoff",
-        [
-            _task("step1", "Enumerate the shop"),
-            _task("step2", "Confirm the injection and grade the impact"),
-            _task("step3", "Write the writeup"),
-        ],
+        [_task(f"step{i}", title) for i, title in enumerate(TASKS[language], start=1)],
         [],
     )
     kernel.approve_plan(operation.id)
@@ -73,7 +79,7 @@ def build_stack(database: Path, home: Path) -> tuple[tuple[Any, ...], Any, Any]:
         ArtifactKind.COMMAND_OUTPUT,
         "HTTP/1.1 200 OK\n<title>Juice Shop</title>",
         summary="landing page",
-        requirement="enumerate",
+        requirement="step1",
     )
     finding = kernel.create_finding(
         operation.id,
@@ -129,7 +135,9 @@ async def shot(language: str, out: Path) -> None:
     with tempfile.TemporaryDirectory() as directory:
         home = Path(directory) / "home"
         home.mkdir()
-        services, operation, _plan = build_stack(Path(directory) / "shot.db", home)
+        services, operation, _plan = build_stack(
+            Path(directory) / "shot.db", home, language
+        )
         settings = services[2]
         settings.set_locale(language)
         settings.set_value("tui.trusted_dirs", json.dumps([str(Path.cwd())]))
@@ -141,6 +149,7 @@ async def shot(language: str, out: Path) -> None:
             journal = app.query_one("#journal")
             for line in JOURNAL:
                 journal.write(line)
+            await pilot.press("shift+tab")
             await pilot.pause()
             svg = app.export_screenshot()
             await pilot.press("ctrl+c")

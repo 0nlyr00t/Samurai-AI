@@ -38,6 +38,7 @@ ACTIONS: tuple[Action, ...] = (
     Action("inspect_last_run", "ctrl+i", "keys.action.inspect", priority=True),
     Action("open_sessions", "ctrl+g", "keys.action.sessions", priority=True),
     Action("open_task_board", "ctrl+t", "keys.action.tasks", priority=True),
+    Action("attach_session", "ctrl+d", "keys.action.attach", priority=True),
     Action("open_finding_board", "ctrl+f", "keys.action.findings", priority=True),
     Action("steer", "ctrl+s", "keys.action.steer", priority=True),
     Action("shell_background", "ctrl+b", "keys.action.shell"),
