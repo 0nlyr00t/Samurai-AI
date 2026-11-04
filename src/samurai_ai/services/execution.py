@@ -17,6 +17,7 @@ from samurai_ai.domain.execution import (
     ToolStateError,
 )
 from samurai_ai.domain.kernel import Approval, ApprovalStatus, ArtifactKind, RiskClass
+from samurai_ai.domain.offline import check_tool
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.vault import secret_references
 from samurai_ai.execution.registry import ToolOutput, ToolRegistry, default_registry
@@ -93,6 +94,7 @@ class ToolExecutionService:
             raise ToolExecutionError(
                 f"tool {definition.id} is risk class r4 and cannot be executed"
             )
+        check_tool(definition, operation.offline)
         validated = self.registry.validate_params(definition, params or {})
         resolved = self._resolve_params(validated, operation_id)
         preflight = getattr(adapter, "preflight", None)
