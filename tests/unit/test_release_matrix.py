@@ -10,11 +10,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
+#: Intel Macs are served by the installer's source fallback instead of an asset
 EXPECTED = {
     "linux-x86_64",
     "linux-arm64",
     "darwin-arm64",
-    "darwin-x86_64",
     "windows-x86_64",
 }
 
@@ -36,8 +36,9 @@ def test_the_arm64_build_runs_under_qemu_with_binutils() -> None:
     assert "apt-get install -y -qq binutils" in text
 
 
-def test_the_x86_64_mac_build_crosses_explicitly() -> None:
-    assert "--target-arch x86_64" in workflow()
+def test_no_target_arch_flag_is_passed_to_the_spec_build() -> None:
+    # pyinstaller rejects --target-arch when a .spec file is given
+    assert "--target-arch" not in workflow()
 
 
 def test_the_installer_resolves_the_same_names() -> None:
