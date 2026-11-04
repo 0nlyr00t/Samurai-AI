@@ -68,6 +68,8 @@ It removes the binary, the PATH block, the state directory (`~/.config/samurai`:
 
 **The agent decides and presses.** Inside the plan the agent picks the move: where to go, which tool to take, where to raise the impact with its own `record_impact`. Outside it there are rails: scope, risk classes and approvals, subagents on plan tasks, campaign memory, genes scored by eval, an evaluation harness with regressions, a headless mode for CI. The agent asks the operator mid-step and keeps going when nobody answers.
 
+**Provider keys.** `/settings` lists OSINT-source and WPScan keys: values live in the vault and reach the tool by variable name, never through the model.
+
 **Interface.** A TUI with journal, plan, findings and access tabs, an action palette, a run inspector, boards and a key overlay; RU/EN; three themes; rebindable keys. Plus a full CLI for scripts and CI with a stable exit-code contract.
 
 ## How it works

@@ -90,7 +90,25 @@ def render_argv(manifest: ToolManifest, params: dict[str, Any]) -> list[str]:
         value = params.get(name, manifest.params[name].default)
         return render_value(manifest, name, value)
 
-    return [_PLACEHOLDER.sub(substitute, token) for token in manifest.argv]
+    rendered: list[str] = []
+    for token in manifest.argv:
+        names = _PLACEHOLDER.findall(token)
+        dropped = any(
+            name in manifest.params
+            and manifest.params[name].optional
+            and params.get(name) is None
+            for name in names
+        )
+        if dropped:
+            # the flag itself carries nothing: take it along, or `--api-token`
+            # would dangle in front of the next value
+            if rendered and rendered[-1].startswith("-") and not _PLACEHOLDER.search(
+                rendered[-1]
+            ):
+                rendered.pop()
+            continue
+        rendered.append(_PLACEHOLDER.sub(substitute, token))
+    return rendered
 
 
 def render_stdin(manifest: ToolManifest, params: dict[str, Any]) -> bytes | None:
@@ -243,6 +261,7 @@ class ManifestTool:
             self.manifest.executable,
             argv,
             scope if profile.network_mode == "scoped" else None,
+            env=dict(self.manifest.env) or None,
             stdin_data=render_stdin(self.manifest, resolved),
         )
         result = outcome.result

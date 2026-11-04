@@ -1,0 +1,67 @@
+{
+  "id": "scan.wpscan",
+  "version": 1,
+  "title": "WordPress scan (wpscan)",
+  "description": "Fingerprint and scan a WordPress site for vulnerable plugins, themes and users; a WPScan API token unlocks the vulnerability database",
+  "image": "wpscanteam/wpscan@sha256:b91665032ef0e129c6922f4f7d94389c4d718a7c1ab89e62d77171a3e8aa5b5f",
+  "executable": "wpscan",
+  "risk_class": "r2",
+  "network": "scoped",
+  "read_only": true,
+  "proxy_flag": "--proxy",
+  "limits": {
+    "timeout_seconds": 600,
+    "memory_mb": 1024,
+    "max_output_bytes": 524288
+  },
+  "params": {
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "in-scope WordPress URL"
+    },
+    "api_token": {
+      "type": "string",
+      "default": "{{secret:wpscan_api_key}}",
+      "description": "WPScan API token; the stored key is used by default",
+      "optional": true
+    },
+    "enumerate": {
+      "type": "string",
+      "enum": [
+        "vp",
+        "vt",
+        "tt",
+        "u",
+        "ap"
+      ],
+      "default": "vp",
+      "description": "vp vulnerable plugins, vt vulnerable themes, tt timthumb, u users, ap all plugins",
+      "optional": true
+    }
+  },
+  "argv": [
+    "--url",
+    "{url}",
+    "--force",
+    "--disable-tls-checks",
+    "--format",
+    "json",
+    "--enumerate",
+    "{enumerate}",
+    "--api-token",
+    "{api_token}"
+  ],
+  "parser": "text-lines",
+  "summary_limit": 100,
+  "env": {
+    "HOME": "/tmp",
+    "TMPDIR": "/tmp",
+    "XDG_CACHE_HOME": "/tmp/.cache"
+  },
+  "egress_hosts": [
+    "data.wpscan.org",
+    "wpscan.com",
+    "status.wpscan.com"
+  ]
+}

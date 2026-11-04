@@ -105,6 +105,7 @@ from samurai_ai.tui.screens import (
     LanguagePromptScreen,
     ModelPickerScreen,
     NewOperationScreen,
+    SettingsScreen,
     TrustDirectoryScreen,
 )
 from samurai_ai.tui.screens.attach import AttachScreen
@@ -2660,6 +2661,25 @@ class SamuraiApp(
             task_item.display = True
         else:
             task_item.display = False
+
+    def _show_settings(self) -> None:
+        """Provider keys for tools: stored once here, injected by env name."""
+        from samurai_ai.services.tool_keys import CATALOGUE, key_state, set_key
+
+        states = {
+            entry.env_name: key_state(self.vault, entry.env_name) for entry in CATALOGUE
+        }
+        self.push_screen(
+            SettingsScreen(
+                self.translator,
+                states,
+                lambda env_name, value: set_key(
+                    self.vault, env_name, value, by=self._actor()
+                ),
+                lambda env_name: set_key(self.vault, env_name, ""),
+            )
+        )
+        self._write_line("[settings] " + self.translator.t("settings.opened"))
 
     def _show_model_picker(self) -> None:
         self.run_worker(self._open_model_picker(), exclusive=True)
