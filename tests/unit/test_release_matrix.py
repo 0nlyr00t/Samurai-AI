@@ -58,3 +58,9 @@ def test_the_plain_build_step_runs_only_for_native_targets() -> None:
     text = workflow()
     plain = text.split("- name: Build standalone binary\n", 1)[1].split("\n", 1)[0]
     assert "startsWith(matrix.kind, 'native-')" in plain
+
+
+def test_the_container_build_hands_the_output_back() -> None:
+    """The QEMU build runs as root; without a chown the packaging step cannot write."""
+    text = workflow()
+    assert 'sudo chown -R "$(id -u):$(id -g)" dist build' in text
