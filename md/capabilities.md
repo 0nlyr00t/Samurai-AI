@@ -131,7 +131,7 @@ samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
 
 ## PDF-отчёт
 
-`samurai report generate <op> --format pdf` печатает HTML-отчёт закреплённым браузером внутри песочницы (профиль `sandbox.pdf@v1`, сеть `none`) и кладёт PDF рядом с исходным `.source.html`; PDF регистрируется артефактом с sha256. `--min-impact` работает так же, как для остальных форматов.
+`samurai report generate <op> --format pdf` печатает HTML-отчёт закреплённым headless-Chromium внутри песочницы (профиль `sandbox.pdf@v1`, сеть `none`, `nobody`) и кладёт PDF рядом с исходным `.source.html`; PDF регистрируется артефактом с sha256. `--min-impact` работает так же, как для остальных форматов.
 
 ## Плагины
 
