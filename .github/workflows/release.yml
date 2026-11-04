@@ -35,25 +35,80 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: samurai-linux-x86_64
+            kind: native-linux
             bin: samurai
+          - os: ubuntu-latest
+            artifact: samurai-linux-arm64
+            kind: qemu-linux
+            bin: samurai
+            platform: linux/arm64
           - os: macos-latest
             artifact: samurai-darwin-arm64
+            kind: native-macos
+            bin: samurai
+          - os: macos-latest
+            artifact: samurai-darwin-x86_64
+            kind: cross-macos
             bin: samurai
           - os: windows-latest
             artifact: samurai-windows-x86_64.exe
+            kind: native-windows
             bin: samurai.exe
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
+        if: matrix.kind != 'qemu-linux'
         with:
           enable-cache: true
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.kind == 'qemu-linux'
+        with:
+          platforms: arm64
       - name: Build standalone binary
+        if: matrix.kind != 'qemu-linux'
         run: uv run --group release pyinstaller packaging/samurai.spec --distpath dist/binary --workpath build/pyinstaller --noconfirm
+      - name: Build standalone binary (target arch)
+        if: matrix.kind == 'cross-macos'
+        run: uv run --group release pyinstaller packaging/samurai.spec --distpath dist/binary --workpath build/pyinstaller --noconfirm --target-arch x86_64
+      - name: Build standalone binary (arm64, under QEMU)
+        if: matrix.kind == 'qemu-linux'
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -v "$PWD":/src -w /src \
+            python:3.12-slim bash -lc "
+              apt-get update -qq &&
+              apt-get install -y -qq binutils >/dev/null &&
+              pip install --quiet uv &&
+              uv sync --frozen --group release &&
+              uv run --group release pyinstaller packaging/samurai.spec \
+                --distpath dist/binary --workpath build/pyinstaller --noconfirm
+            "
       - name: Smoke test binary
+        if: matrix.kind == 'native-linux' || matrix.kind == 'native-macos'
+        shell: bash
+        run: ./dist/binary/${{ matrix.bin }} --help
+      - name: Smoke test binary (arm64, under QEMU)
+        if: matrix.kind == 'qemu-linux'
+        shell: bash
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -v "$PWD/dist/binary":/binary python:3.12-slim /binary/${{ matrix.bin }} --help
+      - name: Smoke test binary (x86_64 on Apple silicon)
+        if: matrix.kind == 'cross-macos'
+        shell: bash
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            arch -x86_64 ./dist/binary/${{ matrix.bin }} --help
+          else
+            echo "no Rosetta on this runner; the artifact is built but not run"
+            file ./dist/binary/${{ matrix.bin }}
+          fi
+      - name: Smoke test binary (windows)
+        if: matrix.kind == 'native-windows'
         shell: bash
         run: ./dist/binary/${{ matrix.bin }} --help
       - name: Functional smoke (eval suite)
-        if: runner.os == 'Linux'
+        if: matrix.kind == 'native-linux'
         run: SAMURAI_HOME="$RUNNER_TEMP/samurai-home" ./dist/binary/${{ matrix.bin }} eval run evals/smoke.json --out "$RUNNER_TEMP/eval-report.json"
       - name: Package artifact
         shell: bash

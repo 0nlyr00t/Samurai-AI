@@ -47,6 +47,11 @@
 
 - sdist/wheel воспроизводимы побитно при фиксированном `SOURCE_DATE_EPOCH`
   (проверяется `packaging/check_reproducible.sh` в CI).
+- Целевые платформы релиза: linux-x86_64, linux-arm64, darwin-arm64,
+  darwin-x86_64, windows-x86_64. Чужие архетиктуры собираются кросс-сборкой в CI
+  (linux-arm64 — под QEMU в контейнере, darwin-x86_64 — `--target-arch`), поэтому
+  smoke-тест для них идёт на той же эмуляции, а на раннере без Rosetta
+  x86_64-артефакт собирается, но не запускается.
 - Standalone-бинарники (PyInstaller) побитно не воспроизводимы; доверие к
   ним обеспечивается keyless-подписью Sigstore в release workflow
   (сертификат выдаётся на GitHub Actions OIDC-identity репозитория).
