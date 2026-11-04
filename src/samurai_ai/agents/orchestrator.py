@@ -13,8 +13,10 @@ not implemented).
 
 from __future__ import annotations
 
+import json
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
@@ -83,6 +85,13 @@ DEFAULT_MAX_DEPTH = 1
 MAX_CONSECUTIVE_REJECTS = 3
 #: the same command repeated this often in one run earns a model note
 REPEAT_THRESHOLD = 3
+#: the same *place* called this often inside the window earns a note (a changing
+#: payload still counts), and this often again after the note ends the run
+SITE_WINDOW = 12
+SITE_NUDGE = 6
+SITE_STOP = 10
+#: parameters that name the place a tool acts on, with the payload left out
+_SITE_KEYS = ("targets", "target", "host", "url", "path", "port", "asset")
 #: a run cannot outlive this, whatever the steps do (overridable per call)
 DEFAULT_MAX_WALL_SECONDS = 900.0
 
@@ -94,6 +103,36 @@ _OVERFLOW_MARKERS = (
     "reduce the length of the messages",
     "too many tokens",
 )
+
+
+def call_site(tool_id: str, params: dict[str, Any]) -> str:
+    """The place a call acts on, with the payload left out.
+
+    ``web_request(path=/nslookup.php, cmd=dir)`` and the same call with ``cmd=type
+    C:\\boot.ini`` are one site: only a per-place window catches that loop, because
+    every payload gives the argument-keyed detector a fresh signature.
+    """
+    where = {key: params[key] for key in _SITE_KEYS if key in params}
+    return tool_id + "|" + json.dumps(where, sort_keys=True, default=str)
+
+
+class SiteWindow:
+    """Bounded memory of recent call sites for one run."""
+
+    def __init__(self, window: int = SITE_WINDOW) -> None:
+        self._seen: deque[str] = deque(maxlen=window)
+        self._noted: set[str] = set()
+
+    def record(self, site: str) -> tuple[bool, bool]:
+        """Return (nudge, stop) after adding the site."""
+        self._seen.append(site)
+        hits = sum(1 for item in self._seen if item == site)
+        if hits >= SITE_STOP and site in self._noted:
+            return False, True
+        if hits >= SITE_NUDGE and site not in self._noted:
+            self._noted.add(site)
+            return True, False
+        return False, False
 
 
 class ContextOverflowError(AgentError):
@@ -474,6 +513,7 @@ class AgentOrchestrator:
         )
         repeat_counts: dict[str, int] = {}
         repeat_notes: list[str] = []
+        sites = SiteWindow()
         for index, step in enumerate(steps):
             if run.status is not AgentRunStatus.RUNNING:
                 return
@@ -504,8 +544,12 @@ class AgentOrchestrator:
                 stop_event=stop_event,
                 repeat_counts=repeat_counts,
                 repeat_notes=repeat_notes,
+                sites=sites,
             )
             if run.status is not AgentRunStatus.RUNNING:
+                return
+            if run.status is not AgentRunStatus.RUNNING:
+                # the site window can end the run from inside the command loop
                 return
             if rejects and not self._stop_requested(run, stop_event):
                 # the model never learns why a command was refused, so it repeats
@@ -532,6 +576,7 @@ class AgentOrchestrator:
                     stop_event=stop_event,
                     repeat_counts=repeat_counts,
                     repeat_notes=repeat_notes,
+                    sites=sites,
                 )
                 if run.status is not AgentRunStatus.RUNNING:
                     return
@@ -561,6 +606,7 @@ class AgentOrchestrator:
         stop_event: threading.Event | None,
         repeat_counts: dict[str, int] | None = None,
         repeat_notes: list[str] | None = None,
+        sites: SiteWindow | None = None,
     ) -> tuple[list[str], int]:
         rejects: list[str] = []
         applied = 0
@@ -580,6 +626,8 @@ class AgentOrchestrator:
             if reason is None:
                 consecutive_rejects = 0
                 applied += 1
+                if sites is not None and isinstance(command, RequestToolRunCommand):
+                    self._note_site(run, command, sites, repeat_notes)
                 continue
             rejects.append(reason)
             consecutive_rejects += 1
@@ -593,6 +641,32 @@ class AgentOrchestrator:
             # a step that got something done does not need re-asking
             return [], consecutive_rejects
         return rejects, consecutive_rejects
+
+    def _note_site(
+        self,
+        run: AgentRun,
+        command: RequestToolRunCommand,
+        sites: SiteWindow,
+        notes: list[str] | None,
+    ) -> None:
+        """Same tool, same place, new payload: the loop the arg-keyed matcher misses."""
+        site = call_site(command.tool_id, command.params)
+        nudge, stop = sites.record(site)
+        if nudge:
+            self._append(
+                run.operation_id,
+                "agent.command.same-site",
+                {"run_id": run.id, "tool_id": command.tool_id, "site": site[:200]},
+            )
+            if notes is not None:
+                notes.append(
+                    f"{command.tool_id} уже {SITE_NUDGE} раз в одно и то же место с "
+                    "разными данными — меняй место, а не payload, или закрывай шаг"
+                )
+        if stop:
+            self._finish_failed(
+                run, AgentRunStatus.FAILED, "same site loop: changing payload, same place"
+            )
 
     def _note_repeat(
         self,
