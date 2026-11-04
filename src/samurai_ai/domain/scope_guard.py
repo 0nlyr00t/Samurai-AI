@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from samurai_ai.domain.execution import ToolScopeError
-from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.scope import ScopeContract, ScopeDecision
 
 #: a bare token that looks like a domain and nothing else
 _DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z", re.I)
@@ -27,37 +27,36 @@ class ScopeGuardError(ToolScopeError):
     """Same family as an adapter's own refusal, so callers already handle it."""
 
 
-def _literals(value: Any) -> list[str]:
-    """Host-shaped literals inside one parameter value."""
+def _literals(value: Any) -> list[tuple[str, str]]:
+    """(kind, literal) pairs: a URL is judged as a URL so scheme rules still match."""
     if value is None or isinstance(value, bool | int | float):
         return []
     if isinstance(value, list | tuple | set):
-        out: list[str] = []
+        out: list[tuple[str, str]] = []
         for item in value:
             out.extend(_literals(item))
         return out
     text = str(value).strip()
     if not text:
         return []
-    found: list[str] = []
+    found: list[tuple[str, str]] = []
     for part in text.split(","):
         part = part.strip()
         if not part or _is_local_path(part):
             continue
         if "://" in part:
-            host = urlsplit(part).hostname
-            if host:
-                found.append(host)
+            if urlsplit(part).hostname:
+                found.append(("url", part))
             continue
         if ipaddress_ok(part):
-            found.append(part)
+            found.append(("net" if "/" in part else "host", part))
             continue
         host_port = _HOST_PORT.fullmatch(part)
         if host_port:
-            found.append(host_port.group(1).strip("[]"))
+            found.append(("host", host_port.group(1).strip("[]")))
             continue
         if _DOMAIN.fullmatch(part):
-            found.append(part)
+            found.append(("host", part))
     return found
 
 
@@ -76,6 +75,20 @@ def ipaddress_ok(value: str) -> bool:
     return True
 
 
+def _decide(scope: ScopeContract, kind: str, literal: str) -> ScopeDecision:
+    """A URL first goes through URL rules; a host may also be covered by a network."""
+    decision = scope.evaluate(literal)
+    if decision.allowed:
+        return decision
+    if kind == "host":
+        by_network = scope.evaluate_network(f"{literal}/32")
+        if by_network.allowed:
+            return by_network
+    elif kind == "net":
+        return scope.evaluate_network(literal)
+    return decision
+
+
 def guard(
     scope: ScopeContract, params: dict[str, Any], *, exempt: tuple[str, ...] = ()
 ) -> None:
@@ -83,12 +96,8 @@ def guard(
     for name, value in params.items():
         if name in exempt:
             continue
-        for literal in _literals(value):
-            decision = (
-                scope.evaluate_network(literal)
-                if "/" in literal or ipaddress_ok(literal)
-                else scope.evaluate(literal)
-            )
+        for kind, literal in _literals(value):
+            decision = _decide(scope, kind, literal)
             if not decision.allowed:
                 raise ScopeGuardError(
                     f"{literal!r} (parameter {name!r}) is outside the operation scope: "

@@ -31,11 +31,13 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.recovery import RecoveryRepository
+from samurai_ai.storage.vault import VaultRepository
 
 MASTER_KEY = bytes.fromhex("ab" * 32)
 
@@ -812,7 +814,8 @@ def test_ffuf_url_contract_is_fail_closed(tmp_path: Path) -> None:
             {"url": "https://example.com/admin"},
             approval_id=approval_id,
         )
-    with pytest.raises(ToolValidationError, match="http"):
+    # the adapter refuses the scheme, or the guard does while reading the URL
+    with pytest.raises((ToolValidationError, ToolScopeError), match="http|scheme"):
         execution.run_tool(
             operation.id,
             "fuzz.ffuf",
@@ -1069,3 +1072,29 @@ def test_a_forgotten_adapter_check_still_cannot_leave_the_scope(tmp_path: Path) 
     # the refusal is still visible in the history
     assert [run for run in execution.list_runs(operation.id) if run.status.value == "failed"]
     assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+
+
+def test_a_stored_vault_key_reaches_the_tool_without_a_parameter(tmp_path: Path) -> None:
+    """The operator stores the key once; the model does not pass it at all."""
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    service, kernel, execution, manager = make_subfinder_stack(
+        tmp_path, SUBFINDER_JSONL
+    )
+    vault = VaultService(
+        VaultRepository(kernel.kernel.database), service.repository,
+        tmp_path / "vault.key",
+    )
+    vault.add("shodan_api_key", "stored-shodan")
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "recon.subfinder-passive", RiskClass.R2)
+
+    execution.vault = vault
+    execution.run_tool(
+        operation.id,
+        "recon.subfinder-passive",
+        {"domain": "example.com"},
+        approval_id=approval_id,
+    )
+    call = [item for item in manager.calls if item[:2] == ("docker", "run")][-1]
+    assert "SHODAN_API_KEY" in call
+    assert (manager.envs[-1] or {}).get("SHODAN_API_KEY") == "stored-shodan"

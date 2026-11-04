@@ -400,20 +400,21 @@ def test_migration_v6_to_v7_adds_model_endpoints(vault_env: Path) -> None:
 def test_custom_model_lifecycle(vault_env: Path) -> None:
     _, _, models, _ = make_stack(vault_env / "custom-models.db")
 
-    added = models.add_model("moonshot/kimi-k3")
-    assert added.id == "moonshot/kimi-k3@v1"
+    added = models.add_model("moonshot/kimi-k2-0905-preview")
+    # the id is not a static preset, so the custom path is what is under test
+    assert added.id == "moonshot/kimi-k2-0905-preview@v1"
     assert ModelCapability.TOOLS in added.capabilities
 
-    model, provider = models.registry.get_model("moonshot/kimi-k3@v1")
+    model, provider = models.registry.get_model("moonshot/kimi-k2-0905-preview@v1")
     assert provider.id == "moonshot"
     assert model.context_limit == 32768
     assert ModelCapability.TOOLS in model.capabilities
-    assert "moonshot/kimi-k3@v1" in {
+    assert "moonshot/kimi-k2-0905-preview@v1" in {
         entry.id for entry in models.list_models("moonshot")
     }
 
     with pytest.raises(CustomModelConflictError):
-        models.add_model("moonshot/kimi-k3@v1")
+        models.add_model("moonshot/kimi-k2-0905-preview@v1")
     with pytest.raises(ModelError, match="already registered"):
         models.add_model("moonshot/kimi-k2@v1")
     with pytest.raises(ModelError, match="discovered at runtime"):
@@ -421,11 +422,11 @@ def test_custom_model_lifecycle(vault_env: Path) -> None:
     with pytest.raises(ModelNotFoundError):
         models.add_model("no-such-provider/model@v1")
 
-    models.remove_model("moonshot/kimi-k3")
+    models.remove_model("moonshot/kimi-k2-0905-preview")
     with pytest.raises(ModelNotFoundError):
-        models.registry.get_model("moonshot/kimi-k3@v1")
+        models.registry.get_model("moonshot/kimi-k2-0905-preview@v1")
     with pytest.raises(ModelNotFoundError):
-        models.remove_model("moonshot/kimi-k3")
+        models.remove_model("moonshot/kimi-k2-0905-preview")
 
 
 def test_custom_model_with_slashed_name(vault_env: Path) -> None:
