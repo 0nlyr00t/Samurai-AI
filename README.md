@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh
 
 Для песочницы нужен Docker: инструменты исполняются в контейнерах, а не на хосте.
 
-Обновление: `samurai update` (`--check` — только проверить версию). Проверка подписей артефактов релиза — `md/compatibility.md`.
+Релизы собираются под linux-x86_64, linux-arm64, darwin-arm64, darwin-x86_64 и windows-x86_64. Обновление: `samurai update` (`--check` — только проверить версию). Проверка подписей артефактов релиза — `md/compatibility.md`.
 
 ## Удаление
 
