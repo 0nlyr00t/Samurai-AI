@@ -1,0 +1,42 @@
+{
+  "id": "demo.webscan",
+  "version": 1,
+  "title": "demo webscan",
+  "description": "nuclei with the demo pack: an example of a tool shipped as a plugin",
+  "image": "projectdiscovery/nuclei@sha256:582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb",
+  "executable": "nuclei",
+  "risk_class": "r2",
+  "network": "scoped",
+  "proxy_flag": "-proxy",
+  "limits": {
+    "timeout_seconds": 300,
+    "memory_mb": 512
+  },
+  "params": {
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "in-scope URL"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "default": "medium"
+    }
+  },
+  "argv": [
+    "-u",
+    "{url}",
+    "-severity",
+    "{severity}",
+    "-no-color",
+    "-silent"
+  ],
+  "parser": "text-lines",
+  "summary_limit": 50
+}

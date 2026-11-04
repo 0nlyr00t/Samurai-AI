@@ -62,6 +62,16 @@ def serve_pidfile_path() -> Path:
     return runtime_directory() / "serve.pid"
 
 
+def profiles_directory() -> Path:
+    """Standalone sandbox profiles (plugin packages install them here)."""
+    return config_directory() / "profiles"
+
+
+def plugins_directory() -> Path:
+    """Installed plugin packages, one directory per name and version."""
+    return config_directory() / "plugins"
+
+
 def tools_directory() -> Path:
     """Installed tool manifests (data, reviewed and sha256-pinned)."""
     return config_directory() / "tools"

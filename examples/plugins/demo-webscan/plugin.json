@@ -1,0 +1,24 @@
+{
+  "plugin_api": 1,
+  "name": "demo",
+  "version": "1.0.0",
+  "description": "Example plugin: one tool, one profile, one playbook",
+  "author": "Samurai AI",
+  "files": [
+    {
+      "path": "tools/webscan.json",
+      "kind": "tool",
+      "sha256": "f108c9bc09c1322c5ccf01fba88df87f0eb7e79bae05a29c820d308cd8df847f"
+    },
+    {
+      "path": "profiles/webscan.json",
+      "kind": "profile",
+      "sha256": "5ad7422d52006d22059fb7b6be7ad423628ffdcc7b439f16115544ba60333716"
+    },
+    {
+      "path": "playbooks/recon.json",
+      "kind": "playbook",
+      "sha256": "11faeae142c010ba7b949ade1548ee67cfae33c886934c9e6d0b3acf88179780"
+    }
+  ]
+}

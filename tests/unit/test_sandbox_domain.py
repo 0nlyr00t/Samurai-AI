@@ -87,11 +87,13 @@ def sign_default(tmp_path: Path) -> None:
 
 
 def test_profile_requires_versioned_id() -> None:
-    with pytest.raises(ValidationError, match="sandbox.<name>@v"):
+    with pytest.raises(ValidationError, match=r"<name>.<tool>@v"):
         make_profile(id="sandbox.test")
-    with pytest.raises(ValidationError, match="sandbox.<name>@v"):
+    with pytest.raises(ValidationError, match=r"<name>.<tool>@v"):
         make_profile(id="default@v1")
     assert make_profile(id="sandbox.default@v2").id == "sandbox.default@v2"
+    # a plugin profile lives in the plugin's own namespace
+    assert make_profile(id="acme.webscan@v1").id == "acme.webscan@v1"
 
 
 def test_profile_requires_digest_pinned_image() -> None:
