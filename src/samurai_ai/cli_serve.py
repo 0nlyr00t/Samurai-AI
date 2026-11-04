@@ -12,12 +12,16 @@ import json
 import os
 import signal
 import sys
-from collections.abc import Callable
+import tempfile
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from samurai_ai.config import serve_pidfile_path, serve_socket_path
 from samurai_ai.services.rpc.server import RpcServer
+from samurai_ai.services.ssh_tunnel import DEFAULT_REMOTE_SOCKET
 
 Command = Callable[[argparse.Namespace], int]
 
@@ -32,6 +36,21 @@ def add_serve_commands(subcommands: Any, add_parser: Callable[..., Any]) -> None
     attach.add_argument("operation_id")
     attach.add_argument("--from", dest="from_seq", type=int, default=0)
     attach.add_argument("--socket", default=argparse.SUPPRESS)
+    attach.add_argument(
+        "--ssh",
+        default=None,
+        metavar="[USER@]HOST[:PORT]",
+        help="reach the daemon over an SSH-forwarded socket",
+    )
+    attach.add_argument("--remote-socket", default=None)
+    attach.add_argument(
+        "--ssh-arg",
+        action="append",
+        default=[],
+        dest="ssh_args",
+        metavar="ARG",
+        help="extra argument for ssh, e.g. -o StrictHostKeyChecking=accept-new",
+    )
     attach.add_argument("--once", action="store_true", help="print the backlog and exit")
     attach.set_defaults(handler=_attach)
 
@@ -45,14 +64,72 @@ def add_serve_commands(subcommands: Any, add_parser: Callable[..., Any]) -> None
     send.add_argument("--pick", action="append", default=[], metavar="ID=LABEL")
     send.add_argument("--custom", action="append", default=[], metavar="ID=TEXT")
     send.add_argument("--socket", default=argparse.SUPPRESS)
+    send.add_argument("--ssh", default=None, metavar="[USER@]HOST[:PORT]")
+    send.add_argument("--remote-socket", default=None)
+    send.add_argument(
+        "--ssh-arg",
+        action="append",
+        default=[],
+        dest="ssh_args",
+        metavar="ARG",
+        help="extra argument for ssh, e.g. -o StrictHostKeyChecking=accept-new",
+    )
     send.set_defaults(handler=_send)
+
+    tunnel = add_parser(
+        "tunnel", help="Hold an SSH forward to a remote daemon socket"
+    )
+    tunnel.add_argument("destination", metavar="[USER@]HOST[:PORT]")
+    tunnel.add_argument("--remote-socket", default=None)
+    tunnel.add_argument(
+        "--ssh-arg",
+        action="append",
+        default=[],
+        dest="ssh_args",
+        metavar="ARG",
+        help="extra argument for ssh, e.g. -o StrictHostKeyChecking=accept-new",
+    )
+    tunnel.set_defaults(handler=_tunnel)
 
     call = add_parser("call", help="Call a session method with JSON params")
     call.add_argument("method")
     call.add_argument("--params", default="{}")
     call.add_argument("--socket", default=argparse.SUPPRESS)
+    call.add_argument("--ssh", default=None, metavar="[USER@]HOST[:PORT]")
+    call.add_argument("--remote-socket", default=None)
+    call.add_argument(
+        "--ssh-arg",
+        action="append",
+        default=[],
+        dest="ssh_args",
+        metavar="ARG",
+        help="extra argument for ssh, e.g. -o StrictHostKeyChecking=accept-new",
+    )
     call.add_argument("--read-only", action="store_true")
     call.set_defaults(handler=_call)
+
+
+@contextmanager
+def _connection_socket(args: argparse.Namespace) -> Iterator[Path]:
+    """A local socket path: either given, default, or opened through SSH."""
+    remote = getattr(args, "ssh", None)
+    if not remote:
+        yield _socket_of(args)
+        return
+    from samurai_ai.services.ssh_tunnel import Destination, SshTunnel
+
+    local = Path(tempfile.mkdtemp(prefix="smr-")) / "s.sock"
+    tunnel = SshTunnel(
+        Destination.parse(remote),
+        local,
+        remote_socket=getattr(args, "remote_socket", None) or DEFAULT_REMOTE_SOCKET,
+        extra_args=tuple(getattr(args, "ssh_args", ()) or ()),
+    )
+    try:
+        print(f"tunnel: {remote}", file=sys.stderr)
+        yield tunnel.open()
+    finally:
+        tunnel.close()
 
 
 def _socket_of(args: argparse.Namespace) -> Path:
@@ -263,11 +340,11 @@ def _serve(args: argparse.Namespace) -> int:
 
 
 # -- clients --------------------------------------------------------------
-async def _attach_async(args: argparse.Namespace) -> int:
+async def _attach_async(args: argparse.Namespace, socket_path: Path) -> int:
     from samurai_ai.services.rpc.client import Client, RpcFailure, format_event
 
     try:
-        client = await Client.connect(_socket_of(args), client="attach", read_only=True)
+        client = await Client.connect(socket_path, client="attach", read_only=True)
     except RpcFailure as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -291,7 +368,9 @@ async def _attach_async(args: argparse.Namespace) -> int:
 
 
 def _attach(args: argparse.Namespace) -> int:
-    return asyncio.run(_attach_async(args))
+    with _connection_socket(args) as socket_path:
+        args.socket = str(socket_path)
+        return asyncio.run(_attach_async(args, socket_path))
 
 
 async def _call_async(
@@ -300,7 +379,7 @@ async def _call_async(
     from samurai_ai.services.rpc.client import Client, RpcFailure
 
     try:
-        client = await Client.connect(_socket_of(args), client="cli", read_only=read_only)
+        client = await Client.connect(args.socket_path, client="cli", read_only=read_only)
     except RpcFailure as exc:
         return 1, str(exc)
     try:
@@ -345,12 +424,45 @@ async def _send_call(client: Any, args: argparse.Namespace) -> str:
     return f"answered {len(rows)} question(s)"
 
 
+def _tunnel(args: argparse.Namespace) -> int:
+    from samurai_ai.services.ssh_tunnel import Destination, SshTunnel, TunnelError
+
+    local = Path(tempfile.mkdtemp(prefix="smr-")) / "s.sock"
+    tunnel = SshTunnel(
+        Destination.parse(args.destination),
+        local,
+        remote_socket=args.remote_socket or DEFAULT_REMOTE_SOCKET,
+        extra_args=tuple(getattr(args, "ssh_args", ()) or ()),
+    )
+    try:
+        tunnel.open()
+    except TunnelError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(str(local), flush=True)
+    print(f"point a client at it: samurai attach <op> --socket {local}", file=sys.stderr)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        tunnel.close()
+    return 0
+
+
 def _send(args: argparse.Namespace) -> int:
+    with _connection_socket(args) as socket_path:
+        args.socket_path = socket_path
+        return _send_with_tunnel(args)
+
+
+def _send_with_tunnel(args: argparse.Namespace) -> int:
     async def run() -> int:
         from samurai_ai.services.rpc.client import Client, RpcFailure
 
         try:
-            client = await Client.connect(_socket_of(args), client="send")
+            client = await Client.connect(args.socket_path, client="send")
         except RpcFailure as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -367,7 +479,9 @@ def _send(args: argparse.Namespace) -> int:
 
 
 def _call(args: argparse.Namespace) -> int:
-    code, result = asyncio.run(_call_async(args, read_only=args.read_only))
+    with _connection_socket(args) as socket_path:
+        args.socket_path = socket_path
+        code, result = asyncio.run(_call_async(args, read_only=args.read_only))
     if code:
         print(f"error: {result}", file=sys.stderr)
         return code
