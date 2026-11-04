@@ -205,7 +205,7 @@ def _runs_overlap(events: list) -> bool:
     intervals = [
         (start, finish) for start, finish in spans.values() if finish is not None
     ]
-    for index, (start, finish) in enumerate(intervals):
+    for index, (_start, finish) in enumerate(intervals):
         for other_start, _other_finish in intervals[index + 1:]:
             if other_start < finish:
                 return True
