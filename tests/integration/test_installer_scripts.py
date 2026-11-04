@@ -227,3 +227,13 @@ def test_the_uninstaller_keeps_an_unrelated_profile(stand) -> None:
     populated(stand)
     run("uninstall.sh", stand, "--yes")
     assert (stand["home"] / ".zshrc").read_text().startswith("# mine")
+
+
+def test_the_uninstaller_follows_xdg_config_home(stand) -> None:
+    """A moved state directory is followed, not guessed."""
+    elsewhere = stand["home"] / "custom-xdg" / "samurai"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "samurai.db").write_text("db")
+    done = run("uninstall.sh", stand, "--yes", XDG_CONFIG_HOME=str(stand["home"] / "custom-xdg"))
+    assert done.returncode == 0
+    assert not elsewhere.exists()
