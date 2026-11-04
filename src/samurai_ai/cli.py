@@ -3,6 +3,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -236,6 +237,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     scope = subcommands.add_parser("scope", help="Evaluate operation scope")
     scope_commands = scope.add_subparsers(dest="scope_command", required=True)
+    host = scope_commands.add_parser(
+        "host",
+        help="Map a name to an address for this operation (vhosts, internal DNS)",
+    )
+    host_commands = host.add_subparsers(dest="scope_host_command", required=True)
+    host_add = host_commands.add_parser("add", help="Add or replace a name mapping")
+    host_add.add_argument("operation_id")
+    host_add.add_argument("name", help="the name a target answers to, e.g. flight.htb")
+    host_add.add_argument("target", help="address it means, in scope")
+    host_rm = host_commands.add_parser("rm", help="Drop a name mapping")
+    host_rm.add_argument("operation_id")
+    host_rm.add_argument("name")
+    host_list = host_commands.add_parser("list", help="List name mappings")
+    host_list.add_argument("operation_id")
+
     check = scope_commands.add_parser("check", help="Check a target against operation scope")
     check.add_argument("operation_id")
     check.add_argument("target")
@@ -442,6 +458,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _handle_operation(
                 args, operation_service, kernel_service, export_service, team_service
             )
+        if args.command == "scope" and args.scope_command == "host":
+            code = _handle_scope_host(args, operation_service, args.json_output)
+            if code is not None:
+                return code
         if args.command == "scope":
             decision = operation_service.check_scope(args.operation_id, args.target)
             if args.json_output:
@@ -650,6 +670,49 @@ def _operation_id_of(args: argparse.Namespace, kernel: KernelService) -> str | N
             if finding is not None:
                 return str(finding.operation_id)
     return None
+
+
+def _handle_scope_host(
+    args: argparse.Namespace, operations: Any, json_output: bool
+) -> int | None:
+    operation = operations.get(args.operation_id)
+    hosts = dict(operation.scope.hosts)
+    if args.scope_host_command == "list":
+        if json_output:
+            _print_json(hosts)
+        elif not hosts:
+            print("no host mappings")
+        for name, target in sorted(hosts.items()):
+            print(f"{name}\t{target}")
+        return 0
+    if args.scope_host_command == "rm":
+        if hosts.pop(args.name, None) is None:
+            print(f"no mapping for {args.name}", file=sys.stderr)
+            return 1
+    else:
+        hosts[args.name] = args.target
+    try:
+        scope = ScopeContract(
+            includes=operation.scope.includes,
+            excludes=operation.scope.excludes,
+            hosts=hosts,
+        )
+    except ScopeValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    updated = operations.replace_scope(operation.id, scope)
+    if args.scope_host_command == "add":
+        decision = updated.scope.evaluate(args.name)
+        if not decision.allowed:
+            print(
+                f"warning: {args.name} maps to {args.target}, which is out of "
+                f"scope ({decision.detail})",
+                file=sys.stderr,
+            )
+        print(f"{args.name}\t{args.target}")
+    else:
+        print(f"removed\t{args.name}")
+    return 0
 
 
 def _command_path(args: argparse.Namespace) -> str:

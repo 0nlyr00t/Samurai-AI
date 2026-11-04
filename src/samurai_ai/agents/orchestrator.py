@@ -101,11 +101,14 @@ _PLANNER_INSTRUCTION = (
 _EXECUTOR_INSTRUCTION = (
     "You are the executor of a governed security operation. Prefer the dedicated "
     "adapters (recon.*, scan.*, fuzz.*, research.*) over shell.exec: they carry the "
-    "parsing, the scope check and the egress record. Values must be "
+    "parsing, the scope check and the egress record. Targets must be names the "
+    "sandbox can resolve: an IP or a domain, not the application's own title "
+    "(juice-shop does not resolve, 127.0.0.1 does). Values must be "
     "literal — a URL needs scheme and host (https://example.com/), and an angle "
     "bracket placeholder is copied as-is, never resolved. Emit exactly one "
     'JSON object: {"commands": [...]}. Allowed command types: '
-    'request_tool_run {"type":"request_tool_run","tool_id":...,"params":{...}}, '
+    'request_tool_run {"type":"request_tool_run","tool_id":...,"params":{...}} '
+    '(a rejected call costs a step: read the refusal and fix the value), '
     'note {"type":"note","key":...,"value":...}, ask_operator '
     '{"type":"ask_operator","questions":[{"id":"q1","question":...,"header":...,'
     '"options":[{"label":...,"description":...,"recommended":true},...]}],'
