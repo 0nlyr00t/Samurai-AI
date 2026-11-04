@@ -58,7 +58,7 @@ It removes the binary, the PATH block, the state directory (`~/.config/samurai`:
 
 **One command to a run.** `samurai run "<name>" --mode … --include … --task … --model …` creates the operation, chains the plan and works it to the end; `--detach` leaves it with the daemon. `scope host add` describes a vhost with no DNS, `sandbox check` shows which side of a broken path is broken.
 
-**Reports and export.** Markdown/JSON/HTML reports and an operation dossier built only from validated findings, secret redaction, NDJSON journal export, CALDERA and VECTR campaign export.
+**Reports and export.** Markdown/JSON/HTML/PDF reports and an operation dossier built only from validated findings, secret redaction, PDF is printed by pinned headless Chromium and stays a hashed artifact, NDJSON journal export, CALDERA and VECTR campaign export.
 
 **The agent decides and presses.** Inside the plan the agent picks the move: where to go, which tool to take, where to raise the impact with its own `record_impact`. Outside it there are rails: scope, risk classes and approvals, subagents on plan tasks, campaign memory, genes scored by eval, an evaluation harness with regressions, a headless mode for CI. The agent asks the operator mid-step and keeps going when nobody answers.
 

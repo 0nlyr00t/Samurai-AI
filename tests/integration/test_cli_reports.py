@@ -128,3 +128,42 @@ def test_cli_report_requires_validated_findings(tmp_path: Path, capsys) -> None:
     operation_id, _ = _drive_to_verification(database, capsys, with_finding=False)
     assert main(["--db", database, "report", "generate", operation_id]) == 2
     capsys.readouterr()
+
+
+def _fake_browser(monkeypatch) -> None:
+    """Print a stand-in PDF instead of starting Docker."""
+    import base64
+
+    from samurai_ai.execution.pdf import PdfPrinter
+
+    payload = b"%PDF-1.7 stand-in"
+
+    def print_pdf(self, html: str, run_id: str) -> bytes:
+        assert "<html" in html.lower()
+        return payload
+
+    monkeypatch.setattr(PdfPrinter, "print", print_pdf)
+    _ = base64
+
+
+def test_a_pdf_report_keeps_its_html_source_and_becomes_an_artifact(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    database = str(tmp_path / "pdf.db")
+    operation_id, _ = _drive_to_verification(database, capsys)
+    _fake_browser(monkeypatch)
+    report = _run_json(
+        ["--db", database, "--json", "report", "generate", operation_id, "--format", "pdf"],
+        capsys,
+    )
+    assert report["format"] == "pdf"
+    assert report["path"].endswith(".pdf")
+    root = tmp_path / "reports" / operation_id
+    pdf = root / report["path"].split("/")[-1]
+    assert pdf.read_bytes().startswith(b"%PDF")
+    assert list(root.glob("*.source.html")), "the printable source must stay"
+
+    artifacts = _run_json(
+        ["--db", database, "--json", "artifact", "list", operation_id], capsys
+    )
+    assert any(item["path"].endswith(".pdf") for item in artifacts)
