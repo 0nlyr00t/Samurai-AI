@@ -65,7 +65,7 @@ jobs:
         with:
           platforms: arm64
       - name: Build standalone binary
-        if: matrix.kind != 'qemu-linux'
+        if: startsWith(matrix.kind, 'native-')
         run: uv run --group release pyinstaller packaging/samurai.spec --distpath dist/binary --workpath build/pyinstaller --noconfirm
       - name: Build standalone binary (target arch)
         if: matrix.kind == 'cross-macos'

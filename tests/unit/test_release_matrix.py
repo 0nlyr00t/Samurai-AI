@@ -50,3 +50,10 @@ def test_the_installer_resolves_the_same_names() -> None:
 def test_the_installer_documents_the_fallback_for_missing_assets() -> None:
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "falling back to uv" in installer
+
+
+def test_the_plain_build_step_runs_only_for_native_targets() -> None:
+    """It used to run for cross-macos too, so the target-arch step collided with it."""
+    text = workflow()
+    plain = text.split("- name: Build standalone binary\n", 1)[1].split("\n", 1)[0]
+    assert "startsWith(matrix.kind, 'native-')" in plain
