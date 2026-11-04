@@ -129,6 +129,10 @@ samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
 
 
 
+## Установка и снос
+
+`install.sh` и `uninstall.sh` — единственные штатные пути установки и удаления (macOS/Linux, без root): подписанный бинарник релиза, обязательный sha256, Sigstore при наличии `cosign`, откат на uv только при отсутствии ассета под платформу. Деинсталлятор снимает то же, что поставил, включая состояние, если не передан `--keep-state`; без терминала сначала показывает план. Разбор решений — `md/threat-review-security-tools.md` §3i.
+
 ## Поставка
 
 Standalone per-platform `samurai` (PyInstaller one-file, без Python и uv на машине): локальная сборка — `bash packaging/build_binary.sh`, релизы linux-x86_64/darwin-arm64/windows-x86_64 собираются в `.github/workflows/release.yml` по тегу `v*` и подписываются Sigstore keyless (проверка — `md/compatibility.md`). sdist/wheel воспроизводимы побитно (`packaging/check_reproducible.sh` в CI). Docker, security tools, MCP servers и Ollama — optional dependencies с health checks.
