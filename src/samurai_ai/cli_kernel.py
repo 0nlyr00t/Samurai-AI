@@ -27,9 +27,20 @@ def register_kernel_commands(
 ) -> None:
     plan = subcommands.add_parser("plan", help="Manage operation plans")
     plan_commands = plan.add_subparsers(dest="plan_command", required=True)
-    plan_create = plan_commands.add_parser("create", help="Create the current plan from JSON")
+    plan_create = plan_commands.add_parser(
+        "create", help="Create the current plan from a JSON file or from flags"
+    )
     plan_create.add_argument("operation_id")
-    plan_create.add_argument("plan_file", type=Path)
+    plan_create.add_argument("plan_file", type=Path, nargs="?")
+    plan_create.add_argument("--title", default=None, help="plan title (flags mode)")
+    plan_create.add_argument(
+        "--task",
+        action="append",
+        dest="tasks",
+        default=[],
+        metavar="TITLE",
+        help="a task title; repeat for more steps, in order",
+    )
     plan_show = plan_commands.add_parser("show", help="Show the current plan")
     plan_show.add_argument("operation_id")
     plan_approve = plan_commands.add_parser("approve", help="Approve the current plan")
@@ -148,11 +159,17 @@ def register_kernel_commands(
     approval_list = approval_commands.add_parser("list", help="List approvals")
     approval_list.add_argument("operation_id")
     approval_list.add_argument("--pending", action="store_true")
-    approval_approve = approval_commands.add_parser("approve", help="Approve a pending request")
-    approval_approve.add_argument("approval_id")
+    approval_approve = approval_commands.add_parser(
+        "approve", help="Approve one pending request, or every one with --all"
+    )
+    approval_approve.add_argument("approval_id", nargs="?")
+    approval_approve.add_argument(
+        "--all", action="store_true", help="approve every pending request (needs --operation)"
+    )
+    approval_approve.add_argument("--operation", dest="all_operation_id", default=None)
     approval_approve.add_argument("--actor", default="operator")
     approval_reject = approval_commands.add_parser("reject", help="Reject a pending request")
-    approval_reject.add_argument("approval_id")
+    approval_reject.add_argument("approval_id", nargs="?")
     approval_reject.add_argument("--actor", default="operator")
 
 
@@ -165,9 +182,9 @@ def handle_kernel_command(
         return _handle_plan(args, kernel)
     if args.command == "task":
         plan = (
-            kernel.start_task(args.operation_id, args.task_id)
+            kernel.start_task(args.operation_id, _resolve_task(kernel, args))
             if args.task_command == "start"
-            else kernel.complete_task(args.operation_id, args.task_id)
+            else kernel.complete_task(args.operation_id, _resolve_task(kernel, args))
         )
         _emit(plan, args.json_output)
         return 0
@@ -192,7 +209,12 @@ def handle_kernel_command(
 
 def _handle_plan(args: argparse.Namespace, kernel: KernelService) -> int:
     if args.plan_command == "create":
-        title, tasks, gates = _load_plan_definition(args.plan_file)
+        if args.plan_file is not None and args.tasks:
+            raise ValueError("give either a plan file or --task, not both")
+        if args.plan_file is not None:
+            title, tasks, gates = _load_plan_definition(args.plan_file)
+        else:
+            title, tasks, gates = _plan_from_flags(args.title, args.tasks)
         plan = kernel.create_plan(args.operation_id, title, tasks, gates)
         _emit(plan, args.json_output)
         return 0
@@ -320,6 +342,8 @@ def _handle_approval(args: argparse.Namespace, kernel: KernelService) -> int:
             reason=args.reason,
             requested_by=args.requested_by,
         )
+        _emit(approval, args.json_output)
+        return 0
     elif args.approval_command == "list":
         approvals = kernel.kernel.list_approvals(
             args.operation_id,
@@ -334,12 +358,74 @@ def _handle_approval(args: argparse.Namespace, kernel: KernelService) -> int:
                     f"{approval.action}"
                 )
         return 0
-    elif args.approval_command == "approve":
+    if args.approval_command == "approve" and args.all:
+        return _approve_everything(args, kernel)
+    if not args.approval_id:
+        raise ValueError(f"approval {args.approval_command} needs an approval id")
+    if args.approval_command == "approve":
         approval = kernel.approve(args.approval_id, args.actor)
     else:
         approval = kernel.reject(args.approval_id, args.actor)
     _emit(approval, args.json_output)
     return 0
+
+
+def _approve_everything(args: argparse.Namespace, kernel: KernelService) -> int:
+    """`--all`: what an operator means by "go ahead" while a run waits."""
+    if not args.all_operation_id:
+        raise ValueError("--all needs --operation SO_ID")
+    pending = kernel.kernel.list_approvals(
+        args.all_operation_id, status=ApprovalStatus.PENDING
+    )
+    if not pending:
+        print("nothing is pending")
+        return 0
+    for approval in pending:
+        kernel.approve(approval.id, args.actor)
+        print(f"approved\t{approval.id}\t{approval.action}")
+    return 0
+
+
+def _resolve_task(kernel: KernelService, args: argparse.Namespace) -> str:
+    """Accept a task id or a recognizable piece of its title."""
+    plan = kernel.get_current_plan(args.operation_id)
+    if plan is None:
+        raise ValueError(f"operation {args.operation_id} has no current plan")
+    wanted = args.task_id.strip()
+    for task in plan.tasks:
+        if task.id == wanted:
+            return task.id
+    matches = [task for task in plan.tasks if wanted.lower() in task.title.lower()]
+    if len(matches) == 1:
+        return matches[0].id
+    if not matches:
+        listing = ", ".join(f"{task.id}={task.title}" for task in plan.tasks)
+        raise ValueError(f"no task matches {wanted!r}; try one of: {listing}")
+    listing = ", ".join(f"{task.id}={task.title}" for task in matches)
+    raise ValueError(f"{wanted!r} matches several tasks: {listing}")
+
+
+def _plan_from_flags(
+    title: str | None, titles: list[str]
+) -> tuple[str, list[PlanTask], list[StageGate]]:
+    """A plan typed straight on the command line: one task per `--task`, chained."""
+    if not titles:
+        raise ValueError("give a plan file, or --title and at least one --task")
+    clean = [text.strip() for text in titles]
+    if any(not text for text in clean):
+        raise ValueError("a --task title cannot be empty")
+    if any(len(text) > 200 for text in clean):
+        raise ValueError("a --task title is long; keep it under 200 characters")
+    name = (title or "").strip() or "Operation plan"
+    tasks = [
+        PlanTask(
+            id=f"step{i}",
+            title=text,
+            depends_on=(f"step{i - 1}",) if i > 1 else (),
+        )
+        for i, text in enumerate(clean, start=1)
+    ]
+    return name, tasks, []
 
 
 def _load_plan_definition(path: Path) -> tuple[str, list[PlanTask], list[StageGate]]:

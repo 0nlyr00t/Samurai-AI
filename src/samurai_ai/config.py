@@ -49,6 +49,19 @@ def genes_path() -> Path:
     return config_directory() / "genes.json"
 
 
+def runtime_directory() -> Path:
+    """Sockets and pidfiles: short-lived, safe to delete between runs."""
+    return config_directory() / "run"
+
+
+def serve_socket_path() -> Path:
+    return runtime_directory() / "serve.sock"
+
+
+def serve_pidfile_path() -> Path:
+    return runtime_directory() / "serve.pid"
+
+
 def tools_directory() -> Path:
     """Installed tool manifests (data, reviewed and sha256-pinned)."""
     return config_directory() / "tools"
