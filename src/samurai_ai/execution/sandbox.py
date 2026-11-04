@@ -323,6 +323,25 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
             "github.com",
         ),
     ),
+    SandboxProfile(
+        id="sandbox.pdf@v1",
+        description="Print report HTML to PDF in pinned headless Chromium; the "
+        "document is local, so nothing leaves the container",
+        # amd64 only upstream: on arm64 docker runs it under emulation
+        image=(
+            "zenika/alpine-chrome@sha256:"
+            "d3f2d5a5fe4b57ac4c9d3478feb5a077783a053a2aceb4188d9257a55e4b8ab0"
+        ),
+        allowed_executables=("sh", "chromium-browser"),
+        cpu_limit="2.0",
+        memory_mb=1024,
+        pids_limit=256,
+        timeout_seconds=300,
+        # 3 MiB of PDF comes back as ~4 MiB of base64 on stdout
+        max_output_bytes=4 * 1024 * 1024,
+        network_mode="none",
+        user="65534:65534",
+    ),
 )
 
 
