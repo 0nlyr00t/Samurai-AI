@@ -59,9 +59,6 @@ def handle_sandbox_command(args: argparse.Namespace) -> int | None:
     return _show_profiles(runner, args.json_output)
 
 
-PROBE_PORTS = (22, 80, 443, 445, 3389, 8080)
-
-
 def _check(args: argparse.Namespace) -> int:
     """Cut a reachability question in two: host side, then container side.
 
@@ -70,6 +67,7 @@ def _check(args: argparse.Namespace) -> int:
     """
     from samurai_ai.cli import _make_services
     from samurai_ai.execution.sandbox import get_profile
+    from samurai_ai.services.reachability import PROBE_PORTS, is_address, probe_host
 
     operations = _make_services(getattr(args, "db", None))[0]
     operation = operations.get(args.operation_id)
@@ -82,11 +80,11 @@ def _check(args: argparse.Namespace) -> int:
     print(f"docker: {'ok' if docker_ok else 'not running — nothing below can work'}")
     rows: list[tuple[str, str, str, str]] = []
     for name, address in addresses:
-        if not _is_address(address):
+        if not is_address(address):
             rows.append((name, address, "n/a", "not an address"))
             continue
         for port in PROBE_PORTS:
-            host_state = _probe_host(address, port)
+            host_state = probe_host(address, port)
             rows.append((name, address, str(port), host_state))
     for row_name, row_address, port_text, host_state in rows:
         print(f"host\t{row_name}\t{row_address}:{port_text}\t{host_state}")
@@ -103,7 +101,7 @@ def _check(args: argparse.Namespace) -> int:
     runner = _default_runner()
     verdict = 0
     for name, address in addresses:
-        if not _is_address(address):
+        if not is_address(address):
             continue
         outcome = runner.run(
             profile,
@@ -150,30 +148,6 @@ def _docker_alive() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return done.returncode == 0
-
-
-def _is_address(value: str) -> bool:
-    import ipaddress
-
-    try:
-        ipaddress.ip_address(value)
-    except ValueError:
-        return False
-    return True
-
-
-def _probe_host(address: str, port: int) -> str:
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(2.0)
-        try:
-            sock.connect((address, port))
-        except TimeoutError:
-            return "timeout"
-        except OSError as exc:
-            return "refused" if exc.errno in (61, 111) else "error"
-    return "open"
 
 
 def _default_runner() -> DockerSandboxRunner:

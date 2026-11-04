@@ -177,3 +177,29 @@ def test_a_host_alias_outside_scope_stays_out() -> None:
 def test_a_host_alias_name_cannot_be_an_address() -> None:
     with pytest.raises(ValidationError, match="must be a name"):
         ScopeContract(includes=("10.0.0.1",), hosts={"10.0.0.2": "10.0.0.1"})
+
+
+def test_a_network_must_fit_inside_the_scope() -> None:
+    scope = ScopeContract(includes=("10.10.0.0/24",))
+    assert scope.evaluate_network("10.10.0.0/24").allowed
+    assert scope.evaluate_network("10.10.0.128/25").allowed
+    # a wider network than the authorization is refused
+    assert not scope.evaluate_network("10.10.0.0/16").allowed
+    assert scope.evaluate_network("10.10.0.0/16").detail
+
+
+def test_a_single_authorized_address_covers_only_itself() -> None:
+    scope = ScopeContract(includes=("10.10.0.5",))
+    assert scope.evaluate_network("10.10.0.5/32").allowed
+    assert not scope.evaluate_network("10.10.0.0/24").allowed
+
+
+def test_an_overlapping_exclusion_refuses_the_network() -> None:
+    scope = ScopeContract(includes=("10.10.0.0/24",), excludes=("10.10.0.128/25",))
+    assert not scope.evaluate_network("10.10.0.0/24").allowed
+    assert scope.evaluate_network("10.10.0.0/25").allowed
+
+
+def test_a_non_network_is_reported_as_invalid() -> None:
+    decision = ScopeContract(includes=("10.10.0.0/24",)).evaluate_network("example.com")
+    assert not decision.allowed and "not a network" in decision.detail
