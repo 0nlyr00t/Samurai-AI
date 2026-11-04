@@ -99,6 +99,10 @@ def stand(tmp_path: Path):
     env = {
         **os.environ,
         "HOME": str(home),
+        # the runner may carry its own XDG dirs; pin them to the throwaway home
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_CACHE_HOME": str(home / ".cache"),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "FAKE_RELEASE": str(release),
         "SHELL": "/bin/zsh",
