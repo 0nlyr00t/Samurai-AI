@@ -20,6 +20,7 @@ from samurai_ai.domain.reports import (
     ReportScopeViolationError,
     ReportStateError,
 )
+from samurai_ai.execution.pdf import PdfPrinter
 from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -39,6 +40,7 @@ class ReportService:
         reports: ReportRepository,
         vault: VaultService | None = None,
         impact: ImpactService | None = None,
+        pdf: PdfPrinter | None = None,
     ) -> None:
         self.operations = operations
         self.kernel = kernel
@@ -46,6 +48,14 @@ class ReportService:
         self.reports = reports
         self.vault = vault
         self.impact = impact
+        self._pdf = pdf
+
+    @property
+    def pdf(self) -> PdfPrinter:
+        """Built lazily: only a PDF report needs the browser and Docker."""
+        if self._pdf is None:
+            self._pdf = PdfPrinter()
+        return self._pdf
 
     def generate(
         self,
@@ -99,18 +109,26 @@ class ReportService:
         redactor = self._build_redactor(operation_id)
         if format is ReportFormat.JSON:
             content = self._render_json(operation, findings, assets)
-        elif format is ReportFormat.HTML:
+        elif format in (ReportFormat.HTML, ReportFormat.PDF):
+            # a PDF is the HTML document printed: the same renderer, so the two
+            # can never drift apart
             content = self._render_html(operation, findings, assets)
         else:
             content = self._render_markdown(operation, findings, assets)
         redacted = redactor.redact(content).text
 
-        data = redacted.encode("utf-8")
         report_id = f"rep_{uuid4().hex[:12]}"
         suffix = {
             ReportFormat.JSON: "json",
             ReportFormat.HTML: "html",
         }.get(format, "md")
+        html_source: bytes | None = None
+        if format is ReportFormat.PDF:
+            html_source = redacted.encode("utf-8")
+            data = self.pdf.print(redacted, f"pdf{report_id[-6:]}")
+            suffix = "pdf"
+        else:
+            data = redacted.encode("utf-8")
         report = BountyReport(
             id=report_id,
             operation_id=operation_id,
@@ -125,6 +143,19 @@ class ReportService:
         directory = self.reports.report_root / operation_id
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{report.id}.{suffix}").write_bytes(data)
+        if html_source is not None:
+            # the printable source stays beside the PDF: the PDF can be redone
+            source_path = directory / f"{report.id}.source.html"
+            source_path.write_bytes(html_source)
+            self.kernel.register_artifact(
+                operation_id,
+                ArtifactKind.FILE,
+                html_source.decode("utf-8"),
+                summary=f"PDF report {report.id} as a governed artifact",
+                created_by=created_by,
+                data=data,
+                extension="pdf",
+            )
         event = OperationEvent(
             operation_id=operation_id,
             event_type="report.generated",
