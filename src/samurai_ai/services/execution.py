@@ -20,11 +20,12 @@ from samurai_ai.domain.kernel import Approval, ApprovalStatus, ArtifactKind, Ris
 from samurai_ai.domain.offline import check_tool
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.scope_guard import ScopeGuardError, guard
-from samurai_ai.domain.vault import secret_references
+from samurai_ai.domain.vault import SecretNotFoundError, SecretScopeError, secret_references
 from samurai_ai.execution.registry import ToolOutput, ToolRegistry, default_registry
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
+from samurai_ai.services.tool_keys import inject
 from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.execution import ToolRunRepository
@@ -97,17 +98,29 @@ class ToolExecutionService:
             )
         check_tool(definition, operation.offline)
         validated = self.registry.validate_params(definition, params or {})
-        resolved = self._resolve_params(validated, operation_id)
+        resolved = self._resolve_params(
+            validated, operation_id, optional=_optional_params(definition)
+        )
         preflight = getattr(adapter, "preflight", None)
         if callable(preflight):
             preflight(resolved)
+        # the profile declares which env names a tool may receive (its keys)
+        declared_env = _declared_env(adapter)
         build_env = getattr(adapter, "build_env", None)
         if callable(build_env):
             # Register the secret values before the parameters are recorded, so
             # evidence holds vault names (or REDACTED), never the plaintext.
             _, secret_env = build_env(resolved)
+            # a key the operator stored once beats a parameter the model had to
+            # remember: declared env names come from the vault unless already set
+            injected = inject(declared_env, secret_env, self.vault)
+            secret_env = {**secret_env, **injected}
             for value in secret_env.values():
                 self.redactor.register(value)
+            # the tool rebuilds its env at invoke time, so the injected ones travel
+            # with the parameters rather than in a local copy
+            if injected:
+                resolved[SECRET_ENV_KEY] = injected
         approval = self._resolve_approval(
             operation_id, definition, task_id, approval_id, approval_resolver
         )
@@ -375,7 +388,12 @@ class ToolExecutionService:
         )
         return artifact.id
 
-    def _resolve_params(self, params: dict[str, Any], operation_id: str) -> dict[str, Any]:
+    def _resolve_params(
+        self,
+        params: dict[str, Any],
+        operation_id: str,
+        optional: frozenset[str] = frozenset(),
+    ) -> dict[str, Any]:
         def walk(value: Any) -> Any:
             if isinstance(value, str):
                 if not secret_references(value):
@@ -396,7 +414,15 @@ class ToolExecutionService:
                 return {key: walk(item) for key, item in value.items()}
             return value
 
-        resolved_params: dict[str, Any] = walk(params)
+        resolved_params: dict[str, Any] = {}
+        for name, value in params.items():
+            try:
+                resolved_params[name] = walk(value)
+            except (SecretNotFoundError, SecretScopeError):
+                # an optional value (a key the operator has not set) simply goes
+                # missing: the renderer then drops its argv entry altogether
+                if name not in optional:
+                    raise
         return resolved_params
 
     def _redact_params(self, params: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -415,3 +441,32 @@ class ToolExecutionService:
             return value
 
         return walk(params), count
+
+
+def _optional_params(definition: object) -> frozenset[str]:
+    """Manifest parameters whose absent value is legitimate."""
+    params = getattr(definition, "parameters", None) or {}
+    properties = params.get("properties") if isinstance(params, dict) else None
+    if not isinstance(properties, dict):
+        return frozenset()
+    return frozenset(
+        name for name, spec in properties.items()
+        if isinstance(spec, dict) and spec.get("optional")
+    )
+
+
+#: parameters key carrying env the executor injected from the vault
+SECRET_ENV_KEY = "_secret_env"
+
+
+def _declared_env(adapter: object) -> tuple[str, ...]:
+    """Env names the adapter's profile allows; the vault may fill them."""
+    profile_id = getattr(adapter, "profile_id", None)
+    if not isinstance(profile_id, str):
+        return ()
+    try:
+        from samurai_ai.execution.sandbox import get_profile
+
+        return tuple(get_profile(profile_id).env_names)
+    except Exception:  # noqa: BLE001 - an unknown profile just has no names
+        return ()

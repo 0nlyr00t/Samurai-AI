@@ -48,6 +48,9 @@ class ParamSpec(BaseModel):
     type: Literal["string", "integer", "boolean", "array"]
     description: str = ""
     required: bool = False
+    #: a value that may legitimately be absent (a stored key that is not set):
+    #: the whole argv entry carrying it is dropped instead of rendering empty
+    optional: bool = False
     enum: tuple[str, ...] = ()
     pattern: str | None = None
     max_length: int | None = Field(default=None, ge=1, le=512)
@@ -126,6 +129,9 @@ class ToolManifest(BaseModel):
     proxy_scheme: Literal["http", "socks5"] = "http"
     egress_hosts: tuple[str, ...] = ()
     env_names: tuple[str, ...] = ()
+    #: plain env the tool needs (HOME on the tmpfs, cache dir); secrets go through
+    #: env_names so their values never enter the manifest
+    env: dict[str, str] = Field(default_factory=dict)
     resolver_url: str | None = None
     limits: ManifestLimits = Field(default_factory=ManifestLimits)
     params: dict[str, ParamSpec] = Field(default_factory=dict)
@@ -180,13 +186,23 @@ class ToolManifest(BaseModel):
                 raise ManifestError("argv tokens must not contain NUL")
         return value
 
+    @field_validator("env")
+    @classmethod
+    def validate_env(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, item in value.items():
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", name):
+                raise ManifestError(f"env name must be upper case: {name!r}")
+            if "\n" in item or "\x00" in item:
+                raise ManifestError(f"env {name} must be a single line without NUL")
+        return value
+
     @field_validator("proxy_flag")
     @classmethod
     def validate_proxy_flag(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if not re.fullmatch(r"-[a-z][a-z-]{0,31}", value):
-            raise ManifestError(f"proxy_flag must look like '-proxy': {value!r}")
+        if not re.fullmatch(r"--?[a-z][a-z-]{0,30}", value):
+            raise ManifestError(f"proxy_flag must look like '-proxy' or '--proxy': {value!r}")
         return value
 
     @model_validator(mode="after")
@@ -210,6 +226,17 @@ class ToolManifest(BaseModel):
         )
         if missing:
             raise ManifestError(f"required parameters never rendered: {', '.join(missing)}")
+        for name, spec in self.params.items():
+            if not spec.optional:
+                continue
+            if spec.default is None:
+                raise ManifestError(
+                    f"optional parameter {name!r} needs a default to fall back to"
+                )
+            if spec.type != "string":
+                raise ManifestError(
+                    f"optional parameter {name!r} must be a string (a rendered value)"
+                )
         for name in placeholders:
             spec = self.params[name]
             if not spec.required and spec.default is None:
@@ -255,6 +282,7 @@ class ToolManifest(BaseModel):
             proxy_scheme=self.proxy_scheme,
             egress_hosts=self.egress_hosts,
             env_names=self.env_names,
+            env=self.env,
             resolver_url=self.resolver_url,
         )
 
@@ -303,6 +331,8 @@ class ToolManifest(BaseModel):
                     entry["maxItems"] = spec.max_items
             if spec.default is not None:
                 entry["default"] = spec.default
+            if spec.optional:
+                entry["optional"] = True
             properties[name] = entry
             if spec.required:
                 required.append(name)
