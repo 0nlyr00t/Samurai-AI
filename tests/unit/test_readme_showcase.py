@@ -45,3 +45,16 @@ def test_the_capability_detail_moved_but_is_linked() -> None:
 def test_the_language_switch_is_mutual() -> None:
     assert "README.en.md" in readme("README.md")
     assert "README.md" in readme("README.en.md")
+
+
+def test_the_attach_key_in_the_readme_is_the_one_the_tui_binds() -> None:
+    from samurai_ai.tui.keys import ACTIONS
+
+    bound = {
+        action.name: getattr(action, "key", "")
+        for action in ACTIONS
+    }
+    assert bound["attach_session"] == "ctrl+d"
+    assert bound["open_task_board"] == "ctrl+t"
+    for name in ("README.md", "README.en.md", "md/capabilities.md"):
+        assert "Ctrl-D" in (ROOT / name).read_text(encoding="utf-8")

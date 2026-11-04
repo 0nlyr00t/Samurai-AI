@@ -13,7 +13,7 @@ A local harness for authorized attacking: red teaming, bug bounty, CTF/HTB and o
 A terminal interface, all state on the operator's machine, keys in a local vault. Every tool is a container pinned by digest, every out-of-scope call and every dangerous action goes through policy rather than through trust in the model.
 
 <p align="center">
-  <img src="assets/samurai-tui.en.png" width="1080" alt="Samurai AI TUI: operation journal with tools, a finding and a waiting approval, plan progress 1/3, and the command line">
+  <img src="assets/samurai-tui.en.png" width="1080" alt="Samurai AI TUI: the agent picks the next move, presses the target and raises the impact — operation journal, a finding, a waiting approval, plan progress 1/3">
 </p>
 
 ## Install
@@ -54,13 +54,13 @@ It removes the binary, the PATH block, the state directory (`~/.config/samurai`:
 
 **Impact and evidence.** A ladder `read → write → auth-bypass → data-export → rce` with scores, a reporting threshold and an escalation budget; reports refuse findings below the threshold (`report generate --min-impact`). Traffic, output and files become artifacts instead of quotes in a chat.
 
-**A live session.** A daemon on a local unix socket: work survives a closed terminal, a second terminal or the TUI screen (`Ctrl-T`) attaches to the stream, answers the agent, approves steps and detaches without losing the work. The socket is 0600, clients are read-only by default, and the shared access table decides.
+**A live session.** A daemon on a local unix socket: work survives a closed terminal, a second terminal or the TUI screen (`Ctrl-D`) attaches to the stream, answers the agent, approves steps and detaches without losing the work. The socket is 0600, clients are read-only by default, and the shared access table decides.
 
 **One command to a run.** `samurai run "<name>" --mode … --include … --task … --model …` creates the operation, chains the plan and works it to the end; `--detach` leaves it with the daemon. `scope host add` describes a vhost with no DNS, `sandbox check` shows which side of a broken path is broken.
 
 **Reports and export.** Markdown/JSON/HTML reports and an operation dossier built only from validated findings, secret redaction, NDJSON journal export, CALDERA and VECTR campaign export.
 
-**Autonomy under control.** Subagents on plan tasks, campaign memory, genes scored by eval, an evaluation harness with regressions, a headless mode for CI. The agent asks the operator mid-step and keeps going when nobody answers.
+**The agent decides and presses.** Inside the plan the agent picks the move: where to go, which tool to take, where to raise the impact with its own `record_impact`. Outside it there are rails: scope, risk classes and approvals, subagents on plan tasks, campaign memory, genes scored by eval, an evaluation harness with regressions, a headless mode for CI. The agent asks the operator mid-step and keeps going when nobody answers.
 
 **Interface.** A TUI with journal, plan, findings and access tabs, an action palette, a run inspector, boards and a key overlay; RU/EN; three themes; rebindable keys. Plus a full CLI for scripts and CI with a stable exit-code contract.
 
