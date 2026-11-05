@@ -13,10 +13,12 @@ break out of the command.
 
 from __future__ import annotations
 
+import asyncio
 import shlex
+from dataclasses import dataclass
 from typing import Any
 
-from samurai_ai.domain.execution import ToolValidationError
+from samurai_ai.domain.execution import ToolExecutionError, ToolValidationError
 from samurai_ai.domain.sandbox import SandboxProfile
 from samurai_ai.execution.egress import DEFAULT_ALLOWED_PORTS
 from samurai_ai.execution.sandbox import DockerSandboxRunner
@@ -85,6 +87,63 @@ class RelaySandboxRunner(DockerSandboxRunner):
         return self.verify_allowlist_signature()
 
 
+@dataclass(frozen=True)
+class RelayResponse:
+    """What a relayed fetch answered."""
+
+    status: int
+    headers: str
+    body: bytes
+
+
+def relayed_fetch(
+    relay: str,
+    url: str,
+    *,
+    method: str,
+    timeout: float,
+    max_bytes: int,
+    manager: Any,
+) -> RelayResponse:
+    """Fetch a URL with curl on the far side of the relay.
+
+    The host has no route, so its own http.client cannot connect; curl runs
+    where the route exists and only travel-safe limits are applied here.
+    """
+    argv = [
+        "bash",
+        "-lc",
+        relay_command(
+            relay,
+            "curl",
+            [
+                "-sS",
+                "-i",
+                "--max-time",
+                str(max(1, int(timeout))),
+                "--max-filesize",
+                str(max_bytes),
+                "-X",
+                method,
+                url,
+            ],
+        ),
+    ]
+    result = asyncio.run(manager.run(argv, timeout_seconds=timeout + 5))
+    if result.exit_code not in (0, None) or result.timed_out:
+        detail = (result.stderr or result.stdout).strip()[:500]
+        raise ToolExecutionError(f"relayed fetch failed for {url}: {detail}")
+    raw = result.stdout.encode("utf-8", errors="surrogateescape")
+    head, _, body = raw.partition(b"\r\n\r\n")
+    lines = head.decode("iso-8859-1").splitlines()
+    status = 0
+    if lines and lines[0].startswith("HTTP/"):
+        parts = lines[0].split()
+        status = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    headers = "\r\n".join(lines[1:])
+    return RelayResponse(status=status, headers=headers, body=body[:max_bytes])
+
+
 def build_runner(relay: str) -> RelaySandboxRunner:
     """A relay runner wired to a host shell, ready to hand to an adapter."""
     from samurai_ai.config import sandbox_allowlist_path, vault_key_path
@@ -104,5 +163,7 @@ __all__ = [
     "RelaySandboxRunner",
     "build_runner",
     "relay_command",
+    "relayed_fetch",
+    "RelayResponse",
     "validate_relay",
 ]
