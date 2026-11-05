@@ -445,14 +445,17 @@ def test_consecutive_rejects_fail_run(tmp_path: Path, monkeypatch: pytest.Monkey
         '{"type": "request_tool_run", "tool_id": "missing.a", "params": {}},'
         '{"type": "request_tool_run", "tool_id": "missing.b", "params": {}},'
         '{"type": "request_tool_run", "tool_id": "missing.c", "params": {}},'
-        '{"type": "request_tool_run", "tool_id": "missing.d", "params": {}}'
+        '{"type": "request_tool_run", "tool_id": "missing.d", "params": {}},'
+        '{"type": "request_tool_run", "tool_id": "missing.e", "params": {}},'
+        '{"type": "request_tool_run", "tool_id": "missing.f", "params": {}}'
         "]}",
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert run.status is AgentRunStatus.FAILED
     events = service.events(operation_id)
     rejected = [e for e in events if e.event_type == "agent.command.rejected"]
-    assert len(rejected) == 4
+    # the whole command batch of the step runs, then the budget trips
+    assert len(rejected) == 6
     assert "too many consecutive rejected" in [
         e for e in events if e.event_type == "agent.run.finish"
     ][-1].payload["reason"]

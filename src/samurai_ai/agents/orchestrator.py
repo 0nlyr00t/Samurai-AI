@@ -82,7 +82,7 @@ _T = TypeVar("_T")
 
 DEFAULT_MAX_STEPS = 8
 DEFAULT_MAX_DEPTH = 1
-MAX_CONSECUTIVE_REJECTS = 3
+MAX_CONSECUTIVE_REJECTS = 5
 #: the same command repeated this often in one run earns a model note
 REPEAT_THRESHOLD = 3
 #: the same *place* called this often inside the window earns a note (a changing
@@ -1159,8 +1159,8 @@ class AgentOrchestrator:
             return ""
         return (
             f"[network tools are relayed through `{relay}`. The sandbox adapters "
-            "(scan.nmap, recon.httpx-probe, fuzz.ffuf, scan.nuclei) already go "
-            "through it — call those. shell.exec runs on the host, which has NO "
+            "(scan.nmap, recon.httpx-probe, fuzz.ffuf, scan.nuclei) and http.fetch "
+            "already go through it — call those. shell.exec runs on the host, which has NO "
             "route to the target: a bare curl/nmap there shows 'filtered' and is "
             "a dead end unless it prefixes the same relay. Address the target by "
             "its own IP, never 127.0.0.1.]\n"

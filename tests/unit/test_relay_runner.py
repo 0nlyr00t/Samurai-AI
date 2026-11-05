@@ -1,6 +1,7 @@
 """The relay runner: a quoted one-liner, no container, same validation."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -69,3 +70,46 @@ def test_preflight_does_not_need_a_local_image() -> None:
     profile = SandboxProfile(id="sandbox.probe@v1", image="nothing@sha256:" + "a" * 64,
                              allowed_executables=("nmap",), network_mode="direct")
     assert asyncio.run(quiet.preflight(profile)) is None
+
+
+def test_a_relayed_fetch_parses_status_and_body() -> None:
+    from samurai_ai.execution.relay import relayed_fetch
+
+    class _Manager:
+        stall_seconds = 120.0
+
+        async def run(self, argv, timeout_seconds=0, **_: Any):  # noqa: ANN001, ANN003
+            assert argv[0] == "bash" and argv[1] == "-lc"
+            assert "curl" in argv[2] and "http://10.0.0.1/x" in argv[2]
+            return type(
+                "R", (), {"stdout": "HTTP/1.1 200 OK\r\nX-A: 1\r\n\r\nbody-here", "stderr": "",
+                          "exit_code": 0, "timed_out": False}
+            )()
+
+    response = relayed_fetch(
+        "relay", "http://10.0.0.1/x", method="GET", timeout=5, max_bytes=1024,
+        manager=_Manager(),
+    )
+    assert response.status == 200
+    assert response.body == b"body-here"
+    assert "X-A: 1" in response.headers
+
+
+def test_a_failed_relayed_fetch_says_what_curl_said() -> None:
+    from samurai_ai.domain.execution import ToolExecutionError
+    from samurai_ai.execution.relay import relayed_fetch
+
+    class _Manager:
+        stall_seconds = 120.0
+
+        async def run(self, *_a: Any, **_k: Any):
+            return type(
+                "R", (), {"stdout": "", "stderr": "curl: (7) Failed to connect",
+                          "exit_code": 7, "timed_out": False}
+            )()
+
+    with pytest.raises(ToolExecutionError, match="Failed to connect"):
+        relayed_fetch(
+            "relay", "http://10.0.0.1/x", method="GET", timeout=5, max_bytes=1024,
+            manager=_Manager(),
+        )
