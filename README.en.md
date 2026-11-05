@@ -92,6 +92,10 @@ Implementation detail and limits: [`md/capabilities.md`](md/capabilities.md) and
 - [`SECURITY.md`](SECURITY.md) — how to report a vulnerability.
 - [`Agent.md`](Agent.md) — development handoff.
 
+## License
+
+Apache-2.0 — see [`LICENSE`](LICENSE). Use, forking and contributions are allowed under its terms; the patent grant is included.
+
 ## Status
 
 Under active development: 1362 automated tests, CI gates (ruff, strict mypy, pytest, secret scan, package build), signed releases. Not done: distributed runners (beyond the SSH daemon tunnel), standalone shodan and censys tools, Python-hook plugins. ADB and VBoxManage are mock-tested, genes have no field series yet.
