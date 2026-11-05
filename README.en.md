@@ -44,11 +44,11 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 
 ## Capabilities
 
-**Operation.** Four modes (bug bounty, CTF/HTB, red team, operation planning), an audited lifecycle, include/exclude scope for domains, wildcards, URL origins and IP/CIDR, immutable evidence with SHA-256, findings from candidate to reported, snapshots, restore, fork, recovery reconciliation.
+**Operation.** Scope only widens with a confirmation: `scope add` asks when a rule really widens the boundary and stays silent when the target is already covered. Four modes (bug bounty, CTF/HTB, red team, operation planning), an audited lifecycle, include/exclude scope for domains, wildcards, URL origins and IP/CIDR, immutable evidence with SHA-256, findings from candidate to reported, snapshots, restore, fork, recovery reconciliation.
 
 **Plan and approvals.** Tasks with dependencies, stages and gates, required artifacts, risks R0–R4. Execution above R0 waits for the operator; `ask`, `yolo`, `never` modes and per-argument `allow|ask|deny` rules keep policy outside the model.
 
-**Tools.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, `intel.shodan`, `intel.censys`, remote administration (ssh, SMB, an RDP probe, ADB), VMs and disks, exploit building and running. A new tool is a JSON manifest; packages of tools, profiles and playbooks install as plugins with a sha256 per file.
+**Tools.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, `intel.shodan`, `intel.censys`, `loot.scan` (credentials from a body), remote administration (ssh, SMB, an RDP probe, ADB), VMs and disks, exploit building and running. A new tool is a JSON manifest; packages of tools, profiles and playbooks install as plugins with a sha256 per file.
 
 **Sandbox.** Docker profiles pinned by digest, `--cap-drop ALL`, read-only root, CPU/memory/PID limits, a scoped egress proxy with DNS pinning and connection audit. The belt is split by blast radius: the admin image carries no compiler, the exploit image carries no foreign credentials.
 
@@ -61,6 +61,8 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 **Offline mode.** `--offline` on an operation refuses remote models and tools that need the internet; the refusal carries a reason and comes before the attempt, `offline check` lists what is refused.
 
 **Browser view.** `samurai web <op>` — summary, journal, plan, findings, report downloads. `127.0.0.1` only, one-off token in the link, no writes.
+
+**No model needed.** `samurai discover <targets>` runs ports, probe, templates: a deterministic chain with no key and no model call, for CI and offline work. `samurai doctor` checks the environment (docker, directory permissions, images, keys) and prints the install command for your OS.
 
 **Runs.** `samurai run "<name>" --mode … --include … --task … --model …` creates the operation, the plan and works it to the end; `--detach` leaves it with the daemon. A preflight checks reachability, `--fallback` names a second model.
 
