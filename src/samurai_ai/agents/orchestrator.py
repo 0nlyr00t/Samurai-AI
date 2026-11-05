@@ -1188,7 +1188,8 @@ class AgentOrchestrator:
             "route to the target: a bare curl/nmap there shows 'filtered' and is "
             "a dead end unless it prefixes the same relay. Address the target by "
             "its own IP. 127.0.0.1 under a relay is the VM itself, not the "
-            "target — use it only if the target really is the VM.]\n"
+            "target — use it only if the target really is the VM. The blackboard "
+            "`shared.relay.tools` lists what exists there: a missing tool fails.]\n"
         )
 
     def _genes_excerpt(self) -> str:

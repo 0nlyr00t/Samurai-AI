@@ -144,6 +144,31 @@ def relayed_fetch(
     return RelayResponse(status=status, headers=headers, body=body[:max_bytes])
 
 
+#: tools the harness offers but the far side may not have
+PROBE_TOOLS = ("nmap", "curl", "ffuf", "nuclei", "gobuster", "hydra", "python3", "httpx")
+
+
+def probe_tools(
+    relay: str, names: tuple[str, ...] = PROBE_TOOLS, *, timeout: float = 30.0
+) -> dict[str, bool]:
+    """Which tools exist on the far side of the relay.
+
+    Offering a tool the relay host lacks costs a whole step per attempt: this
+    asks once, in one command, and lets the prompt name what actually works.
+    """
+    from samurai_ai.execution.process import ProcessManager
+
+    script = "; ".join(f"command -v {name} >/dev/null && echo {name}" for name in names)
+    argv = ["bash", "-lc", relay_command(relay, "bash", ["-c", script])]
+    manager = ProcessManager(allowed_executables=frozenset({"bash"}))
+    try:
+        result = asyncio.run(manager.run(argv, timeout_seconds=timeout))
+    except Exception:  # noqa: BLE001 - a failed probe is an empty answer
+        return {name: False for name in names}
+    found = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    return {name: name in found for name in names}
+
+
 def build_runner(relay: str) -> RelaySandboxRunner:
     """A relay runner wired to a host shell, ready to hand to an adapter."""
     from samurai_ai.config import sandbox_allowlist_path, vault_key_path
@@ -162,6 +187,8 @@ __all__ = [
     "MAX_RELAY_LENGTH",
     "RelaySandboxRunner",
     "build_runner",
+    "PROBE_TOOLS",
+    "probe_tools",
     "relay_command",
     "relayed_fetch",
     "RelayResponse",

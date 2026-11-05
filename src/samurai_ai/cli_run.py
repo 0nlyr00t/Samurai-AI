@@ -120,6 +120,26 @@ def _preflight(args: argparse.Namespace) -> bool:
     return True
 
 
+def _relay_report(relay: str, operation_id: str, operations: Any) -> None:
+    """Say up front what the far side has, and put it where the agent reads it."""
+    from samurai_ai.agents.blackboard import make_note_event
+    from samurai_ai.domain.execution import SecretRedactor
+    from samurai_ai.execution.relay import PROBE_TOOLS, probe_tools
+
+    present = probe_tools(relay)
+    missing = [name for name in PROBE_TOOLS if not present[name]]
+    if missing:
+        print(f"warn: relay has no {', '.join(missing)}", file=sys.stderr)
+    text = (
+        f"relay `{relay}`; available there: "
+        + (", ".join(name for name in PROBE_TOOLS if present[name]) or "nothing")
+        + ("; missing: " + ", ".join(missing) if missing else "")
+    )
+    operations.repository.append_event(
+        make_note_event(operation_id, "operator", "shared.relay.tools", text, SecretRedactor())
+    )
+
+
 def _port_list() -> str:
     from samurai_ai.services.reachability import PROBE_PORTS
 
@@ -151,6 +171,8 @@ def _run(args: argparse.Namespace) -> int:
     except (ScopeValidationError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.relay:
+        _relay_report(args.relay, operation_id, operations)
     socket_path = Path(getattr(args, "socket", None) or serve_socket_path())
     if socket_path.exists():
         return _through_daemon(args, socket_path, operation_id, plan_id)
