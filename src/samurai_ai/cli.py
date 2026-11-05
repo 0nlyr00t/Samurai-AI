@@ -451,7 +451,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         kernel_result = handle_kernel_command(args, kernel_service, impact_service)
         if kernel_result is not None:
             return kernel_result
-        execution_result = handle_execution_command(args, execution_service, settings_service)
+        execution_result = handle_execution_command(args, execution_service)
         if execution_result is not None:
             return execution_result
         vault_result = handle_vault_command(args, vault_service)

@@ -17,7 +17,6 @@ from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.permission import Decision
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.manifests import ManifestStore, ManifestStoreError
-from samurai_ai.services.settings import SettingsService
 
 
 def register_execution_commands(
@@ -93,9 +92,7 @@ def _record_rule(
 
 
 def handle_execution_command(
-    args: argparse.Namespace,
-    execution: ToolExecutionService,
-    settings: SettingsService,
+    args: argparse.Namespace, execution: ToolExecutionService
 ) -> int | None:
     if args.command != "tool":
         return None
