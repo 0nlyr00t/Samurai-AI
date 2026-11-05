@@ -26,9 +26,15 @@ class OperationService:
         *,
         offline: bool = False,
         objective: str = "",
+        relay: str = "",
     ) -> Operation:
         operation = Operation(
-            name=name, mode=mode, scope=scope, objective=objective, offline=offline
+            name=name,
+            mode=mode,
+            scope=scope,
+            objective=objective,
+            offline=offline,
+            relay=relay.strip(),
         )
         event = OperationEvent(
             operation_id=operation.id,
