@@ -92,6 +92,8 @@ from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
+from samurai_ai.tui.hunt import REFRESH_SECONDS as HUNT_REFRESH_SECONDS
+from samurai_ai.tui.hunt import HuntController, tally
 from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
@@ -143,6 +145,7 @@ _OPEN_COMMANDS = frozenset({"/login", "/whoami"})
 
 
 class SamuraiApp(
+    HuntController,
     ChatController,
     SessionController,
     BoardController,
@@ -263,6 +266,7 @@ class SamuraiApp(
         "tab-chat": "journal",
         "tab-ops": "view-ops",
         "tab-bounty": "view-bounty",
+        "tab-hunt": "view-hunt",
     }
     _TAB_BY_VIEW = {pane: tab for tab, pane in _VIEW_BY_TAB.items()}
 
@@ -563,6 +567,7 @@ class SamuraiApp(
                 Tab(self.translator.t("tabs.chat"), id="tab-chat"),
                 Tab(self.translator.t("tabs.ops"), id="tab-ops"),
                 Tab(self.translator.t("tabs.bounty"), id="tab-bounty"),
+                Tab(self.translator.t("tabs.hunt"), id="tab-hunt"),
                 id="view-tabs",
                 active="",
             )
@@ -575,6 +580,7 @@ class SamuraiApp(
                 yield SelectableRichLog(id="journal", markup=False, wrap=True, auto_scroll=True)
                 yield SelectableRichLog(id="view-ops", markup=False, wrap=True)
                 yield SelectableRichLog(id="view-bounty", markup=False, wrap=True)
+                yield SelectableRichLog(id="view-hunt", markup=False, wrap=True)
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
         with Horizontal(id="ops-strip"):
@@ -626,6 +632,9 @@ class SamuraiApp(
         if not self._chat_history:
             self._restore_chat()
         self._refresh_chrome()
+        # the search counters move slowly; a three-minute beat is plenty and
+        # costs one render of a hidden pane at most
+        self.set_interval(HUNT_REFRESH_SECONDS, self.refresh_hunt)
         self.query_one("#command-input", Input).focus()
         self._maybe_prompt_trust()
 
@@ -634,6 +643,7 @@ class SamuraiApp(
         for tab_id, key in (
             ("tab-ops", "tabs.ops"),
             ("tab-bounty", "tabs.bounty"),
+            ("tab-hunt", "tabs.hunt"),
         ):
             tab = tabs.query_one(f"#{tab_id}", Tab)
             tab.label = self.translator.t(key)
@@ -884,6 +894,8 @@ class SamuraiApp(
             return self._ops_lines()
         if pane == "view-bounty":
             return self._bounty_lines()
+        if pane == "view-hunt":
+            return self._hunt_lines()
         return []
 
     _TASK_COLORS = {
@@ -2658,10 +2670,19 @@ class SamuraiApp(
         bar.append(" | /help")
         self.query_one("#status-bar", Static).update(bar)
         self._refresh_ops_strip()
+        self._refresh_hunt_tab()
         switcher = self.query_one("#views", ContentSwitcher)
         current = str(switcher.current or "journal")
         if current != "journal":
             self._render_view(current)
+
+    def _refresh_hunt_tab(self) -> None:
+        """The progress tab only exists when the plan has searches to report."""
+        tab = self.query_one("#tab-hunt", Tab)
+        relevant = bool(tally(self._hunt_tasks())) if self.operation else False
+        tab.display = relevant
+        if not relevant and self.query_one("#views", ContentSwitcher).current == "view-hunt":
+            self._switch_view("journal")
 
     def _refresh_goal_strip(self, item: Static) -> None:
         goal = self._current_goal()
