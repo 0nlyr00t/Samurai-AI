@@ -58,3 +58,12 @@ def test_the_attach_key_in_the_readme_is_the_one_the_tui_binds() -> None:
     assert bound["open_task_board"] == "ctrl+t"
     for name in ("README.md", "README.en.md", "md/capabilities.md"):
         assert "Ctrl-D" in (ROOT / name).read_text(encoding="utf-8")
+
+
+def test_the_licence_is_declared_and_present() -> None:
+    licence = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert "Apache License" in licence and "Version 2.0" in licence
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'license = "Apache-2.0"' in pyproject
+    for name in ("README.md", "README.en.md"):
+        assert "LICENSE" in (ROOT / name).read_text(encoding="utf-8")
