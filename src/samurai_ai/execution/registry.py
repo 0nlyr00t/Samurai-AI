@@ -17,8 +17,10 @@ from samurai_ai.config import sandbox_allowlist_path, vault_key_path
 from samurai_ai.domain.execution import (
     NetworkAccess,
     ToolDefinition,
+    ToolExecutionError,
     ToolKind,
     ToolNotFoundError,
+    ToolScopeError,
     ToolValidationError,
 )
 from samurai_ai.domain.kernel import RiskClass
@@ -366,11 +368,17 @@ class ShellExecTool:
 
 
 class HttpFetchTool:
+    #: the tool can be pushed behind a relay prefix when the host has no route
+    relay_supported = True
+
     def __init__(
         self,
         broker_factory: Callable[[ScopeContract], HttpEgressBroker] = HttpEgressBroker,
+        manager: ProcessManager | None = None,
     ) -> None:
         self._broker_factory = broker_factory
+        self._manager = manager or ProcessManager(allowed_executables=frozenset({"bash"}))
+        self.relay = ""
         self._definition = ToolDefinition(
             id="http.fetch",
             version=1,
@@ -398,6 +406,8 @@ class HttpFetchTool:
         return self._definition
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        if self.relay:
+            return self._invoke_relayed(params, scope)
         broker = self._broker_factory(scope)
         response = broker.fetch(
             str(params["url"]),
@@ -413,6 +423,31 @@ class HttpFetchTool:
         return ToolOutput(
             stdout=response.body.decode("utf-8", errors="replace"),
             stderr=stderr,
+            exit_code=0,
+        )
+
+
+    def _invoke_relayed(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        """The host cannot connect: let curl do it on the far side of the relay."""
+        from samurai_ai.execution.relay import relayed_fetch
+
+        url = str(params["url"])
+        decision = scope.evaluate(url)
+        if not decision.allowed:
+            raise ToolScopeError(f"{url} is out of scope: {decision.detail}")
+        response = relayed_fetch(
+            self.relay,
+            url,
+            method=str(params.get("method", "GET")),
+            timeout=float(self._definition.timeout_seconds),
+            max_bytes=self._definition.output_limit_bytes,
+            manager=self._manager,
+        )
+        if response.status == 0:
+            raise ToolExecutionError(f"relayed fetch of {url} returned no status line")
+        return ToolOutput(
+            stdout=response.body.decode("utf-8", errors="replace"),
+            stderr=f"HTTP {response.status} {url} (relayed)",
             exit_code=0,
         )
 

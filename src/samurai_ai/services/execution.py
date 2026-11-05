@@ -229,6 +229,8 @@ class ToolExecutionService:
         """Point a sandbox adapter at the operation's relay, or back at docker."""
         from samurai_ai.execution.relay import RelaySandboxRunner, build_runner
 
+        if getattr(adapter, "relay_supported", False):
+            adapter.relay = operation.relay.strip()
         if not hasattr(adapter, "_runner"):
             return
         relay = operation.relay.strip()

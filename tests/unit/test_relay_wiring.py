@@ -86,3 +86,16 @@ def test_the_executor_prompt_announces_the_relay() -> None:
 
     stand.operations = Ops("")  # type: ignore[assignment]
     assert stand._relay_notice("op_1") == ""  # type: ignore[attr-defined]
+
+
+def test_an_http_fetch_takes_the_relay_prefix() -> None:
+    """http.fetch is the tool the agent reaches for first: it must relay too."""
+    from samurai_ai.execution.registry import HttpFetchTool
+
+    tool = HttpFetchTool()
+    assert tool.relay_supported is True
+    operation = type("Op", (), {"relay": "prlctl exec '{uuid}'"})()
+    from samurai_ai.services.execution import ToolExecutionService
+
+    ToolExecutionService._apply_relay(None, operation, tool)  # type: ignore[arg-type]
+    assert tool.relay == "prlctl exec '{uuid}'"
