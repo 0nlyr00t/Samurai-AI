@@ -56,6 +56,11 @@ def register_kernel_commands(
     task_start.add_argument("operation_id")
     task_start.add_argument("task_id")
     task_complete = task_commands.add_parser("complete", help="Complete an in-progress task")
+    task_complete.add_argument(
+        "--force",
+        action="store_true",
+        help="close even when the task produced no evidence",
+    )
     task_complete.add_argument("operation_id")
     task_complete.add_argument("task_id")
 
@@ -181,10 +186,12 @@ def handle_kernel_command(
     if args.command == "plan":
         return _handle_plan(args, kernel)
     if args.command == "task":
-        plan = (
-            kernel.start_task(args.operation_id, _resolve_task(kernel, args))
-            if args.task_command == "start"
-            else kernel.complete_task(args.operation_id, _resolve_task(kernel, args))
+        if args.task_command == "start":
+            started = kernel.start_task(args.operation_id, _resolve_task(kernel, args))
+            _emit(started, args.json_output)
+            return 0
+        plan = kernel.complete_task(
+            args.operation_id, _resolve_task(kernel, args), force=args.force
         )
         _emit(plan, args.json_output)
         return 0

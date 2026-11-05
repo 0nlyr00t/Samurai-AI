@@ -47,7 +47,12 @@ def test_tasks_resolve_by_title(tmp_path: Path, capsys) -> None:
     capsys.readouterr()
     assert main(["--db", database, "task", "start", operation_id, "scan"]) == 0
     assert "in-progress" in capsys.readouterr().out
-    assert main(["--db", database, "task", "complete", operation_id, "SCAN PORTS"]) == 0
+    # no artifact yet: the evidence gate refuses, --force closes anyway
+    assert main(["--db", database, "task", "complete", operation_id, "SCAN PORTS"]) == 2
+    assert "no evidence" in capsys.readouterr().err
+    assert (
+        main(["--db", database, "task", "complete", operation_id, "SCAN PORTS", "--force"]) == 0
+    )
     try:
         main(["--db", database, "task", "start", operation_id, "zzz"])
     except ValueError as exc:

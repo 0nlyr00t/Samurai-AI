@@ -86,3 +86,18 @@ def test_reset_clears_window_and_reports() -> None:
 @pytest.mark.parametrize("command", ["nmap -sV 10.0.0.1", "curl -sS https://x/api"])
 def test_direction_is_stable(command: str) -> None:
     assert direction(command) == direction(command)
+
+
+def test_a_relay_wrapper_is_seen_through() -> None:
+    """The prlctl uuid is the same for every call, the command behind it is not."""
+    vm = "{1381d6d4-31a6-4aee-ab87-4193b12e98ae}"
+    assert direction(f"prlctl exec '{vm}' /bin/curl -sS http://10.0.0.1/login") == (
+        "curl http://10.0.0.1/login"
+    )
+
+
+def test_two_endpoints_on_one_host_are_two_places() -> None:
+    vm = "{1381d6d4-31a6-4aee-ab87-4193b12e98ae}"
+    first = direction(f"prlctl exec '{vm}' /bin/curl http://10.0.0.1/login")
+    second = direction(f"prlctl exec '{vm}' /bin/curl http://10.0.0.1/checkout")
+    assert first != second

@@ -143,7 +143,14 @@ def make_operation(service: OperationService, required: tuple[str, ...] = ()) ->
     return service_id
 
 
-def make_plan(kernel: KernelService, operation_id: str, required: tuple[str, ...] = ()) -> None:
+def make_plan(
+    kernel: KernelService,
+    operation_id: str,
+    required: tuple[str, ...] = (),
+    *,
+    evidence: bool = True,
+) -> None:
+    """A ready task. `evidence` pre-seeds an artifact the completion gate wants."""
     kernel.create_plan(
         operation_id,
         "Agent plan",
@@ -158,6 +165,8 @@ def make_plan(kernel: KernelService, operation_id: str, required: tuple[str, ...
         [StageGate(id="probe-done", name="Probe complete")],
     )
     kernel.start_task(operation_id, "probe")
+    if evidence:
+        kernel.register_artifact(operation_id, ArtifactKind.NOTE, "seed", task_id="probe")
 
 
 def test_full_orchestrated_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -423,6 +432,7 @@ def make_plan_for_second_task(kernel: KernelService, operation_id: str) -> None:
         ),
     )
     kernel.start_task(operation_id, "probe2")
+    kernel.register_artifact(operation_id, ArtifactKind.NOTE, "seed", task_id="probe2")
 
 
 def test_consecutive_rejects_fail_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -727,6 +737,7 @@ def test_active_genes_reach_the_executor_prompt(
 
     operation_id = make_operation(service)
     make_plan(kernel, operation_id)
+    kernel.register_artifact(operation_id, ArtifactKind.NOTE, "probe", task_id="probe")
     fake.queue(
         '{"steps": ["probe"]}',
         '{"commands": [{"type": "complete_task"}]}',

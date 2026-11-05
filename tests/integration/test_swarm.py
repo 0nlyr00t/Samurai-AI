@@ -217,7 +217,7 @@ def test_ready_tasks_selection(
     assert [task.id for task in swarms.ready_tasks(operation_id)] == ["recon", "testing"]
     kernel.start_task(operation_id, "recon")
     assert [task.id for task in swarms.ready_tasks(operation_id)] == ["testing"]
-    kernel.complete_task(operation_id, "recon")
+    kernel.complete_task(operation_id, "recon", force=True)
     assert [task.id for task in swarms.ready_tasks(operation_id)] == ["testing"]
 
 
@@ -340,8 +340,8 @@ def test_plan_conflict_retry_allows_parallel_completion(
     errors: list[Exception] = []
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
-            pool.submit(kernel.complete_task, operation.id, "recon"),
-            pool.submit(kernel.complete_task, operation.id, "testing"),
+            pool.submit(kernel.complete_task, operation.id, "recon", force=True),
+            pool.submit(kernel.complete_task, operation.id, "testing", force=True),
         ]
         for future in futures:
             try:
