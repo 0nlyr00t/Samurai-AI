@@ -897,6 +897,8 @@ def _make_services(
         registry=default_registry(mcp.resolver()),
         vault=vault,
         traffic=traffic_service,
+        permission_rules=settings.permission_rules,
+        permission_mode=lambda: settings.get_value("tui.permission_mode"),
     )
     memory_service = CampaignMemoryService(MemoryRepository(database), vault)
     skill_service = SkillService(
