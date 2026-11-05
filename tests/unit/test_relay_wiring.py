@@ -82,7 +82,7 @@ def test_the_executor_prompt_announces_the_relay() -> None:
     notice = stand._relay_notice("op_1")  # type: ignore[attr-defined]
     assert "already go through it" in notice
     assert "NO route to the target" in notice
-    assert "never 127.0.0.1" in notice
+    assert "127.0.0.1 under a relay is the VM itself" in notice
 
     stand.operations = Ops("")  # type: ignore[assignment]
     assert stand._relay_notice("op_1") == ""  # type: ignore[attr-defined]
