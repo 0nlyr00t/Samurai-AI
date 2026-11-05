@@ -5018,9 +5018,10 @@ def _chat_ready_stack(tmp_path: Path, provider: object):
 
 async def _wait_busy(app, pilot) -> None:  # type: ignore[no-untyped-def]
     """Let the turn actually start; a press before that only arms the exit."""
-    for _ in range(60):
+    for _ in range(300):  # a loaded CI box can take a while to schedule it
         if app._chat_busy:
             return
+        await asyncio.sleep(0.02)
         await pilot.pause()
     raise AssertionError("the turn never started")
 
