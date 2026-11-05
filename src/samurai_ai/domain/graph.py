@@ -43,8 +43,12 @@ class GraphLimitError(GraphError):
     pass
 
 
-class GraphNotFoundError(LookupError):
-    pass
+class GraphNotFoundError(GraphError, LookupError):
+    """An id that no longer exists: a graph error, and a lookup miss too.
+
+    Both bases matter: every caller guards the graph with `except GraphError`,
+    and a stale id handed back by a model used to slip past those guards.
+    """
 
 
 class GraphConflictError(GraphError):

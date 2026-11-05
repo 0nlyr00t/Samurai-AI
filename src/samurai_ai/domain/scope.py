@@ -153,6 +153,29 @@ class ScopeContract(BaseModel):
             detail="target does not match any inclusion rule",
         )
 
+    def covers(self, raw_target: str) -> bool:
+        """Does the contract already authorize this target without changing scope?
+
+        `evaluate` answers "may I touch it", but adding a rule asks the narrower
+        question "was it already reachable": only a genuine widening deserves a
+        confirmation prompt, and repeating a rule deserves none.
+        """
+        candidate_text = raw_target.strip()
+        if self.hosts.get(candidate_text) is not None:
+            return True
+        try:
+            candidate = _parse_rule(candidate_text)
+        except ScopeValidationError:
+            return False
+        for raw_rule in self.includes:
+            try:
+                rule = _parse_rule(raw_rule)
+            except ScopeValidationError:
+                continue
+            if _rule_covers(rule, candidate):
+                return True
+        return False
+
     def evaluate_network(self, raw_network: str) -> ScopeDecision:
         """Judge a whole network argument: it must fit inside the authorized scope.
 
@@ -247,6 +270,36 @@ def _with_loopback_alias(target: _Target) -> _Target:
             address=_address_of(alias),
         )
     return target
+
+
+def _rule_covers(rule: _Rule, candidate: _Rule) -> bool:
+    """Is `candidate` a subset of the authorization `rule` already grants?"""
+    if rule.text == candidate.text:
+        return True
+    if rule.kind is _RuleKind.NETWORK:
+        if candidate.kind is _RuleKind.IP and candidate.address is not None:
+            return candidate.address in rule.network  # type: ignore[operator]
+        if candidate.kind is _RuleKind.NETWORK and candidate.network is not None:
+            return candidate.network.subnet_of(rule.network)  # type: ignore[arg-type]
+        return False
+    if rule.kind is _RuleKind.IP and candidate.kind is _RuleKind.NETWORK:
+        # `1.2.3.4` and `1.2.3.4/32` name the same thing; a wider network is news
+        return (
+            candidate.network is not None
+            and candidate.network.prefixlen == candidate.network.max_prefixlen
+            and candidate.network.network_address == rule.address
+        )
+    if rule.kind in {_RuleKind.DOMAIN, _RuleKind.WILDCARD}:
+        if candidate.kind not in {_RuleKind.DOMAIN, _RuleKind.WILDCARD}:
+            return False
+        if rule.host is None or candidate.host is None:
+            return False
+        # a domain rule reaches everything below it, an IP or URL rule does not
+        under = candidate.host.endswith("." + rule.host)
+        if rule.kind is _RuleKind.DOMAIN:
+            return under
+        return under or rule.host == candidate.host
+    return False
 
 
 def _normalize_rules(values: tuple[str, ...]) -> tuple[str, ...]:

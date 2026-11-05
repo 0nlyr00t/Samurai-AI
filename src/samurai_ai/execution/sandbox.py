@@ -31,6 +31,7 @@ from samurai_ai.execution.egress import (
     DEFAULT_ALLOWED_PORTS,
     EgressProxy,
     generate_proxy_token,
+    scope_ports,
 )
 from samurai_ai.execution.process import ProcessManager, ProcessResult
 
@@ -508,7 +509,10 @@ class DockerSandboxRunner:
             ]
         elif mode in ("none", "host"):
             argv += ["--network", mode]
-        # "direct": bridge networking as-is, no proxy of ours in the path.
+        elif mode == "direct":
+            # direct keeps bridge networking as-is and no proxy of ours in the
+            # path, but a host-loopback target still has to be nameable
+            argv += ["--add-host", "host.docker.internal:host-gateway"]
         for name, value in (env or {}).items():
             argv += ["--env", f"{name}={value}"]
         for name in (secret_env or {}):
@@ -703,7 +707,7 @@ class DockerSandboxRunner:
             proxy = EgressProxy(
                 scope,
                 token,
-                allowed_ports=self.egress_allowed_ports,
+                allowed_ports=self.egress_allowed_ports | scope_ports(scope),
                 extra_hosts=frozenset(profile.egress_hosts),
             )
             _, proxy_port = await proxy.start()

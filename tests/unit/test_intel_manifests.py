@@ -25,7 +25,7 @@ def test_the_generated_files_match_their_sources() -> None:
     """Regenerating must be a no-op, or the reviewed driver is not what runs."""
     before = {name: (TOOLS / f"{name}.json").read_text(encoding="utf-8") for name in NAMES}
     subprocess.run(
-        [sys.executable, str(ROOT / "ops" / "build_intel_manifests.py")],
+        [sys.executable, str(ROOT / "ops" / "build_inline_manifests.py")],
         cwd=ROOT, check=True, capture_output=True,
     )
     for name in NAMES:
@@ -60,6 +60,36 @@ def test_the_driver_travels_in_argv_and_braces_survive(name: str) -> None:
     # f-string braces inside the script stay put, placeholders around it resolve
     assert "{" in script
     assert argv[-2:] == ["host", "10.0.0.5"]
+
+
+def test_loot_is_url_shaped_and_needs_no_key() -> None:
+    parsed = manifest("loot.scan")
+    assert parsed.env_names == () and parsed.egress_hosts == ()
+    assert parsed.proxy_via_env and parsed.network == "scoped"
+    assert parsed.targets is not None and parsed.targets.kind == "url-host"
+    assert set(parsed.params) == {"url"}
+
+
+def test_loot_recognises_the_shapes_it_claims() -> None:
+    """The patterns are the product here: a miss is a silent empty answer."""
+    import importlib.util
+
+    path = ROOT / "assets" / "loot" / "loot_driver.py"
+    spec = importlib.util.spec_from_file_location("loot_driver", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    hits = module.scan(
+        "Authorization: Basic YWRtaW46czNjcjN0\n"
+        "dsn=postgres://app:hunter2@db:5432/x\n"
+        "api_key=s3cr3t-value\n"
+        "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghij\n"
+        "AKIAIOSFODNN7EXAMPLE\n"
+        "-----BEGIN RSA PRIVATE KEY-----"
+    )
+    labels = {hit.split("\t")[0] for hit in hits}
+    assert labels == {"basic", "url-cred", "pair", "jwt", "aws-key", "private-key"}
+    assert "admin:s3cr3t" in " ".join(hits)
 
 
 def test_a_driver_without_a_key_says_so(tmp_path: Path) -> None:
