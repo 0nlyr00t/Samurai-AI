@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/uninstall.
 
 **План и одобрения.** Задачи с зависимостями, стадии и гейты, артефакты-требования, риски R0–R4. Исполнение выше R0 ждёт одобрения оператора; режимы `ask`, `yolo`, `never` и поаргументные правила `allow|ask|deny` держат политику вне модели.
 
-**Инструменты.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, удалённое администрирование (ssh, SMB, RDP-проба, ADB), виртуалки и диски, сборка и запуск эксплойтов. Новый инструмент описывается JSON-манифестом; пакеты инструментов, профилей и плейбуков ставятся плагинами с sha256 на каждый файл.
+**Инструменты.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, `intel.shodan`, `intel.censys`, удалённое администрирование (ssh, SMB, RDP-проба, ADB), виртуалки и диски, сборка и запуск эксплойтов. Новый инструмент описывается JSON-манифестом; пакеты инструментов, профилей и плейбуков ставятся плагинами с sha256 на каждый файл.
 
 **Песочница.** Docker-профили с закреплённым digest, `--cap-drop ALL`, read-only корень, лимиты CPU, памяти и PID, scoped egress-прокси с DNS pinning и аудитом соединений. Белт разложен по радиусу поражения: админский образ без компилятора, exploit-образ без чужих ключей.
 

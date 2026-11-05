@@ -48,7 +48,7 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 
 **Plan and approvals.** Tasks with dependencies, stages and gates, required artifacts, risks R0–R4. Execution above R0 waits for the operator; `ask`, `yolo`, `never` modes and per-argument `allow|ask|deny` rules keep policy outside the model.
 
-**Tools.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, remote administration (ssh, SMB, an RDP probe, ADB), VMs and disks, exploit building and running. A new tool is a JSON manifest; packages of tools, profiles and playbooks install as plugins with a sha256 per file.
+**Tools.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, `intel.shodan`, `intel.censys`, remote administration (ssh, SMB, an RDP probe, ADB), VMs and disks, exploit building and running. A new tool is a JSON manifest; packages of tools, profiles and playbooks install as plugins with a sha256 per file.
 
 **Sandbox.** Docker profiles pinned by digest, `--cap-drop ALL`, read-only root, CPU/memory/PID limits, a scoped egress proxy with DNS pinning and connection audit. The belt is split by blast radius: the admin image carries no compiler, the exploit image carries no foreign credentials.
 
