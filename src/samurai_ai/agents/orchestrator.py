@@ -190,10 +190,15 @@ def _repeat_block(notes: list[str]) -> str:
     return f"[repeats] same call again: {listed}\n"
 
 
-def _rejection_block(reasons: list[str]) -> str:
+def _rejection_block(reasons: list[str], allowed: str = "") -> str:
     """What the model must read before trying again, in its own prompt."""
     listed = "\n".join(f"- {reason}" for reason in dict.fromkeys(reasons))
-    return f"[rejected] Your previous commands were refused:\n{listed}\nFix them.\n"
+    hint = ""
+    if allowed and any("scope" in reason for reason in reasons):
+        hint = f"Only these targets are allowed: {allowed}.\n"
+    return (
+        f"[rejected] Your previous commands were refused:\n{listed}\n{hint}Fix them.\n"
+    )
 
 
 def _parameter_hint(parameters: dict[str, Any]) -> str:
@@ -566,7 +571,10 @@ class AgentOrchestrator:
                     approval_resolver=approval_resolver,
                     model_approvals=model_approvals,
                     stop_event=stop_event,
-                    rejection_notes=_rejection_block(rejects),
+                    rejection_notes=_rejection_block(
+                        rejects,
+                        ", ".join(self.operations.get(operation_id).scope.includes),
+                    ),
                 )
                 _rejects, consecutive_rejects = self._run_commands(
                     operation_id,
@@ -797,10 +805,12 @@ class AgentOrchestrator:
             genes = self._genes_excerpt() if level < 1 else ""
             tools = self._tools_excerpt() if level < 2 else ""
             relay = self._relay_notice(operation_id)
+            scope_line = self._scope_notice(operation_id)
             prompt = (
                 f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
                 f"{genes}"
                 f"{tools}\n"
+                f"{scope_line}"
                 f"{relay}"
                 f"{rejection_notes}"
                 f"Current step: {step}\n"
@@ -1147,6 +1157,20 @@ class AgentOrchestrator:
             "agent.run.finish",
             {"run_id": run.id, "status": status.value, "reason": reason},
         )
+
+    def _scope_notice(self, operation_id: str) -> str:
+        """Spell out the allowed targets: guessing hosts costs a whole round.
+
+        A refused literal is the single cheapest way to burn a step — the model
+        reaches for 127.0.0.1, a container name or the jump host, and every miss
+        is a rejection.
+        """
+        scope = self.operations.get(operation_id).scope
+        allowed = ", ".join(scope.includes) or "(none)"
+        line = f"[in-scope targets: {allowed} — every host literal must be one of these.\n"
+        if scope.excludes:
+            line += f"excluded: {', '.join(scope.excludes)}.\n"
+        return line + "]\n"
 
     def _relay_notice(self, operation_id: str) -> str:
         """Tell the agent its sandbox tools already travel through the relay.
