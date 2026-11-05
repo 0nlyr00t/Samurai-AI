@@ -39,6 +39,27 @@ from samurai_ai.domain.scope import ScopeContract, ScopeDecisionReason
 from samurai_ai.execution.http import Resolver, default_resolver
 
 DEFAULT_ALLOWED_PORTS = frozenset({80, 443})
+
+
+def scope_ports(scope: ScopeContract) -> frozenset[int]:
+    """Web ports plus every port an operator named in a URL scope rule.
+
+    A rule keeps the proxy honest: otherwise `include http://box:3000` would
+    authorize an origin the proxy then refuses for its port alone.
+    """
+    from urllib.parse import urlsplit
+
+    ports = set(DEFAULT_ALLOWED_PORTS)
+    for rule in (*scope.includes, *scope.excludes):
+        if "://" not in rule:
+            continue
+        try:
+            port = urlsplit(rule).port
+        except ValueError:
+            continue
+        if port is not None:
+            ports.add(port)
+    return frozenset(ports)
 _MAX_HEADER_BYTES = 65536
 _DEFAULT_MAX_RESPONSE_BYTES = 1 << 20
 _DEFAULT_TIMEOUT = 30.0
@@ -214,7 +235,7 @@ class EgressProxy:
                 return VERDICT_DENIED_SCOPE
             return VERDICT_ALLOWED
         target = self.scope.resolve_host(host)
-        decision = self.scope.evaluate(_scope_url(target, scheme))
+        decision = self.scope.evaluate(_scope_url(target, scheme, port))
         if not decision.allowed:
             return VERDICT_DENIED_SCOPE
         try:
@@ -553,10 +574,16 @@ async def _socks5_reply(writer: asyncio.StreamWriter, code: int) -> None:
     await writer.drain()
 
 
-def _scope_url(host: str, scheme: str) -> str:
-    """Scope targets need an IPv6 literal in brackets."""
+def _scope_url(host: str, scheme: str, port: int | None = None) -> str:
+    """Scope targets need an IPv6 literal in brackets.
+
+    The port rides along when the default one does not apply: a URL scope rule
+    authorizes one origin, and origin means host *and* port.
+    """
     literal = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    return f"{scheme}://{literal}/"
+    default = 443 if scheme == "https" else 80
+    suffix = f":{port}" if port is not None and port != default else ""
+    return f"{scheme}://{literal}{suffix}/"
 
 
 def _safe_port(raw: str) -> int:
