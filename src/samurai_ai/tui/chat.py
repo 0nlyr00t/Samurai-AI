@@ -11,6 +11,7 @@ import base64
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
@@ -125,10 +126,14 @@ class ChatController:
         _graph_used: bool
         _steer_queue: list[str]
         _chat_busy: bool
+        _stop_requested: bool
+        _stop_note_sent: bool
+        screen: Any
         _shell_running: str
         _shell_background: bool
         _ctx_tokens: int
-        _expandable: list[tuple[str, int | None, str, str]]
+        _process_block: list[str]
+        _collapsed: list[tuple[str, list[str]]]
         _last_ai_text: str | None
         _last_ai_code: str | None
         _thinking_timer: Any
@@ -142,7 +147,8 @@ class ChatController:
 
         def _write_line(self, text: str) -> None: ...
         def _actor(self) -> str: ...
-        def _write_dim(self, text: str) -> None: ...
+        def _write_dim(self, text: str, *, process: bool = True) -> None: ...
+        def _close_process_block(self) -> None: ...
         def _write_user_message(self, text: str) -> None: ...
         def _write_ai_message(self, response: Any) -> None: ...
         def _write_welcome(self) -> None: ...
@@ -536,7 +542,7 @@ class ChatController:
             return
         removed = self.chat_history.clear(self.operation.id)
         self._chat_history.clear()
-        self._expandable.clear()
+        self._collapsed.clear()
         self.query_one("#journal", RichLog).clear()
         self._write_welcome()
         self._write_dim(self.translator.t("chat.cleared", count=removed))
@@ -595,7 +601,7 @@ class ChatController:
         if self._auto_title is None:
             # The tab names itself from the task at hand
             self._auto_title = title
-        self._expandable.clear()
+        self._collapsed.clear()
         self._write_user_message(text)
         self._thinking_start()
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
@@ -645,7 +651,9 @@ class ChatController:
             reusable=self._reusable_approval("shell.exec"),
         )
         if decision.is_denied:
-            self._write_dim(self.translator.t("chat.tool-denied", command=command))
+            self._write_dim(
+                self.translator.t("chat.tool-denied", command=command), process=False
+            )
             self._remember(
                 Message(role="user", content=f"[shell !{command}] denied by rule")
             )
@@ -661,7 +669,9 @@ class ChatController:
                 )
             )
             if not allowed:
-                self._write_dim(self.translator.t("chat.tool-denied", command=command))
+                self._write_dim(
+                self.translator.t("chat.tool-denied", command=command), process=False
+            )
                 self._remember(
                     Message(role="user", content=f"[shell !{command}] denied by the operator")
                 )
@@ -696,7 +706,7 @@ class ChatController:
         prefix = "[bg] " if self._shell_background else ""
         if not self._graph_used:
             self._progress.last_stuck = self._progress.record(command)
-        self._expandable.append((f"!{command}", result.run.exit_code, result.stdout, result.stderr))
+        self._fold(f"!{command}", result.run.exit_code, result.stdout, result.stderr)
         self._write_dim(
             prefix
             + self.translator.t(
@@ -704,7 +714,8 @@ class ChatController:
                 command=f"!{command}",
                 code=result.run.exit_code,
                 lines=len(result.stdout.strip().splitlines()),
-            )
+            ),
+            process=False,
         )
         body = (result.stdout if result.stdout.strip() else result.stderr).rstrip()
         self._remember(
@@ -721,17 +732,38 @@ class ChatController:
 
     async def _chat(self, text: str, model_id: str, approval_id: str | None) -> None:
         self._chat_busy = True
+        self._stop_requested = False
+        self._stop_note_sent = False
         reason = TerminalReason.CANCELLED
         try:
             reason = await self._chat_loop(text, model_id, approval_id)
         finally:
+            if self._stop_requested:
+                # the window for the quit press counts from the stop, not from
+                # the moment the operator asked for it
+                self._last_quit_request = time.monotonic()
+                self._write_dim(self.translator.t("app.stop-done"))
+            self._stop_requested = False
             self._end_turn(reason)
             self._chat_busy = False
+            self._close_process_block()
+            if reason is not TerminalReason.COMPLETED and self._collapsed:
+                # a failure or a stop is exactly when the detail is wanted
+                self._reveal_block(self._collapsed.pop())
             self._shell_running = ""
             self._shell_background = False
             self._thinking_stop()
             self._refresh_chrome()
             self.query_one("#command-input", Input).focus()
+
+    def request_stop(self) -> None:
+        """Stop once the results are in and the hypotheses have been checked.
+
+        Cutting at the next call boundary would leave tool results unread; the
+        flag instead makes the loop finish the round, tell the model to conclude
+        and end the turn at its conclusion.
+        """
+        self._stop_requested = True
 
     async def _request_chat_completion(
         self,
@@ -766,18 +798,27 @@ class ChatController:
                     self.kernel.approve(exc.approval_id, decided_by=decided_by)
                     approval_id = exc.approval_id
                     continue
+                if self._stop_requested:
+                    # the prompt is the step: stopping skips it rather than
+                    # leaving the turn parked behind it
+                    self.kernel.reject(exc.approval_id, decided_by=self._actor())
+                    return None
                 allowed = await self.push_screen_wait(
                     AccessPromptScreen(self.translator, action, risk)
                 )
                 if allowed:
                     self.kernel.approve(exc.approval_id, decided_by=self._actor())
-                    self._write_line(
-                        "[allow] " + self.translator.t("access.granted", action=action)
+                    self._write_dim(
+                        "[allow] " + self.translator.t("access.granted", action=action),
+                        process=False,
                     )
                     approval_id = exc.approval_id
                     continue
                 self.kernel.reject(exc.approval_id, decided_by=self._actor())
-                self._write_line("[deny] " + self.translator.t("access.denied", action=action))
+                self._write_dim(
+                    "[deny] " + self.translator.t("access.denied", action=action),
+                    process=False,
+                )
                 return None
 
     async def _chat_loop(
@@ -808,7 +849,7 @@ class ChatController:
                 self._write_line(f"[error] {exc}")
                 return TerminalReason.MODEL_ERROR
             if response is None:
-                return TerminalReason.DENIED
+                return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
             self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
             if not response.tool_calls:
                 self._remember(Message(role="assistant", content=response.text))
@@ -817,15 +858,25 @@ class ChatController:
                     self._write_ai_message(response)
                 else:
                     self._write_dim(self.translator.t("chat.empty-reply"))
+                if self._stop_requested:
+                    # an answer without tools is the conclusion the stop waited for
+                    return TerminalReason.CANCELLED
                 if self._steer_queue:
                     # the operator steered while this answer was in flight
                     continue
                 return TerminalReason.COMPLETED
             if response.text.strip():
                 self._remember(Message(role="assistant", content=response.text))
+            # every call of the round runs even when stopping: a stop is worth
+            # nothing until the results are in and checked
             for call in response.tool_calls:
                 self._remember(await self._run_chat_tool(call))
             self._trim_chat_history()
+            if self._stop_requested and not self._stop_note_sent:
+                self._stop_note_sent = True
+                self._remember(
+                    Message(role="user", content=self.translator.t("chat.stop-note"))
+                )
             self._note_stagnation()
             if self._finding_count() > findings_before:
                 findings_before = self._finding_count()
@@ -847,7 +898,7 @@ class ChatController:
         self._trim_chat_history()
         if final.text.strip():
             self._write_ai_message(final)
-        return TerminalReason.ROUNDS
+        return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.ROUNDS
 
     async def _settle(self, operation_id: str, model_id: str, reasoning: str | None) -> None:
         """One write-only round: persist what the turn found, without new exploration."""
@@ -887,12 +938,20 @@ class ChatController:
                 content=f"[tool error] unknown tool: {call.name!r}",
             )
         if not self._directory_trusted():
-            self._write_dim(self.translator.t("chat.tool-denied", command=call.name))
+            self._write_dim(
+                self.translator.t("chat.tool-denied", command=call.name), process=False
+            )
             return Message(
                 role="user",
                 content=f"[tool {call.name}] the operator has not trusted this directory",
             )
-        result: Message = await getattr(self, handler)(call)
+        try:
+            result: Message = await getattr(self, handler)(call)
+        except Exception as exc:  # noqa: BLE001 - one tool must not lose the turn
+            # the model gets the failure as a result and can correct itself; an
+            # escaping exception used to take the whole worker down instead
+            self._write_line(f"[error] {call.name}: {exc}")
+            return Message(role="user", content=f"[tool {call.name}] error: {exc}")
         return result
 
     async def _run_spawn_tool(self, call: ToolCall) -> Message:
@@ -978,7 +1037,7 @@ class ChatController:
         raw = call.arguments.get("artifact_ids") or []
         artifacts = tuple(str(item) for item in raw if str(item).strip())
         try:
-            intent = self.graph.get(intent_id)
+            intent = self._resolve_intent(intent_id)
             if intent.state is NodeState.OPEN:
                 intent = self.graph.start_intent(intent.id)
             fact = self.graph.record_fact(
@@ -999,6 +1058,35 @@ class ChatController:
         return Message(
             role="user", content=f"[tool record_fact] {fact.id} recorded for {intent.id}"
         )
+
+    def _graph_tasks(self) -> list[str]:
+        """Tasks of the current plan — the only place an intent can live."""
+        if self.operation is None:
+            return []
+        plan = self.kernel.get_current_plan(self.operation.id)
+        return [str(task.id) for task in plan.tasks] if plan is not None else []
+
+    def _resolve_intent(self, intent_id: str) -> GraphNode:
+        """The intent a model named, by id or by the title it typed instead.
+
+        Models hand back titles as often as ids. A miss on both is worth
+        creating: the direction was opened in the model's head either way.
+        """
+        try:
+            return self.graph.get(intent_id)
+        except GraphError:
+            pass
+        wanted = intent_id.strip().lower()
+        for task in self._graph_tasks():
+            for node in self.graph.for_task(task):
+                if node.kind is NodeKind.INTENT and node.text().strip().lower() == wanted:
+                    return node
+        assert self.operation is not None
+        task_id = self._graph_task(intent_id)
+        parent = self._graph_root(task_id, intent_id)
+        intent = self.graph.open_intent(self.operation.id, task_id, intent_id, parent.id)
+        self._write_dim(self.translator.t("graph.intent-opened", title=intent.text()))
+        return intent
 
     async def _run_close_intent_tool(self, call: ToolCall) -> Message:
         intent_id = str(call.arguments.get("intent", "") or "").strip()
@@ -1077,7 +1165,9 @@ class ChatController:
         if not raw:
             return Message(role="user", content="[tool error] read_image needs a path")
         if not self._directory_trusted():
-            self._write_dim(self.translator.t("chat.tool-denied", command="read_image"))
+            self._write_dim(
+                self.translator.t("chat.tool-denied", command="read_image"), process=False
+            )
             return Message(
                 role="user", content="[tool read_image] the operator has not trusted this directory"
             )
@@ -1280,7 +1370,9 @@ class ChatController:
             reusable=self._reusable_approval(tool_id),
         )
         if decision.is_denied:
-            self._write_dim(self.translator.t("chat.tool-denied", command=command))
+            self._write_dim(
+                self.translator.t("chat.tool-denied", command=command), process=False
+            )
             return Message(
                 role="user", content=f"[tool {call.name}] denied by rule"
             )
@@ -1294,7 +1386,9 @@ class ChatController:
                 )
             )
             if not allowed:
-                self._write_dim(self.translator.t("chat.tool-denied", command=command))
+                self._write_dim(
+                self.translator.t("chat.tool-denied", command=command), process=False
+            )
                 return Message(
                     role="user",
                     content=f"[tool {call.name}] denied by the operator",
@@ -1332,14 +1426,15 @@ class ChatController:
             None if self._graph_used else self._progress.record(command)
         )
         # Long tool output collapses under an arrow; /expand reveals it.
-        self._expandable.append((command, exit_code, result.stdout, result.stderr))
+        self._fold(command, exit_code, result.stdout, result.stderr)
         self._write_dim(
             self.translator.t(
                 "chat.tool-collapsed",
                 command=command,
                 code=exit_code,
                 lines=len(result.stdout.strip().splitlines()),
-            )
+            ),
+            process=False,
         )
         stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
         stderr = result.stderr[:1000]
@@ -1350,18 +1445,27 @@ class ChatController:
             ),
         )
 
+    def _fold(
+        self, command: str, exit_code: int | None, stdout: str, stderr: str
+    ) -> None:
+        """Keep a tool output behind its summary line until it is asked for."""
+        text = (stdout if stdout.strip() else stderr).rstrip()
+        title = f"{command} — " + self.translator.t("chat.tool-exit", code=exit_code)
+        self._collapsed.append((title, text.splitlines() if text else []))
+
     def _expand_outputs(self) -> None:
-        """Reveal the collapsed tool output of the current reply in full."""
-        if not self._expandable:
+        """Reveal the oldest folded block, so presses walk down the reply."""
+        if not self._collapsed:
             self._write_dim(self.translator.t("chat.expand-empty"))
             return
-        for command, exit_code, stdout, stderr in self._expandable:
-            self._write_dim(
-                f"▾ ⚙ {command} — " + self.translator.t("chat.tool-exit", code=exit_code)
-            )
-            text = stdout if stdout.strip() else stderr
-            for line in text.rstrip().splitlines():
-                self._write_dim(f"  {line}")
+        self._reveal_block(self._collapsed.pop(0))
+
+    def _reveal_block(self, block: tuple[str, list[str]]) -> None:
+        """Write a collapsed block out in full, under its own header."""
+        title, lines = block
+        self._write_dim(f"▾ ⚙ {title}", process=False)
+        for line in lines:
+            self._write_dim(f"  {line}")
 
     def _copy_last(self, what: str) -> None:
         text = self._last_ai_code if what == "code" else self._last_ai_text

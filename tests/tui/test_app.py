@@ -2278,7 +2278,7 @@ def test_ctrl_e_expands_collapsed_tool_output(tmp_path: Path) -> None:
                 await pilot.press("enter")
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                assert app._expandable, "shell run must leave a collapsed entry"
+                assert app._collapsed, "shell run must leave a folded entry"
                 assert not any(
                     "  expand-me" in _message_text(m) for m in messages
                 )
@@ -4953,5 +4953,309 @@ def test_the_rules_command_lists_and_edits(tmp_path: Path) -> None:
                 assert stack[2].permission_rules() == ()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+class _TwoToolRoundsProvider:
+    """Round 1: two shell calls. Round 2: the conclusion. Round 3: extra work."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.requests: list[object] = []
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+        self.calls += 1
+        self.requests.append(request)
+        usage = Usage(prompt_tokens=3, completion_tokens=2)
+        if self.calls == 1:
+            return ChatResponse(
+                text="проверяю обе гипотезы",
+                tool_calls=(
+                    ToolCall(
+                        id="c1", name="shell_exec", arguments={"command": "echo first-result"}
+                    ),
+                    ToolCall(
+                        id="c2", name="shell_exec", arguments={"command": "echo second-result"}
+                    ),
+                ),
+                usage=usage, model_id=request.model_id, provider_id="gpt", latency_ms=5,
+            )
+        if self.calls == 2:
+            return ChatResponse(
+                text="обе гипотезы проверены: вход есть, второй хуже",
+                usage=usage, model_id=request.model_id, provider_id="gpt", latency_ms=5,
+            )
+        return ChatResponse(
+            text="полез дальше",
+            usage=usage, model_id=request.model_id, provider_id="gpt", latency_ms=5,
+        )
+
+
+def _chat_ready_stack(tmp_path: Path, provider: object):
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/test-model")
+    stack[2].set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Stop lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    return stack, operation
+
+
+def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
+    """A stop finishes the round; an idle press only arms the exit."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app.query_one("#command-input", Input).value = "проверь вход"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert app._chat_busy
+                await pilot.press("ctrl+c")
+                await pilot.pause()
+                assert app._stop_requested
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "stopping after the current results are checked" in text
+                assert app.is_running
+                # the round's own calls still run: results must not be lost
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "first-result" in text and "second-result" in text
+                # and the model was told to conclude, which it did
+                assert "обе гипотезы проверены" in text
+                assert provider.calls == 2
+                assert not app._chat_busy
+                await pilot.press("ctrl+c")
+                await pilot.pause()
+                assert not app.is_running
+
+    asyncio.run(exercise())
+
+
+def test_the_stop_note_reaches_the_model_once(tmp_path: Path) -> None:
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "проверь вход"
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            second = provider.requests[1]
+            history = [getattr(m, "content", "") for m in getattr(second, "messages", [])]
+            notes = [entry for entry in history if "The operator stopped the run" in entry]
+            assert len(notes) == 1
+            assert not app._stop_requested
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_c_when_idle_only_arms_the_exit(tmp_path: Path) -> None:
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                await pilot.press("ctrl+c")
+                await pilot.pause()
+                assert app.is_running
+                assert "press Ctrl+C again to exit" in "\n".join(
+                    _message_text(m) for m in messages
+                )
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert not app.is_running
+
+    asyncio.run(exercise())
+
+
+def test_record_fact_on_an_unknown_intent_opens_it(tmp_path: Path) -> None:
+    """Models hand back titles as if they were ids; that must not lose the turn."""
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="record_fact",
+                    arguments={"intent": "check /api/v1", "summary": "12 endpoints"},
+                )
+            )
+            assert "recorded for" in message.content
+            assert any(
+                node.text() == "check /api/v1" for node in app.graph.for_operation(operation.id)
+            )
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_tool_handler_error_becomes_a_result_not_a_crash(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ), patch.object(app, "_run_close_intent_tool", side_effect=RuntimeError("boom")):
+                message = await app._run_chat_tool(
+                    ToolCall(id="1", name="close_intent", arguments={"intent": "x"})
+                )
+            assert "error: boom" in message.content
+            assert any("boom" in _message_text(m) for m in messages)
+
+    asyncio.run(exercise())
+
+
+def test_grey_process_lines_fold_into_one_line(tmp_path: Path) -> None:
+    """Progress chatter buries the answers; it belongs behind one arrow."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app.query_one("#command-input", Input).value = "проверь вход"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                text = "\n".join(_message_text(m) for m in messages)
+                # the grey lines of the turn are behind one collapsed entry
+                assert "folded" in text
+                assert app._collapsed, "the folded process log must stay openable"
+                # the tool summaries and the answer stay visible
+                assert "⚙ echo first-result" in text
+                assert "обе гипотезы проверены" in text
+
+    asyncio.run(exercise())
+
+
+def test_enter_on_an_empty_line_opens_the_folded_block(tmp_path: Path) -> None:
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app.query_one("#command-input", Input).value = "проверь вход"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                assert app._collapsed
+                await pilot.press("enter")
+                await pilot.pause()
+                text = "\n".join(_message_text(m) for m in messages)
+                assert "▾ ⚙" in text
+
+    asyncio.run(exercise())
+
+
+def test_a_click_on_the_journal_opens_the_folded_block(tmp_path: Path) -> None:
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "проверь вход"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            before = len(app._collapsed)
+            assert before
+            await pilot.click("#journal")
+            await pilot.pause()
+            # one click opens the oldest folded block, the rest stay folded
+            assert len(app._collapsed) == before - 1
+
+    asyncio.run(exercise())
+
+
+def test_a_failed_turn_shows_its_process_log_without_a_press(tmp_path: Path) -> None:
+    """On failure the folded detail is exactly what the operator needs."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            original = app._request_chat_completion
+            calls = {"n": 0}
+
+            async def failing(*call_args):  # type: ignore[no-untyped-def]
+                calls["n"] += 1
+                if calls["n"] > 1:
+                    raise RuntimeError("boom")
+                return await original(*call_args)
+
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ), patch.object(app, "_request_chat_completion", side_effect=failing):
+                app.query_one("#command-input", Input).value = "проверь вход"
+                await pilot.press("enter")
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+            text = "\n".join(_message_text(m) for m in messages)
+            assert "▾ ⚙" in text and "boom" in text
 
     asyncio.run(exercise())

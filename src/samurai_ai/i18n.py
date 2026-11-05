@@ -132,7 +132,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.bound": "{action} → {pressed}",
         "keys.unsaved": "binding applied but not saved ({error})",
         "keys.problem": "keys: {problem}",
-        "keys.action.quit": "quit",
+        "keys.action.quit": "stop the run / quit",
         "keys.action.journal": "toggle journal",
         "keys.action.palette": "command palette",
         "keys.action.help": "key reference",
@@ -150,7 +150,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.action.findings": "findings board",
         "keys.action.steer": "steer the running turn",
         "keys.action.shell": "background the shell job",
-        "keys.action.expand": "expand collapsed output",
+        "keys.action.expand": "open a folded block",
         "keys.action.plan": "plan mode",
         "help.keys": "/keys             Rebind the global keys",
         "theme.title": "Theme",
@@ -379,7 +379,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-collapsed": (
             "▸ ⚙ {command} — exit {code} · {lines} lines · /expand to show"
         ),
-        "chat.expand-empty": "nothing to expand yet — no tool output in this reply",
+        "chat.expand-empty": "nothing to expand yet — no folded process or output",
+        "chat.process-block": "{lines} step(s) folded — Ctrl+E, Enter or a click to open",
+        "chat.process-title": "process log",
         "chat.empty-reply": "(empty model reply)",
         "graph.plan-title": "chat exploration",
         "graph.no-operation": "no operation open — the graph needs one",
@@ -552,6 +554,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.custom-manual": "or type a model name and press Enter",
         "model.custom-invalid": "endpoint id and base URL are required",
         "model.custom-failed": "failed: {error}",
+        "app.stop-hint": "stopping after the current results are checked — Ctrl+C again to exit",
+        "chat.stop-note": "The operator stopped the run: check the results of every "
+        "open hypothesis, show what they mean and finish this answer without "
+        "opening new directions.",
+        "app.stop-done": "stopped",
         "app.quit-hint": "press Ctrl+C again to exit",
         "reconcile.report": (
             "actions-marked-unknown={actions} | tool-runs-marked-failed={runs} | "
@@ -684,7 +691,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.bound": "{action} → {pressed}",
         "keys.unsaved": "биндинг применён, но не сохранён ({error})",
         "keys.problem": "клавиши: {problem}",
-        "keys.action.quit": "выход",
+        "keys.action.quit": "остановить прогон / выход",
         "keys.action.journal": "показать журнал",
         "keys.action.palette": "палитра команд",
         "keys.action.help": "справка по клавишам",
@@ -702,7 +709,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.action.findings": "доска находок",
         "keys.action.steer": "steering текущего хода",
         "keys.action.shell": "фон для shell-задачи",
-        "keys.action.expand": "развернуть вывод",
+        "keys.action.expand": "раскрыть свёрнутый блок",
         "keys.action.plan": "режим плана",
         "help.keys": "/keys             Перебиндить глобальные клавиши",
         "theme.title": "Тема",
@@ -929,7 +936,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-collapsed": (
             "▸ ⚙ {command} — exit {code} · строк: {lines} · /expand покажет вывод"
         ),
-        "chat.expand-empty": "пока нечего раскрывать — в этом ответе нет вывода команд",
+        "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",
+        "chat.process-block": "{lines} шаг(ов) свёрнуто — Ctrl+E, Enter или клик, чтобы открыть",
+        "chat.process-title": "журнал процесса",
         "chat.empty-reply": "(пустой ответ модели)",
         "graph.plan-title": "исследование из чата",
         "graph.no-operation": "операция не открыта — графу она нужна",
@@ -1099,6 +1108,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.custom-manual": "или введите имя модели и нажмите Enter",
         "model.custom-invalid": "нужны endpoint id и base URL",
         "model.custom-failed": "ошибка: {error}",
+        "app.stop-hint": (
+            "останавливаю после проверки текущих результатов — Ctrl+C ещё раз для выхода"
+        ),
+        "chat.stop-note": "Оператор остановил прогон: проверь результаты по всем открытым "
+        "гипотезам, покажи, что из них следует, и закончи ответ, не открывая новых "
+        "направлений.",
+        "app.stop-done": "остановлено",
         "app.quit-hint": "нажмите Ctrl+C ещё раз для выхода",
         "reconcile.report": (
             "отмечено-unknown={actions} | tool-runs-failed={runs} | "

@@ -5,11 +5,12 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
@@ -304,7 +305,7 @@ class SamuraiApp(
     }
 
     BINDINGS = [
-        Binding("ctrl+c", "quit_requested", "Quit", show=False),
+        Binding("ctrl+c", "quit_requested", "Stop / quit", show=False),
         Binding("ctrl+o", "toggle_journal", "Toggle journal", show=False),
         Binding("ctrl+p", "command_palette", "Commands", show=False, priority=True),
         Binding("f1", "show_help", "Keys", show=False),
@@ -419,6 +420,10 @@ class SamuraiApp(
         # Messages injected into the running turn instead of waiting for it.
         self._steer_queue: list[str] = []
         self._chat_busy = False
+        self._stop_requested = False
+        self._stop_note_sent = False
+        self._process_block = []
+        self._collapsed = []
         self._shell_running = ""
         self._shell_background = False
         self._expandable: list[tuple[str, int | None, str, str]] = []
@@ -501,10 +506,29 @@ class SamuraiApp(
         journal = self.query_one("#journal", RichLog)
         journal.write(self._styled(text))
 
-    def _write_dim(self, text: str) -> None:
-        """Dim gray status line (opencode-style transient feedback)."""
+    def _write_dim(self, text: str, *, process: bool = True) -> None:
+        """Dim gray status line.
+
+        Grey process chatter (progress hints, graph notes, thinking) is what
+        buries the answers during a long run, so inside a turn it goes into a
+        buffer that closes as one collapsible line. Lines that summarise real
+        work — a tool run, a block being revealed — pass process=False.
+        """
+        if process and self._chat_busy:
+            self._process_block.append(text)
+            return
         journal = self.query_one("#journal", RichLog)
         journal.write(Text(text, style=self.paint(self._DIM_STYLE)))
+
+    def _close_process_block(self) -> None:
+        """Collapse the turn's grey lines into one line the operator can open."""
+        if not self._process_block:
+            return
+        title = self.translator.t("chat.process-block", lines=len(self._process_block))
+        self._collapsed.append((self.translator.t("chat.process-title"), list(self._process_block)))
+        self._process_block.clear()
+        journal = self.query_one("#journal", RichLog)
+        journal.write(Text(f"▸ ⚙ {title}", style=self.paint(self._DIM_STYLE)))
 
     def _brand_text(self) -> Text:
         """The side strip carries the name; the logo lives in the README."""
@@ -630,6 +654,16 @@ class SamuraiApp(
         block.append(f"  v{__version__}", style=self.paint("dim text-faint"))
         return block
 
+    def on_click(self, event: events.Click) -> None:
+        """A click on the journal opens the newest collapsed block."""
+        widget: Any = event.widget
+        while widget is not None:
+            if getattr(widget, "id", None) == "journal":
+                if self._collapsed:
+                    self._expand_outputs()
+                return
+            widget = widget.parent
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "command-input":
             return
@@ -642,6 +676,10 @@ class SamuraiApp(
         popup.display = False
         command = event.value.strip()
         event.input.value = ""
+        if not command and self._collapsed:
+            # Enter on an empty line opens the newest collapsed block
+            self._expand_outputs()
+            return
         if command:
             if not self._history or self._history[-1] != command:
                 self._history.append(command)
@@ -675,12 +713,33 @@ class SamuraiApp(
         command_input.cursor_position = len(value)
 
     def action_quit_requested(self) -> None:
+        """First press stops the work, second press leaves.
+
+        Half of a long run is spent waiting for a model or a container, and the
+        only way out used to be killing the terminal. The stop is cooperative —
+        the step in flight finishes, the next one is not started — so nothing is
+        left half-done; interrupting again is how you leave anyway.
+        """
         now = time.monotonic()
         if now - self._last_quit_request <= self._QUIT_CONFIRM_SECONDS:
             self.exit()
             return
         self._last_quit_request = now
+        if self._stop_running_work():
+            self._write_line("[info] " + self.translator.t("app.stop-hint"))
+            return
         self._write_line("[info] " + self.translator.t("app.quit-hint"))
+
+    def _stop_running_work(self) -> bool:
+        """Ask whatever is running to stand down; True when something was."""
+        stopped = False
+        if getattr(self, "_chat_busy", False) and not self._stop_requested:
+            self.request_stop()
+            stopped = True
+        if self.stop_subagent():
+            self._write_dim(self.translator.t("sessions.stopping", run="-"))
+            stopped = True
+        return stopped
 
     def action_toggle_plan(self) -> None:
         self.run_worker(self._toggle_plan(), exclusive=False)

@@ -54,6 +54,8 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 
 **Impact.** A ladder `read → write → auth-bypass → data-export → rce` with scores, a reporting threshold and an escalation budget; reports refuse findings below the threshold. Traffic, output and files are kept as artifacts.
 
+**Stopping and the journal.** `Ctrl+C` stops the run, not the app: the step in flight reaches its results, the hypotheses get checked, the conclusion is printed, and only then does the work stand down. A second press leaves. Grey process lines fold into one line and open with `Ctrl+E`, Enter or a click; on a failure they open themselves.
+
 **Session.** A daemon on a local unix socket: work survives a closed terminal, a second client or the TUI screen (`Ctrl-D`) attaches to the stream, answers the agent and approves steps. Socket 0600, read-only clients, the shared access table decides.
 
 **Remote daemon.** `attach --ssh host` works against a daemon on another machine through its forwarded socket; permissions stay on the far side.
