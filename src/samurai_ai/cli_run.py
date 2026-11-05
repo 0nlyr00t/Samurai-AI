@@ -30,6 +30,12 @@ def add_run_command(subcommands: Any, add_parser: Any) -> None:
     run.add_argument("--task", action="append", dest="tasks", default=[], metavar="TITLE")
     run.add_argument("--objective", default="")
     run.add_argument(
+        "--relay",
+        default="",
+        metavar="PREFIX",
+        help="run network tools through this prefix, e.g. prlctl exec <vm-uuid>",
+    )
+    run.add_argument(
         "--fallback",
         action="append",
         default=[],
@@ -61,7 +67,12 @@ def add_run_command(subcommands: Any, add_parser: Any) -> None:
 def _prepare(args: argparse.Namespace, operations: Any, kernel: Any) -> tuple[str, str]:
     scope = ScopeContract(includes=tuple(args.includes), excludes=tuple(args.excludes))
     operation = operations.create(
-        args.name, _mode(args.mode), scope, objective=args.objective, offline=args.offline
+        args.name,
+        _mode(args.mode),
+        scope,
+        objective=args.objective,
+        offline=args.offline,
+        relay=args.relay,
     )
     tasks = [title.strip() for title in args.tasks if title.strip()]
     if not tasks:

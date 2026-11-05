@@ -33,7 +33,7 @@ from samurai_ai.domain.eval import (
     metrics_from_events,
     utc_now,
 )
-from samurai_ai.domain.kernel import PlanTask, RiskClass
+from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass
 from samurai_ai.domain.models import (
     ApiFamily,
     ModelCapability,
@@ -59,7 +59,7 @@ from samurai_ai.services.models import ModelService, ProviderImpl
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.questions import OperatorQuestionService
 from samurai_ai.services.recovery import RecoveryService
-from samurai_ai.services.swarm import SwarmService
+from samurai_ai.services.swarm import SwarmService, always_approve
 from samurai_ai.services.vault import VaultService, load_master_key
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.database import Database
@@ -453,6 +453,12 @@ class EvalService:
                 operation.id, f"model.call {scenario.model_id}", RiskClass.R2
             )
             stack.kernel.approve(approval.id, decided_by="eval-harness")
+            # a scripted answer set rarely runs tools, and the completion gate
+            # wants evidence: one note artifact per task stands in for it
+            for task in scenario.tasks:
+                stack.kernel.register_artifact(
+                    operation.id, ArtifactKind.NOTE, f"{scenario.id}-{task.id}", task_id=task.id
+                )
             started = time.monotonic()
             if scenario.workers == 1:
                 for task in scenario.tasks:
@@ -462,6 +468,7 @@ class EvalService:
                         task.id,
                         [scenario.model_id],
                         approval_id=approval.id,
+                        approval_resolver=always_approve,
                         created_by="eval-harness",
                     )
             else:
@@ -471,6 +478,7 @@ class EvalService:
                     [scenario.model_id],
                     workers=scenario.workers,
                     approval_id=approval.id,
+                    approval_resolver=always_approve,
                     created_by="eval-harness",
                 )
             wall = time.monotonic() - started
