@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --python ${{ matrix.python-version }}
 
+      - name: Secrets (the repository is public)
+        run: uv run python ops/checks/secret_scan.py
+
       - name: Ruff
         run: uv run ruff check .
 
