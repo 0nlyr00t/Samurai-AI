@@ -5365,3 +5365,94 @@ def test_the_attach_tail_is_selectable_too(tmp_path: Path) -> None:
             await pilot.press("escape")
 
     asyncio.run(exercise())
+
+
+def test_the_progress_tab_shows_a_percentage_and_a_top_finding(tmp_path: Path) -> None:
+    """The operator asked for a progress read, so it is one glance and no journal."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hunt", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt plan",
+        [
+            PlanTask(id="t-1", title="Brute force SSH", risk_class=RiskClass.R1),
+            PlanTask(id="t-2", title="Brute force the panel", risk_class=RiskClass.R1),
+            PlanTask(id="t-3", title="Recon subdomains", risk_class=RiskClass.R1),
+        ],
+        [],
+    )
+    stack[1].start_task(operation.id, "t-1")
+    stack[1].complete_task(operation.id, "t-1")
+    finding = stack[1].create_finding(operation.id, "IDOR on /user", FindingSeverity.HIGH)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert app.query_one("#tab-hunt").display
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            lines = "\n".join(strip.text for strip in app.query_one("#view-hunt").lines)
+            assert "50%" in lines and "1/2" in lines
+            assert "brute force" in lines
+            # the recon task is not a hunt and stays out of the counters
+            assert "Recon subdomains" not in lines
+            assert finding.title in lines
+            await pilot.press("escape")
+
+    asyncio.run(exercise())
+
+
+def test_a_new_finding_reaches_the_tab_without_a_refresh_beat(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hunt", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt plan",
+        [PlanTask(id="t-1", title="Password spray OWA", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            stack[1].create_finding(operation.id, "Valid creds for svc_backup", FindingSeverity.CRITICAL)
+            app.refresh_hunt()
+            await pilot.pause()
+            lines = "\n".join(strip.text for strip in app.query_one("#view-hunt").lines)
+            assert "Valid creds for svc_backup" in lines
+            await pilot.press("escape")
+
+    asyncio.run(exercise())
+
+
+def test_the_tab_hides_when_the_plan_has_no_searches(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Recon only", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="t-1", title="Enumerate subdomains", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert not app.query_one("#tab-hunt").display
+            await pilot.press("escape")
+
+    asyncio.run(exercise())
