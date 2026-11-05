@@ -13,6 +13,8 @@ from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
 from samurai_ai.cli_auth import handle_auth_command, handle_role_command
 from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
+from samurai_ai.cli_discover import handle_discover_command, register_discover_command
+from samurai_ai.cli_doctor import register_doctor_command
 from samurai_ai.cli_eval import handle_eval_command, register_eval_commands
 from samurai_ai.cli_events import handle_events_command, register_events_commands
 from samurai_ai.cli_execution import handle_execution_command, register_execution_commands
@@ -268,6 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
     scope_add = scope_commands.add_parser("add", help="Add an inclusion rule")
     scope_add.add_argument("operation_id")
     scope_add.add_argument("targets", nargs="+")
+    scope_add.add_argument(
+        "--yes", "-y", action="store_true", help="Do not ask before widening the scope"
+    )
     scope_rm = scope_commands.add_parser("rm", help="Remove an inclusion rule")
     scope_rm.add_argument("operation_id")
     scope_rm.add_argument("targets", nargs="+")
@@ -321,6 +326,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_rules_commands(subcommands)
     register_gene_commands(subcommands)
     register_policy_commands(subcommands)
+    register_discover_command(subcommands)
+    register_doctor_command(subcommands)
     register_plugin_commands(subcommands)
     register_web_commands(subcommands)
     register_offline_commands(subcommands)
@@ -335,7 +342,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "update":
         # Self-update needs no database or services.
         return run_update(check=args.check)
-    if args.command in {"serve", "attach", "send", "call", "run"}:
+    if args.command in {"serve", "attach", "send", "call", "run", "doctor"}:
         return int(args.handler(args) or 0)
     (
         operation_service,
@@ -410,6 +417,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         gene_result = handle_gene_command(args)
         if gene_result is not None:
             return gene_result
+        discover_result = handle_discover_command(args, execution_service, operation_service)
+        if discover_result is not None:
+            return discover_result
         offline_result = handle_offline_command(args, _SERVICES)
         if offline_result is not None:
             return offline_result
@@ -692,7 +702,7 @@ def _handle_operation(
 
 
 #: Commands that must work before anyone can sign in.
-_OPEN_COMMANDS = frozenset({"update", "auth", "role"})
+_OPEN_COMMANDS = frozenset({"update", "auth", "role", "discover"})
 #: Set once in `main` so handlers outside the service wiring can reach identity.
 _ACCESS: AccessService | None = None
 
@@ -727,6 +737,26 @@ def _operation_id_of(args: argparse.Namespace, kernel: KernelService) -> str | N
     return None
 
 
+def _confirm_scope_add(scope: Any, target: str, args: argparse.Namespace) -> bool:
+    """Ask before widening the scope; without a terminal, widen and say so.
+
+    Narrowing is free and repeating a rule is free. A widening is the moment the
+    operator stops knowing what the operation may touch, and a silent widening is
+    how a /32 authorization quietly becomes a /16.
+    """
+    if getattr(args, "yes", False) or not sys.stdin.isatty():
+        print(f"widened: {target}", file=sys.stderr)
+        return True
+    try:
+        answer = input(f"scope widens: {target} — add it? [Y/n] ").strip().lower()
+    except EOFError:
+        return True
+    if answer in ("", "y", "yes", "д", "да"):
+        return True
+    print(f"not added: {target}", file=sys.stderr)
+    return False
+
+
 def _handle_scope_rules(args: argparse.Namespace, operations: Any) -> int | None:
     """Bare `scope add/rm`: the shortest path between "I have a target" and work."""
     operation = operations.get(args.operation_id)
@@ -735,6 +765,11 @@ def _handle_scope_rules(args: argparse.Namespace, operations: Any) -> int | None
         if args.scope_command == "add":
             if target in includes:
                 print(f"already in scope: {target}", file=sys.stderr)
+                continue
+            if not operation.scope.covers(target) and not _confirm_scope_add(
+                operation.scope, target, args
+            ):
+                print(f"skipped: {target}", file=sys.stderr)
                 continue
             includes.append(target)
         elif target not in includes:

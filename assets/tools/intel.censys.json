@@ -33,7 +33,7 @@
         "search"
       ],
       "default": "host",
-      "description": "host or search"
+      "description": "host or domain"
     },
     "target": {
       "type": "string",

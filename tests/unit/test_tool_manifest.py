@@ -111,3 +111,28 @@ def test_a_url_target_is_checked_by_its_host() -> None:
     assert tool._validated_targets({"target": "https://example.org/x"}, scope) == [
         "https://example.org/x"
     ]
+
+
+def test_a_url_target_is_judged_by_its_whole_url() -> None:
+    """`include http://box:3000` must not authorize `http://box:4000`."""
+    parsed = manifest(
+        params={"url": {"type": "string", "required": True}},
+        argv=["-c", "x", "{url}"],
+        targets={"param": "url", "kind": "url-host", "max": 1},
+    )
+    scope = ScopeContract(includes=("http://box.internal:3000",))
+    tool = ManifestTool(parsed, StubRunner())  # type: ignore[arg-type]
+    assert tool._validated_targets({"url": "http://box.internal:3000/x"}, scope)
+    with pytest.raises(Exception, match="out of scope"):
+        tool._validated_targets({"url": "http://box.internal:4000/x"}, scope)
+    assert render_argv(parsed, {"url": "http://box.internal:3000/x"})[-1] == (
+        "http://box.internal:3000/x"
+    )
+
+
+class StubRunner:
+    def validate_invocation(self, *_a: object) -> None:
+        return None
+
+    def verify_allowlist_signature(self) -> str | None:
+        return None
