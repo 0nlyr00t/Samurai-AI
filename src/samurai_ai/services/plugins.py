@@ -12,6 +12,7 @@ import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from samurai_ai.domain.kernel import OperationPlan
 from samurai_ai.domain.playbooks import PlaybookTemplate
@@ -74,14 +75,29 @@ def _check_hardening(profile: SandboxProfile) -> None:
     """A plugin profile may differ in limits, not in the hardening floor."""
     # build_argv always renders a read-only root and a full capability drop, so
     # the only ways to soften a profile are the user and the network class
-    if profile.network_mode == "scoped" and profile.proxy_flag is None:
+    if (
+        profile.network_mode == "scoped"
+        and profile.proxy_flag is None
+        and not profile.proxy_via_env
+    ):
         raise PluginError(
-            f"profile {profile.id}: a scoped profile needs the tool's proxy flag"
+            f"profile {profile.id}: a scoped profile needs the tool's proxy flag or "
+            "proxy_via_env"
         )
     if profile.user == "0:0" and not profile.description:
         raise PluginError(
             f"profile {profile.id}: a root container must say why in the description"
         )
+
+
+def _validate(
+    model: type[Any], payload: object, path: str
+) -> Any:
+    """Pydantic errors about a plugin file are the plugin's, not an internal trace."""
+    try:
+        return model.model_validate(payload)
+    except Exception as exc:  # noqa: BLE001 - the message is what matters
+        raise PluginError(f"{path}: {exc}") from exc
 
 
 def _load(
@@ -101,15 +117,17 @@ def _load(
         raise PluginError(f"{item.path} is not JSON: {exc}") from exc
 
     if item.kind == "tool":
-        manifest = ToolManifest.model_validate({**payload, "trusted": True})
+        manifest: ToolManifest = _validate(
+            ToolManifest, {**payload, "trusted": True}, item.path
+        )
         _require_prefix("tool", manifest.id, name)
         return manifest
     if item.kind == "profile":
-        profile = SandboxProfile.model_validate(payload)
+        profile: SandboxProfile = _validate(SandboxProfile, payload, item.path)
         _require_prefix("profile", profile.id, name)
         _check_hardening(profile)
         return profile
-    template: PlaybookTemplate = PlaybookTemplate.model_validate(payload)
+    template: PlaybookTemplate = _validate(PlaybookTemplate, payload, item.path)
     _require_prefix("playbook", template.name, name)
     # structural check (unique ids, known dependencies, no cycles) via the plan
     OperationPlan(
