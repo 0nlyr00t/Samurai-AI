@@ -4105,8 +4105,10 @@ def _board_stack(tmp_path: Path):
     )
     duplicate = stack[1].create_finding(operation.id, "Same SQLi", FindingSeverity.LOW)
     artifact = stack[1].register_artifact(
-        operation.id, ArtifactKind.NOTE, "note.txt", "response dump"
+        operation.id, ArtifactKind.NOTE, "note.txt", "response dump", task_id="recon"
     )
+    # the completion gate wants evidence on the task that is being closed
+    stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "second", task_id="exploit")
     return stack, provider, operation, finding, duplicate, artifact
 
 
@@ -5016,9 +5018,10 @@ def _chat_ready_stack(tmp_path: Path, provider: object):
 
 async def _wait_busy(app, pilot) -> None:  # type: ignore[no-untyped-def]
     """Let the turn actually start; a press before that only arms the exit."""
-    for _ in range(60):
+    for _ in range(300):  # a loaded CI box can take a while to schedule it
         if app._chat_busy:
             return
+        await asyncio.sleep(0.02)
         await pilot.pause()
     raise AssertionError("the turn never started")
 
@@ -5394,6 +5397,7 @@ def test_the_progress_tab_shows_a_percentage_and_a_top_finding(tmp_path: Path) -
         [],
     )
     stack[1].start_task(operation.id, "t-1")
+    stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "seed", task_id="t-1")
     stack[1].complete_task(operation.id, "t-1")
     finding = stack[1].create_finding(operation.id, "IDOR on /user", FindingSeverity.HIGH)
 

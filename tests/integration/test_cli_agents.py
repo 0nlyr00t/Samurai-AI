@@ -86,6 +86,13 @@ def setup_operation(database: str, llm_url: str, capsys, monkeypatch) -> str:
     capsys.readouterr()
     assert main(["--db", database, "task", "start", operation_id, "probe"]) == 0
     capsys.readouterr()
+    # scripted executors run no tools; the completion gate wants evidence
+    assert (
+        main(["--db", database, "artifact", "add", operation_id,
+              "--kind", "note", "--text", "seed", "--task", "probe"])
+        == 0
+    )
+    capsys.readouterr()
     assert (
         main(
             [

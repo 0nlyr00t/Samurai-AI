@@ -102,6 +102,14 @@ def setup_operation(database: str, llm_url: str, capsys) -> str:
     plan_path.write_text(json.dumps(plan), encoding="utf-8")
     assert main(["--db", database, "plan", "create", operation_id, str(plan_path)]) == 0
     capsys.readouterr()
+    # a scripted executor runs no tools; the completion gate wants evidence
+    for task in ("recon", "testing"):
+        assert (
+            main(["--db", database, "artifact", "add", operation_id,
+                  "--kind", "note", "--text", "seed", "--task", task])
+            == 0
+        )
+        capsys.readouterr()
     assert (
         main(["--db", database, "model", "register", "fake",
               "--base-url", f"{llm_url}/v1"])

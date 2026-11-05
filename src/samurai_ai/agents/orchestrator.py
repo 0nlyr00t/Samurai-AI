@@ -87,9 +87,11 @@ MAX_CONSECUTIVE_REJECTS = 3
 REPEAT_THRESHOLD = 3
 #: the same *place* called this often inside the window earns a note (a changing
 #: payload still counts), and this often again after the note ends the run
-SITE_WINDOW = 12
-SITE_NUDGE = 6
-SITE_STOP = 10
+#: a relayed command line (prlctl over ssh, a wrapper script) makes every call
+#: look alike, so the window is wider than the plain-shell case needs
+SITE_WINDOW = 16
+SITE_NUDGE = 8
+SITE_STOP = 14
 #: parameters that name the place a tool acts on, with the payload left out
 _SITE_KEYS = ("targets", "target", "host", "url", "path", "port", "asset")
 #: a run cannot outlive this, whatever the steps do (overridable per call)
@@ -630,6 +632,10 @@ class AgentOrchestrator:
                     self._note_site(run, command, sites, repeat_notes)
                 continue
             rejects.append(reason)
+            if approval_resolver is not None and reason.startswith("approval-required"):
+                # with a resolver in place an approval miss is a bookkeeping
+                # step between two real attempts, not a model mistake
+                continue
             consecutive_rejects += 1
             if consecutive_rejects > MAX_CONSECUTIVE_REJECTS:
                 raise AgentError(
@@ -790,10 +796,12 @@ class AgentOrchestrator:
             )
             genes = self._genes_excerpt() if level < 1 else ""
             tools = self._tools_excerpt() if level < 2 else ""
+            relay = self._relay_notice(operation_id)
             prompt = (
                 f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
                 f"{genes}"
                 f"{tools}\n"
+                f"{relay}"
                 f"{rejection_notes}"
                 f"Current step: {step}\n"
                 f"Blackboard:\n{excerpt or '(empty)'}"
@@ -1138,6 +1146,24 @@ class AgentOrchestrator:
             run.operation_id,
             "agent.run.finish",
             {"run_id": run.id, "status": status.value, "reason": reason},
+        )
+
+    def _relay_notice(self, operation_id: str) -> str:
+        """Tell the agent its sandbox tools already travel through the relay.
+
+        Without this line the model "works around" an unreachable host with raw
+        shell commands and host loopback URLs, burning rejections on the way.
+        """
+        relay = self.operations.get(operation_id).relay.strip()
+        if not relay:
+            return ""
+        return (
+            f"[network tools are relayed through `{relay}`. The sandbox adapters "
+            "(scan.nmap, recon.httpx-probe, fuzz.ffuf, scan.nuclei) already go "
+            "through it — call those. shell.exec runs on the host, which has NO "
+            "route to the target: a bare curl/nmap there shows 'filtered' and is "
+            "a dead end unless it prefixes the same relay. Address the target by "
+            "its own IP, never 127.0.0.1.]\n"
         )
 
     def _genes_excerpt(self) -> str:

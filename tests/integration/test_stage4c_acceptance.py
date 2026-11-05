@@ -90,7 +90,7 @@ def test_stage4c_red_team_acceptance(tmp_path: Path) -> None:
 
     # --- governed tasks and attack path with ATT&CK mapping ---
     stack.kernel.start_task(operation_id, "roe-review")
-    stack.kernel.complete_task(operation_id, "roe-review")
+    stack.kernel.complete_task(operation_id, "roe-review", force=True)
     stack.kernel.start_task(operation_id, "path-planning")
 
     phish = stack.redteam.add_step(
@@ -125,7 +125,7 @@ def test_stage4c_red_team_acceptance(tmp_path: Path) -> None:
         task_id="execution",
         gate_id="path-approved",
     )
-    stack.kernel.complete_task(operation_id, "path-planning")
+    stack.kernel.complete_task(operation_id, "path-planning", force=True)
     stack.kernel.start_task(operation_id, "execution")
 
     checkpoint = stack.redteam.list_checkpoints(operation_id)[0]
@@ -161,7 +161,7 @@ def test_stage4c_red_team_acceptance(tmp_path: Path) -> None:
         task_id="detection-review",
         gate_id="execution-finished",
     )
-    stack.kernel.complete_task(operation_id, "execution")
+    stack.kernel.complete_task(operation_id, "execution", force=True)
     stack.kernel.start_task(operation_id, "detection-review")
     stack.kernel.register_artifact(
         operation_id,
@@ -170,7 +170,7 @@ def test_stage4c_red_team_acceptance(tmp_path: Path) -> None:
         requirement="detection-log",
         task_id="detection-review",
     )
-    stack.kernel.complete_task(operation_id, "detection-review")
+    stack.kernel.complete_task(operation_id, "detection-review", force=True)
 
     # --- verification: debrief possible, reporting blocked by gates ---
     stack.kernel.transition_operation(operation_id, OperationStatus.VERIFICATION)
@@ -191,7 +191,7 @@ def test_stage4c_red_team_acceptance(tmp_path: Path) -> None:
     assert "***REDACTED***" in text
 
     stack.kernel.start_task(operation_id, "debrief")
-    stack.kernel.complete_task(operation_id, "debrief")
+    stack.kernel.complete_task(operation_id, "debrief", force=True)
     for gate_id in (
         "roe-approved",
         "path-approved",
