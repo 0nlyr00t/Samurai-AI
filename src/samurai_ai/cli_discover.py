@@ -153,11 +153,12 @@ def _stage(
 
 
 def _discover(args: argparse.Namespace, execution: Any, operations: Any) -> int:
-    includes = list(args.targets)
-    if any(_for_container(target) != target for target in args.targets):
-        includes.append(HOST_GATEWAY)
+    # the gateway name resolves inside docker but not on a public resolver, so
+    # it is declared as an alias of the loopback it stands for
+    loopback = any(_for_container(target) != target for target in args.targets)
+    hosts = {HOST_GATEWAY: "127.0.0.1"} if loopback else {}
     try:
-        scope = ScopeContract(includes=tuple(includes))
+        scope = ScopeContract(includes=tuple(args.targets), hosts=hosts)
     except Exception as exc:  # noqa: BLE001 - pydantic reports the same class of error
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -31,6 +31,7 @@ from samurai_ai.execution.egress import (
     DEFAULT_ALLOWED_PORTS,
     EgressProxy,
     generate_proxy_token,
+    scope_ports,
 )
 from samurai_ai.execution.process import ProcessManager, ProcessResult
 
@@ -706,7 +707,7 @@ class DockerSandboxRunner:
             proxy = EgressProxy(
                 scope,
                 token,
-                allowed_ports=self.egress_allowed_ports,
+                allowed_ports=self.egress_allowed_ports | scope_ports(scope),
                 extra_hosts=frozenset(profile.egress_hosts),
             )
             _, proxy_port = await proxy.start()

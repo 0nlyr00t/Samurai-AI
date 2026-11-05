@@ -147,12 +147,12 @@ def test_a_failed_scan_fails_the_chain_and_skips_the_rest(capsys) -> None:
     assert [call[0] for call in execution.calls] == ["scan.nmap"]
 
 
-def test_a_loopback_target_authorizes_the_gateway_name(capsys) -> None:
-    """Scanning the host loopback has to be licensed in scope, not assumed."""
+def test_a_loopback_target_declares_the_gateway_as_an_alias(capsys) -> None:
+    """The gateway name is docker-only DNS; an alias says what it stands for."""
     operations = FakeOperations()
     execution = FakeExecution({"scan.nmap": ("", "completed")})
     assert _discover(args("127.0.0.1"), execution, operations) == 0
-    assert operations.created[0].includes == ("127.0.0.1", "host.docker.internal")
+    assert operations.created[0].hosts == {"host.docker.internal": "127.0.0.1"}
     assert execution.calls[0][1]["targets"] == ["host.docker.internal"]
 
 
