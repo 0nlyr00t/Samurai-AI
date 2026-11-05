@@ -1,0 +1,42 @@
+{
+  "id": "loot.scan",
+  "version": 1,
+  "title": "Credential scan of a body",
+  "description": "Fetch one in-scope URL and pull credential-shaped strings out of it (basic auth, URL credentials, tokens, key material)",
+  "image": "python:3.12-slim@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30",
+  "executable": "python3",
+  "risk_class": "r1",
+  "network": "scoped",
+  "read_only": true,
+  "proxy_via_env": true,
+  "egress_hosts": [],
+  "env_names": [],
+  "env": {
+    "HOME": "/tmp",
+    "TMPDIR": "/tmp"
+  },
+  "limits": {
+    "timeout_seconds": 180,
+    "memory_mb": 512,
+    "max_output_bytes": 524288
+  },
+  "params": {
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "in-scope URL"
+    }
+  },
+  "targets": {
+    "param": "url",
+    "kind": "url-host",
+    "max": 1
+  },
+  "argv": [
+    "-c",
+    "\"\"\"Pull credential-shaped strings out of one in-scope URL.\n\nRuns inside the scoped sandbox: the fetch goes through the egress proxy it sets in\nthe environment, so the URL's host is judged by the same scope as any other tool.\nPrints what it recognised first, then the (truncated) body for the artifact.\n\"\"\"\n\nimport base64\nimport re\nimport sys\nfrom urllib.parse import urlsplit\nfrom urllib.request import Request, urlopen\n\nUSER_AGENT = \"samurai-ai/loot\"\nMAX_BODY = 262144\nMAX_HITS = 100\n\n#: what a leaked secret looks like in a body or a header\nPATTERNS = (\n    (\"basic\", re.compile(r\"Authorization:\\s*Basic\\s+([A-Za-z0-9+/=]{8,})\", re.I)),\n    (\"url-cred\", re.compile(r\"\\b[a-z][a-z0-9+.-]*://([^\\s:/@]+:[^\\s@/]+)@\", re.I)),\n    (\"private-key\", re.compile(r\"-----BEGIN [A-Z ]*PRIVATE KEY-----\")),\n    (\"jwt\", re.compile(r\"\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\")),\n    (\"aws-key\", re.compile(r\"\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b\")),\n    (\n        \"pair\",\n        re.compile(\n            r\"\\b(?:user(?:name)?|login|pass(?:word|wd)?|secret|token|api[_-]?key|\"\n            r\"access[_-]?key)\\b\\s*[:=]\\s*[\\\"']?([^\\s\\\"'&<>;,]{3,80})\",\n            re.I,\n        ),\n    ),\n    (\"ftp\", re.compile(r\"^\\s*(?:USER|PASS)\\s+(\\S{3,80})\", re.M)),\n)\n\n\ndef decode_basic(value: str) -> str:\n    try:\n        return base64.b64decode(value + \"=\" * (-len(value) % 4)).decode(\"utf-8\", \"replace\")\n    except (ValueError, base64.binascii.Error):\n        return value\n\n\ndef scan(text: str) -> list[str]:\n    hits: list[str] = []\n    seen: set[str] = set()\n    for label, pattern in PATTERNS:\n        for match in pattern.finditer(text):\n            value = match.group(1) if match.groups() else match.group(0)\n            if label == \"basic\":\n                value = decode_basic(value)\n            value = value.strip()\n            if not value or value in seen:\n                continue\n            seen.add(value)\n            where = text[max(0, match.start() - 40) : match.start()].replace(\"\\n\", \" \")\n            hits.append(f\"{label}\\t{value[:120]}\\t{where.strip()[-40:]}\")\n            if len(hits) >= MAX_HITS:\n                return hits\n    return hits\n\n\ndef fetch(url: str) -> tuple[int, str, str]:\n    request = Request(url, headers={\"User-Agent\": USER_AGENT})\n    with urlopen(request, timeout=60) as answer:  # noqa: S310 - fixed scheme set\n        raw = answer.read(MAX_BODY)\n        charset = answer.headers.get_content_charset() or \"utf-8\"\n        try:\n            body = raw.decode(charset, \"replace\")\n        except LookupError:\n            body = raw.decode(\"latin-1\", \"replace\")\n        return answer.status, str(answer.headers), body\n\n\ndef main(argv: list[str]) -> int:\n    url = argv[1] if len(argv) > 1 else \"\"\n    if not url:\n        print(\"loot: no url given\")\n        return 1\n    if urlsplit(url).scheme not in (\"http\", \"https\"):\n        print(f\"loot: only http(s) URLs: {url}\")\n        return 1\n    try:\n        status, headers, body = fetch(url)\n    except Exception as exc:  # noqa: BLE001 - the message is the report\n        print(f\"loot: fetch failed: {exc}\")\n        return 1\n    hits = scan(headers + \"\\n\" + body)\n    print(f\"# loot {url} status={status} bytes={len(body)}\")\n    if not hits:\n        print(\"no credential-shaped strings\")\n    for hit in hits:\n        print(hit)\n    print(\"--- body ---\")\n    print(body)\n    return 0\n\n\nif __name__ == \"__main__\":\n    sys.exit(main(sys.argv))\n",
+    "{url}"
+  ],
+  "parser": "text-lines",
+  "summary_limit": 100
+}

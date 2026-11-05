@@ -198,6 +198,14 @@ def _targets_schema(max_items: int) -> dict[str, Any]:
     }
 
 
+def _explicit_port(target: str) -> bool:
+    """Does this target name a port of its own? Then httpx must not add one."""
+    try:
+        return urlsplit(target).port is not None
+    except ValueError:
+        return False
+
+
 class HttpxProbeTool(_ScopedSandboxTool):
     profile_id = "sandbox.httpx@v1"
     executable = "httpx"
@@ -259,7 +267,7 @@ class HttpxProbeTool(_ScopedSandboxTool):
             raise ToolValidationError(
                 f"{self.definition.id}: unknown profile {profile!r}"
             )
-        return [
+        argv = [
             "-json",
             "-silent",
             "-no-color",
@@ -267,12 +275,12 @@ class HttpxProbeTool(_ScopedSandboxTool):
             str(timeout),
             "-rate-limit",
             "50",
-            "-ports",
-            "80,443",
-            *flags,
-            "-u",
-            ",".join(targets),
         ]
+        # a URL that names its own port is authoritative; otherwise only the
+        # web ports are worth probing, which is what -ports covers
+        if not any(_explicit_port(target) for target in targets):
+            argv += ["-ports", "80,443"]
+        return [*argv, *flags, "-u", ",".join(targets)]
 
     def summarize(self, stdout: str) -> list[str]:
         lines: list[str] = []
