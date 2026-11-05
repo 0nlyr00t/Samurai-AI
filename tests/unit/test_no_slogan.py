@@ -24,10 +24,11 @@ def test_the_installer_and_uninstaller_do_not_print_it() -> None:
             assert slogan not in text, f"{name} still says {slogan!r}"
 
 
-def test_the_requirements_say_the_slogan_is_gone() -> None:
+def test_the_requirements_keep_the_slogan_in_the_repo_about_only() -> None:
     text = read("md/requirements.md")
-    assert "red team ai harness" not in text
-    assert "слогана как отдельной текстовой сущности нет" in text
+    # the one place the slogan still lives is the repository "About" line
+    assert '«red team ai harness»' in text
+    assert "about" in text
 
 
 def test_the_logo_alt_describes_the_picture_without_a_slogan() -> None:
