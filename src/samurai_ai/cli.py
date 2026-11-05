@@ -13,6 +13,7 @@ from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.cli_agents import handle_agent_command, register_agent_commands
 from samurai_ai.cli_auth import handle_auth_command, handle_role_command
 from samurai_ai.cli_ctf import handle_ctf_command, register_ctf_commands
+from samurai_ai.cli_discover import handle_discover_command, register_discover_command
 from samurai_ai.cli_doctor import register_doctor_command
 from samurai_ai.cli_eval import handle_eval_command, register_eval_commands
 from samurai_ai.cli_events import handle_events_command, register_events_commands
@@ -325,6 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_rules_commands(subcommands)
     register_gene_commands(subcommands)
     register_policy_commands(subcommands)
+    register_discover_command(subcommands)
     register_doctor_command(subcommands)
     register_plugin_commands(subcommands)
     register_web_commands(subcommands)
@@ -415,6 +417,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         gene_result = handle_gene_command(args)
         if gene_result is not None:
             return gene_result
+        discover_result = handle_discover_command(args, execution_service, operation_service)
+        if discover_result is not None:
+            return discover_result
         offline_result = handle_offline_command(args, _SERVICES)
         if offline_result is not None:
             return offline_result
@@ -697,7 +702,7 @@ def _handle_operation(
 
 
 #: Commands that must work before anyone can sign in.
-_OPEN_COMMANDS = frozenset({"update", "auth", "role"})
+_OPEN_COMMANDS = frozenset({"update", "auth", "role", "discover"})
 #: Set once in `main` so handlers outside the service wiring can reach identity.
 _ACCESS: AccessService | None = None
 

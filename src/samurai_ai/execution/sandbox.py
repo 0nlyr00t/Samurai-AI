@@ -508,7 +508,10 @@ class DockerSandboxRunner:
             ]
         elif mode in ("none", "host"):
             argv += ["--network", mode]
-        # "direct": bridge networking as-is, no proxy of ours in the path.
+        elif mode == "direct":
+            # direct keeps bridge networking as-is and no proxy of ours in the
+            # path, but a host-loopback target still has to be nameable
+            argv += ["--add-host", "host.docker.internal:host-gateway"]
         for name, value in (env or {}).items():
             argv += ["--env", f"{name}={value}"]
         for name in (secret_env or {}):
