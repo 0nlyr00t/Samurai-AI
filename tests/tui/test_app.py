@@ -4105,8 +4105,10 @@ def _board_stack(tmp_path: Path):
     )
     duplicate = stack[1].create_finding(operation.id, "Same SQLi", FindingSeverity.LOW)
     artifact = stack[1].register_artifact(
-        operation.id, ArtifactKind.NOTE, "note.txt", "response dump"
+        operation.id, ArtifactKind.NOTE, "note.txt", "response dump", task_id="recon"
     )
+    # the completion gate wants evidence on the task that is being closed
+    stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "second", task_id="exploit")
     return stack, provider, operation, finding, duplicate, artifact
 
 
@@ -5394,6 +5396,7 @@ def test_the_progress_tab_shows_a_percentage_and_a_top_finding(tmp_path: Path) -
         [],
     )
     stack[1].start_task(operation.id, "t-1")
+    stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "seed", task_id="t-1")
     stack[1].complete_task(operation.id, "t-1")
     finding = stack[1].create_finding(operation.id, "IDOR on /user", FindingSeverity.HIGH)
 

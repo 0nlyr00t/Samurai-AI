@@ -13,6 +13,7 @@ from samurai_ai.domain.kernel import (
     PlanTask,
     RiskClass,
     StageGate,
+    TaskEvidenceError,
     TaskStateError,
     TaskStatus,
 )
@@ -80,11 +81,11 @@ def test_kernel_happy_path(tmp_path: Path) -> None:
         service.start_task(operation.id, "exploit")
 
     service.start_task(operation.id, "recon")
-    service.complete_task(operation.id, "recon")
+    service.complete_task(operation.id, "recon", force=True)
     service.start_task(operation.id, "exploit")
 
     with pytest.raises(ArtifactError):
-        service.complete_task(operation.id, "exploit")
+        service.complete_task(operation.id, "exploit", force=True)
 
     artifact = service.register_artifact(
         operation.id,
@@ -99,7 +100,7 @@ def test_kernel_happy_path(tmp_path: Path) -> None:
     assert artifact.path == f"artifacts/{operation.id}/{artifact.id}.txt"
     assert artifact.size_bytes == len(b"nmap -sV 192.0.2.10")
 
-    service.complete_task(operation.id, "exploit")
+    service.complete_task(operation.id, "exploit", force=True)
     service.transition_operation(operation.id, OperationStatus.VERIFICATION)
 
     with pytest.raises(ArtifactError):
@@ -412,3 +413,38 @@ def test_reset_task_returns_finished_and_blocked_tasks_to_pending(
     assert plan.task_by_id("recon").status is TaskStatus.PENDING  # type: ignore[union-attr]
     # resetting a pending task is a no-op, not an error
     service.reset_task(operation.id, "recon")
+
+
+def test_a_task_without_evidence_is_refused_until_forced(tmp_path: Path) -> None:
+    """The gate that stops "5/5 done" being a claim about nothing."""
+    service = make_service(tmp_path / "evidence.db")
+    operation = make_operation(service)
+    service.create_plan(
+        operation.id, "Evidence", [PlanTask(id="probe", title="Probe")], []
+    )
+    service.approve_plan(operation.id)
+    service.start_task(operation.id, "probe")
+
+    with pytest.raises(TaskEvidenceError, match="no evidence"):
+        service.complete_task(operation.id, "probe")
+    assert service.get_current_plan(operation.id).task_by_id("probe").status is (  # type: ignore[union-attr]
+        TaskStatus.IN_PROGRESS
+    )
+
+    service.register_artifact(operation.id, ArtifactKind.NOTE, "proof", task_id="probe")
+    service.complete_task(operation.id, "probe")
+    assert service.get_current_plan(operation.id).task_by_id("probe").status is (  # type: ignore[union-attr]
+        TaskStatus.DONE
+    )
+
+
+def test_force_closes_a_task_that_produced_nothing(tmp_path: Path) -> None:
+    service = make_service(tmp_path / "forced.db")
+    operation = make_operation(service)
+    service.create_plan(operation.id, "Forced", [PlanTask(id="probe", title="Probe")], [])
+    service.approve_plan(operation.id)
+    service.start_task(operation.id, "probe")
+    service.complete_task(operation.id, "probe", force=True)
+    assert service.get_current_plan(operation.id).task_by_id("probe").status is (  # type: ignore[union-attr]
+        TaskStatus.DONE
+    )
