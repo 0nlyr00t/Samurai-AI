@@ -8,7 +8,7 @@ from typing import Any
 from samurai_ai.domain.kernel import ApprovalStatus
 from samurai_ai.domain.swarm import AgentSpecialization, SwarmError, SwarmRun
 from samurai_ai.services.models import ModelService
-from samurai_ai.services.swarm import SwarmService
+from samurai_ai.services.swarm import SwarmService, always_approve
 
 
 def register_swarm_commands(
@@ -50,6 +50,12 @@ def register_swarm_commands(
         help="Member specialization (general|recon|testing|analysis); repeatable",
     )
     run.add_argument("--approval-id", dest="approval_id")
+    run.add_argument(
+        "--ask",
+        dest="auto_approve",
+        action="store_false",
+        help="stop for an operator on every tool call instead of approving",
+    )
     run.add_argument(
         "--workspace",
         dest="workspace",
@@ -118,6 +124,7 @@ def handle_swarm_command(
             workers=args.workers,
             specializations=specializations,
             approval_id=approval_id,
+            approval_resolver=(always_approve if args.auto_approve else None),
             workspace=args.workspace,
             skill_names=tuple(args.skills),
         )

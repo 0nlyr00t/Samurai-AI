@@ -12,7 +12,7 @@ import json
 import sys
 
 from samurai_ai.domain.kernel import ApprovalStatus
-from samurai_ai.services.swarm import SwarmService
+from samurai_ai.services.swarm import SwarmService, always_approve
 
 
 def register_headless_commands(
@@ -36,17 +36,19 @@ def register_headless_commands(
         "--auto-approve",
         dest="auto_approve",
         action="store_true",
-        help="approve every tool call in place — for unattended runs",
+        default=True,
+        help="approve every tool call in place (default)",
+    )
+    run.add_argument(
+        "--ask",
+        dest="auto_approve",
+        action="store_false",
+        help="stop for an operator on every tool call",
     )
     run.add_argument("--workspace", dest="workspace", default=None)
     run.add_argument(
         "--skill", action="append", dest="skills", default=[], metavar="SKILL_NAME"
     )
-
-
-def _always_approve(_approval_id: str) -> bool:
-    """An unattended batch has nobody to click; the operator said so up front."""
-    return True
 
 
 def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> int | None:
@@ -73,7 +75,7 @@ def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> i
         approval_id=approval_id,
         workspace=args.workspace,
         skill_names=tuple(args.skills),
-        approval_resolver=(_always_approve if args.auto_approve else None),
+        approval_resolver=(always_approve if args.auto_approve else None),
     )
     report = swarms.report(swarm.id)
     print(json.dumps(report, ensure_ascii=False, indent=2))

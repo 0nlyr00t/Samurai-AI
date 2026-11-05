@@ -632,6 +632,10 @@ class AgentOrchestrator:
                     self._note_site(run, command, sites, repeat_notes)
                 continue
             rejects.append(reason)
+            if approval_resolver is not None and reason.startswith("approval-required"):
+                # with a resolver in place an approval miss is a bookkeeping
+                # step between two real attempts, not a model mistake
+                continue
             consecutive_rejects += 1
             if consecutive_rejects > MAX_CONSECUTIVE_REJECTS:
                 raise AgentError(
