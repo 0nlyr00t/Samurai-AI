@@ -87,9 +87,11 @@ MAX_CONSECUTIVE_REJECTS = 3
 REPEAT_THRESHOLD = 3
 #: the same *place* called this often inside the window earns a note (a changing
 #: payload still counts), and this often again after the note ends the run
-SITE_WINDOW = 12
-SITE_NUDGE = 6
-SITE_STOP = 10
+#: a relayed command line (prlctl over ssh, a wrapper script) makes every call
+#: look alike, so the window is wider than the plain-shell case needs
+SITE_WINDOW = 16
+SITE_NUDGE = 8
+SITE_STOP = 14
 #: parameters that name the place a tool acts on, with the payload left out
 _SITE_KEYS = ("targets", "target", "host", "url", "path", "port", "asset")
 #: a run cannot outlive this, whatever the steps do (overridable per call)
