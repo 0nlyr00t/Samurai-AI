@@ -113,3 +113,24 @@ def test_a_failed_relayed_fetch_says_what_curl_said() -> None:
             "relay", "http://10.0.0.1/x", method="GET", timeout=5, max_bytes=1024,
             manager=_Manager(),
         )
+
+
+def test_the_probe_reports_what_the_far_side_has() -> None:
+    from samurai_ai.execution import relay as module
+
+    class _Manager:
+        async def run(self, argv, timeout_seconds=0, **_k):  # noqa: ANN001, ANN003
+            return type(
+                "R", (), {"stdout": "nmap\npython3\n", "stderr": "", "exit_code": 0,
+                          "timed_out": False}
+            )()
+
+    from samurai_ai.execution import process as process_module
+
+    original = process_module.ProcessManager
+    process_module.ProcessManager = lambda **_k: _Manager()  # type: ignore[assignment]
+    try:
+        found = module.probe_tools("relay", ("nmap", "nuclei", "python3"))
+    finally:
+        process_module.ProcessManager = original  # type: ignore[assignment]
+    assert found == {"nmap": True, "nuclei": False, "python3": True}

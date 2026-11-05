@@ -34,6 +34,12 @@ def register_doctor_command(
     subcommands: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
     doctor = subcommands.add_parser("doctor", help="Check that this machine can run the harness")
+    doctor.add_argument(
+        "--relay",
+        default="",
+        metavar="PREFIX",
+        help="also check what exists on the far side of this relay prefix",
+    )
     doctor.set_defaults(handler=_doctor)
 
 
@@ -64,6 +70,49 @@ def _binary(name: str, why: str, hints: dict[str, str], *, blocker: bool) -> dic
         "detail": why if not found else shutil.which(name) or "",
         "hint": "" if found else _os_hint(hints),
     }
+
+
+def _relay_checks(relay: str) -> list[dict[str, object]]:
+    """A relay that lacks a tool fails one step at a time; ask once instead."""
+    from samurai_ai.execution.relay import PROBE_TOOLS, probe_tools, validate_relay
+
+    try:
+        prefix = validate_relay(relay)
+    except Exception as exc:  # noqa: BLE001 - reported as a blocker below
+        return [
+            {
+                "name": "relay prefix",
+                "ok": False,
+                "blocker": True,
+                "detail": str(exc),
+                "hint": "",
+            }
+        ]
+    present = probe_tools(prefix)
+    checks: list[dict[str, object]] = []
+    for name in ("nmap", "curl", "python3"):
+        checks.append(
+            {
+                "name": f"relay: {name}",
+                "ok": present[name],
+                "blocker": name != "python3",
+                "detail": "present" if present[name] else "missing",
+                "hint": "" if present[name] else f"install {name} on the relay host",
+            }
+        )
+    optional_missing = [n for n in PROBE_TOOLS if n not in ("nmap", "curl", "python3")
+                        and not present[n]]
+    if optional_missing:
+        checks.append(
+            {
+                "name": "relay: optional tools",
+                "ok": False,
+                "blocker": False,
+                "detail": "missing " + ", ".join(optional_missing),
+                "hint": "those tools stay unusable under this relay",
+            }
+        )
+    return checks
 
 
 def _checks(deep: bool) -> list[dict[str, object]]:
@@ -195,6 +244,9 @@ def _key_state() -> tuple[int, int]:
 
 def _doctor(args: argparse.Namespace) -> int:
     checks = _checks(deep=not getattr(args, "shallow", False))
+    relay = str(getattr(args, "relay", "") or "")
+    if relay:
+        checks += _relay_checks(relay)
     for check in checks:
         mark = "ok  " if check["ok"] else ("FAIL" if check["blocker"] else "warn")
         print(f"{mark} {check['name']}\t{check['detail']}")
