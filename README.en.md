@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/samurai-logo.jpg" width="880" alt="Samurai AI — a samurai with a katana inside a red brush ring, wordmark and slogan on the arc">
+  <img src="assets/samurai-logo.jpg" width="880" alt="Samurai AI — a samurai with a katana inside a red brush ring and the SAMURAI-AI wordmark">
 </p>
 
 <p align="center">
