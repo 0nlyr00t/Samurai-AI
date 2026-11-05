@@ -1158,10 +1158,12 @@ class AgentOrchestrator:
         if not relay:
             return ""
         return (
-            f"[network tools are relayed: `{relay}` — the sandbox adapters "
-            "(scan.nmap, recon.httpx-probe, fuzz.ffuf, scan.nuclei) already run "
-            "through it, so use them instead of raw shell curl/nmap. Use the "
-            "target's own address, not 127.0.0.1.]\n"
+            f"[network tools are relayed through `{relay}`. The sandbox adapters "
+            "(scan.nmap, recon.httpx-probe, fuzz.ffuf, scan.nuclei) already go "
+            "through it — call those. shell.exec runs on the host, which has NO "
+            "route to the target: a bare curl/nmap there shows 'filtered' and is "
+            "a dead end unless it prefixes the same relay. Address the target by "
+            "its own IP, never 127.0.0.1.]\n"
         )
 
     def _genes_excerpt(self) -> str:

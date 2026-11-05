@@ -80,8 +80,9 @@ def test_the_executor_prompt_announces_the_relay() -> None:
     stand = object.__new__(AgentOrchestrator)
     stand.operations = Ops("prlctl exec '{uuid}'")  # type: ignore[assignment]
     notice = stand._relay_notice("op_1")  # type: ignore[attr-defined]
-    assert "already run through it" in notice
-    assert "not 127.0.0.1" in notice
+    assert "already go through it" in notice
+    assert "NO route to the target" in notice
+    assert "never 127.0.0.1" in notice
 
     stand.operations = Ops("")  # type: ignore[assignment]
     assert stand._relay_notice("op_1") == ""  # type: ignore[attr-defined]
