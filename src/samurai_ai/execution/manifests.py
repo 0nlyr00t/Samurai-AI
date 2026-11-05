@@ -225,10 +225,11 @@ class ManifestTool:
         for value in values:
             candidate = value
             if targets.kind == "url-host":
+                # the whole URL is the target: scheme and port are part of what
+                # a URL scope rule authorizes, so they must be judged too
                 parts = urlsplit(value)
                 if parts.scheme not in ("http", "https") or not parts.hostname:
                     raise ManifestError(f"{self.manifest.id}: not an http(s) URL: {value!r}")
-                candidate = parts.hostname
             elif not _NO_COMMA_OR_SPACE.fullmatch(value) or value.startswith("-"):
                 raise ManifestError(
                     f"{self.manifest.id}: target must be a bare host: {value!r}"

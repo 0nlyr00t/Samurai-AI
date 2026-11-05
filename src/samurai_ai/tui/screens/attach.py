@@ -15,9 +15,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, Static
 
 from samurai_ai.i18n import Translator
+from samurai_ai.tui.widgets import SelectableRichLog
 
 
 class AttachScreen(ModalScreen[None]):
@@ -79,7 +80,7 @@ class AttachScreen(ModalScreen[None]):
                 self.translator.t("attach.title"), id="attach-title"
             )
             yield Static(self.translator.t("attach.hint"), id="attach-hint")
-            yield RichLog(id="attach-log", wrap=True, markup=False)
+            yield SelectableRichLog(id="attach-log", wrap=True, markup=False)
             yield Input(id="attach-input", placeholder=self.translator.t("attach.message"))
 
     # -- lifecycle --------------------------------------------------------
@@ -115,7 +116,7 @@ class AttachScreen(ModalScreen[None]):
         return f"[{frame.get('seq')}] {frame.get('event')} {detail}"[:300]
 
     def _append(self, line: str) -> None:
-        self.query_one("#attach-log", RichLog).write(line)
+        self.query_one("#attach-log", SelectableRichLog).write(line)
 
     def _call(self, method: str, params: dict[str, Any]) -> Any:
         if self.loop is None or self.client is None:

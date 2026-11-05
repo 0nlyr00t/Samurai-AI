@@ -20,8 +20,22 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private-key", re.compile(r"BEGIN [A-Z ]*PRIVATE KEY")),
 )
 
-#: values that are knowingly fake; a hit matching one of these is fine
-ALLOW = re.compile(r"AKIA1234567890ABCDEF|sk-test-", re.IGNORECASE)
+#: values that are knowingly fake, or shapes that carry no secret at all
+ALLOW = re.compile(
+    "|".join(
+        (
+            r"AKIA1234567890ABCDEF",
+            r"sk-test-",
+            # AWS's own documented example id
+            r"AKIAIOSFODNN7EXAMPLE",
+            # our fixture token, matching the header shape without being a key
+            r"eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxIn0",
+            # a PEM header names the algorithm, not key material
+            r"BEGIN [A-Z ]*PRIVATE KEY",
+        )
+    ),
+    re.IGNORECASE,
+)
 
 
 def tracked_hits() -> list[str]:
