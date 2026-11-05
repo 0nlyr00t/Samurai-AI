@@ -796,10 +796,12 @@ class AgentOrchestrator:
             )
             genes = self._genes_excerpt() if level < 1 else ""
             tools = self._tools_excerpt() if level < 2 else ""
+            relay = self._relay_notice(operation_id)
             prompt = (
                 f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
                 f"{genes}"
                 f"{tools}\n"
+                f"{relay}"
                 f"{rejection_notes}"
                 f"Current step: {step}\n"
                 f"Blackboard:\n{excerpt or '(empty)'}"
@@ -1144,6 +1146,22 @@ class AgentOrchestrator:
             run.operation_id,
             "agent.run.finish",
             {"run_id": run.id, "status": status.value, "reason": reason},
+        )
+
+    def _relay_notice(self, operation_id: str) -> str:
+        """Tell the agent its sandbox tools already travel through the relay.
+
+        Without this line the model "works around" an unreachable host with raw
+        shell commands and host loopback URLs, burning rejections on the way.
+        """
+        relay = self.operations.get(operation_id).relay.strip()
+        if not relay:
+            return ""
+        return (
+            f"[network tools are relayed: `{relay}` — the sandbox adapters "
+            "(scan.nmap, recon.httpx-probe, fuzz.ffuf, scan.nuclei) already run "
+            "through it, so use them instead of raw shell curl/nmap. Use the "
+            "target's own address, not 127.0.0.1.]\n"
         )
 
     def _genes_excerpt(self) -> str:

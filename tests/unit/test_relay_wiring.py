@@ -64,3 +64,24 @@ def test_the_executor_swaps_in_a_relay_runner_and_back() -> None:
     operation.relay = ""
     ToolExecutionService._apply_relay(None, operation, adapter)  # type: ignore[arg-type]
     assert adapter._runner is None
+
+
+def test_the_executor_prompt_announces_the_relay() -> None:
+    """Without the line the model works around the host instead of using tools."""
+    from samurai_ai.agents.orchestrator import AgentOrchestrator
+
+    class Ops:
+        def __init__(self, relay: str) -> None:
+            self.relay = relay
+
+        def get(self, _id: str) -> object:
+            return type("Op", (), {"relay": self.relay})()
+
+    stand = object.__new__(AgentOrchestrator)
+    stand.operations = Ops("prlctl exec '{uuid}'")  # type: ignore[assignment]
+    notice = stand._relay_notice("op_1")  # type: ignore[attr-defined]
+    assert "already run through it" in notice
+    assert "not 127.0.0.1" in notice
+
+    stand.operations = Ops("")  # type: ignore[assignment]
+    assert stand._relay_notice("op_1") == ""  # type: ignore[attr-defined]
