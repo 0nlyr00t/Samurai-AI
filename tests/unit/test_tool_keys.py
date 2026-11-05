@@ -68,7 +68,7 @@ def test_the_catalogue_entries_are_well_formed() -> None:
 
 
 def test_a_key_carries_the_tool_that_uses_it() -> None:
-    assert tk.key_for("SHODAN_API_KEY").tool == "recon.subfinder-passive"
+    assert tk.key_for("SHODAN_API_KEY").tool == "intel.shodan"
     assert tk.key_for("WPSCAN_API_KEY").tool == "scan.wpscan"
     assert tk.key_for("NOPE") is None
 

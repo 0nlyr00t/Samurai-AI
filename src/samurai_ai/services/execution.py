@@ -104,23 +104,21 @@ class ToolExecutionService:
         preflight = getattr(adapter, "preflight", None)
         if callable(preflight):
             preflight(resolved)
-        # the profile declares which env names a tool may receive (its keys)
-        declared_env = _declared_env(adapter)
+        # a key the operator stored once beats a parameter the model had to
+        # remember: any env name the profile declares is filled from the vault
+        # unless the call already carried it. Register the values before the
+        # parameters are recorded, so evidence holds names, never plaintext.
         build_env = getattr(adapter, "build_env", None)
+        provided: dict[str, str] = {}
         if callable(build_env):
-            # Register the secret values before the parameters are recorded, so
-            # evidence holds vault names (or REDACTED), never the plaintext.
-            _, secret_env = build_env(resolved)
-            # a key the operator stored once beats a parameter the model had to
-            # remember: declared env names come from the vault unless already set
-            injected = inject(declared_env, secret_env, self.vault)
-            secret_env = {**secret_env, **injected}
-            for value in secret_env.values():
-                self.redactor.register(value)
-            # the tool rebuilds its env at invoke time, so the injected ones travel
-            # with the parameters rather than in a local copy
-            if injected:
-                resolved[SECRET_ENV_KEY] = injected
+            _, provided = build_env(resolved)
+        injected = inject(_declared_env(adapter), provided, self.vault)
+        for value in (*provided.values(), *injected.values()):
+            self.redactor.register(value)
+        if injected:
+            # the tool builds its own env at invoke time, so the injected values
+            # travel with the parameters rather than in a local copy
+            resolved[SECRET_ENV_KEY] = injected
         approval = self._resolve_approval(
             operation_id, definition, task_id, approval_id, approval_resolver
         )

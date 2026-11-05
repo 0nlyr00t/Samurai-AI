@@ -6,7 +6,7 @@ import json
 import re
 import urllib.parse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from samurai_ai.domain.execution import ToolExecutionError
 
@@ -17,8 +17,9 @@ _PROFILE_ID = re.compile(
 )
 #: repo@sha256:<digest> from a registry, or a bare local image id (a locally
 #: built toolbelt has no registry to pull from until it is pushed).
+#: a tag before the digest is allowed: `python:3.12-slim@sha256:…`
 _PINNED_IMAGE = re.compile(
-    r"(?:[a-zA-Z0-9][a-zA-Z0-9._/-]*@|)sha256:[0-9a-f]{64}\Z"
+    r"(?:[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?@|)sha256:[0-9a-f]{64}\Z"
 )
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 #: tools spell it `-proxy` or `--proxy`; both are one flag
@@ -71,6 +72,8 @@ class SandboxProfile(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     # Flag through which the tool takes the egress proxy URL, e.g. "-proxy".
     proxy_flag: str | None = None
+    #: the tool has no proxy flag and reads HTTP(S)_PROXY from the environment
+    proxy_via_env: bool = False
     # How the proxy URL is addressed: HTTP CONNECT (default) or SOCKS5.
     proxy_scheme: str = "http"
     # DoH resolver the profile is pinned to, in the tool's own "doh:<url>" form.
@@ -130,6 +133,20 @@ class SandboxProfile(BaseModel):
                     f"sandbox env name must look like SHODAN_API_KEY: {name!r}"
                 )
         return value
+
+    @model_validator(mode="after")
+    def validate_proxy_reach(self) -> SandboxProfile:
+        """A scoped profile must be able to learn the proxy one way or another."""
+        if (
+            self.network_mode == "scoped"
+            and self.proxy_flag is None
+            and not self.proxy_via_env
+        ):
+            raise SandboxProfileError(
+                f"sandbox profile {self.id}: a scoped profile needs a proxy flag or "
+                "proxy_via_env"
+            )
+        return self
 
     @field_validator("proxy_flag")
     @classmethod

@@ -103,11 +103,25 @@ def test_a_profile_without_the_plugin_prefix_is_refused(tmp_path: Path) -> None:
         validate_package(directory)
 
 
-def test_a_scoped_profile_needs_the_proxy_flag(tmp_path: Path) -> None:
+def test_a_scoped_profile_needs_a_way_to_the_proxy(tmp_path: Path) -> None:
     profile = {**GOOD_PROFILE, "proxy_flag": None}
     directory = build(tmp_path, profile=profile)
-    with pytest.raises(PluginError, match="needs the tool's proxy flag"):
+    with pytest.raises(PluginError, match="proxy flag or proxy_via_env"):
         validate_package(directory)
+    # a script-driven tool reads HTTP(S)_PROXY instead of taking a flag
+    env_dir = tmp_path / "env"
+    env_dir.mkdir()
+    ok = {**GOOD_PROFILE, "proxy_flag": None, "proxy_via_env": True}
+    (directory / "profiles/webscan.json").write_text(json.dumps(ok))
+    manifest_path = directory / "plugin.json"
+    raw = json.loads(manifest_path.read_text())
+    for item in raw["files"]:
+        if item["path"] == "profiles/webscan.json":
+            item["sha256"] = hashlib.sha256(
+                (directory / "profiles/webscan.json").read_bytes()
+            ).hexdigest()
+    manifest_path.write_text(json.dumps(raw))
+    validate_package(directory)
 
 
 def test_a_root_container_must_explain_itself(tmp_path: Path) -> None:
