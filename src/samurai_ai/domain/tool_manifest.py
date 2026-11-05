@@ -32,7 +32,10 @@ MAX_ARGV = 40
 _PARAM_NAME = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 _PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
 _TOOL_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+\Z")
-_PINNED_IMAGE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/-]*@sha256:[0-9a-f]{64}\Z")
+#: a tag may sit before the digest: `python:3.12-slim@sha256:…`
+_PINNED_IMAGE = re.compile(
+    r"[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?@sha256:[0-9a-f]{64}\Z"
+)
 _UNSAFE_VALUE = re.compile(r"[\s\x00]")
 
 
@@ -126,6 +129,9 @@ class ToolManifest(BaseModel):
     read_only: bool = True
     capabilities: tuple[str, ...] = ()
     proxy_flag: str | None = None
+    #: tools without a proxy flag (a script driven interpreter) read the standard
+    #: HTTP(S)_PROXY variables instead
+    proxy_via_env: bool = False
     proxy_scheme: Literal["http", "socks5"] = "http"
     egress_hosts: tuple[str, ...] = ()
     env_names: tuple[str, ...] = ()
@@ -207,10 +213,19 @@ class ToolManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_integrity(self) -> ToolManifest:
+        # an inline script carries its own braces (f-strings, dict literals), so a
+        # placeholder is only trusted when the whole token is one; embedded names
+        # that are not parameters are left alone by the renderer
         placeholders = {
-            name for token in self.argv for name in _PLACEHOLDER.findall(token)
+            name
+            for token in self.argv
+            for name in _PLACEHOLDER.findall(token)
+            if token == "{" + name + "}" or name in self.params
         }
-        unknown = sorted(placeholders - set(self.params))
+        tokens = {token for token in self.argv}
+        unknown = sorted(
+            placeholders - set(self.params) if tokens else set()
+        )
         if unknown:
             raise ManifestError(f"argv uses unknown parameters: {', '.join(unknown)}")
         if self.stdin_from is not None and self.stdin_from not in self.params:
@@ -255,6 +270,11 @@ class ToolManifest(BaseModel):
             raise ManifestError("r0 manifest must be read-only")
         if self.risk_class in ("r3", "r4") and self.read_only:
             raise ManifestError(f"{self.risk_class} manifest cannot be read-only")
+        if self.network == "scoped" and not self.proxy_flag and not self.proxy_via_env:
+            raise ManifestError(
+                "a scoped manifest needs a proxy flag or proxy_via_env: a tool that "
+                "cannot be told about the proxy would reach the network directly"
+            )
         if self.network == "none" and (self.proxy_flag or self.egress_hosts):
             raise ManifestError("a network-less manifest cannot declare proxy or hosts")
         if self.resolver_url is not None and self.network != "scoped":
@@ -279,6 +299,7 @@ class ToolManifest(BaseModel):
             max_output_bytes=self.limits.max_output_bytes,
             network_mode=self.network,
             proxy_flag=self.proxy_flag,
+            proxy_via_env=self.proxy_via_env,
             proxy_scheme=self.proxy_scheme,
             egress_hosts=self.egress_hosts,
             env_names=self.env_names,

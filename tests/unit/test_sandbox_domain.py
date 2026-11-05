@@ -108,7 +108,11 @@ def test_profile_network_mode_fail_closed() -> None:
         with pytest.raises(ValidationError, match="'none', 'scoped', 'direct' or 'host'"):
             make_profile(network_mode=bad)
     assert make_profile().network_mode == "none"
-    assert make_profile(network_mode="scoped").network_mode == "scoped"
+    # a scoped profile must be able to learn the proxy: by flag or by env
+    with pytest.raises(ValidationError, match="proxy flag or"):
+        make_profile(network_mode="scoped")
+    assert make_profile(network_mode="scoped", proxy_flag="-proxy").proxy_flag == "-proxy"
+    assert make_profile(network_mode="scoped", proxy_via_env=True).proxy_via_env is True
 
 
 def test_canonical_payload_is_deterministic_and_order_independent() -> None:

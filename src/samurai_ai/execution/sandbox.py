@@ -83,6 +83,8 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         # The channel's own test target: `cat /proc/self/environ` in the opt-in
         # docker test proves a value reaches the container without entering argv.
         env_names=("SAMURAI_TEST_SECRET",),
+        # busybox wget/json tools read HTTP(S)_PROXY; no flag exists here
+        proxy_via_env=True,
     ),
     SandboxProfile(
         id="sandbox.httpx@v1",
@@ -99,6 +101,8 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         timeout_seconds=300,
         max_output_bytes=262144,
         network_mode="scoped",
+        # reads HTTP(S)_PROXY from the environment; no flag for it
+        proxy_via_env=True,
     ),
     SandboxProfile(
         id="sandbox.nuclei@v1",
@@ -271,6 +275,8 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         max_output_bytes=524288,
         stall_seconds=300,
         network_mode="scoped",
+        # reads HTTP(S)_PROXY from the environment; no flag for it
+        proxy_via_env=True,
     ),
     SandboxProfile(
         id="sandbox.exploit@v1",
@@ -295,6 +301,8 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         max_output_bytes=524288,
         stall_seconds=300,
         network_mode="scoped",
+        # reads HTTP(S)_PROXY from the environment; no flag for it
+        proxy_via_env=True,
     ),
     SandboxProfile(
         id="sandbox.camoufox@v1",
@@ -312,6 +320,8 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         max_output_bytes=524288,
         stall_seconds=300,
         network_mode="scoped",
+        # reads HTTP(S)_PROXY from the environment; no flag for it
+        proxy_via_env=True,
         # the browser build lives under /root/.cache (mode 700)
         user="0:0",
         # camoufox checks its release and does a geoip lookup when a proxy is set

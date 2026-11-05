@@ -66,3 +66,25 @@ def test_a_double_dash_proxy_flag_is_allowed() -> None:
     assert m.proxy_flag == "--proxy"
     assert m.profile().proxy_flag == "--proxy"
     assert json.loads(m.model_dump_json())["proxy_flag"] == "--proxy"
+
+
+def test_braces_of_an_inline_script_are_not_placeholders() -> None:
+    """A driver with f-strings rides in argv; only known names are substituted."""
+    script = 'print(f"{a} {b}")'
+    m = manifest(
+        argv=["-c", script, "{url}"],
+        params={"url": {"type": "string", "required": True}},
+    )
+    argv = render_argv(m, {"url": "http://x/"})
+    assert argv == ["-c", script, "http://x/"]
+
+
+def test_a_whole_token_that_names_no_parameter_is_still_an_error() -> None:
+    with pytest.raises(ValidationError, match="unknown parameters"):
+        manifest(argv=["--url", "{url}", "--nope", "{missing}"])
+
+
+def test_a_scoped_manifest_needs_a_way_to_reach_the_proxy() -> None:
+    with pytest.raises(ValidationError, match="proxy flag or proxy_via_env"):
+        manifest(network="scoped")
+    assert manifest(network="scoped", proxy_via_env=True).proxy_via_env is True
