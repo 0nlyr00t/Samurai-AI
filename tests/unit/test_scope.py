@@ -203,3 +203,49 @@ def test_an_overlapping_exclusion_refuses_the_network() -> None:
 def test_a_non_network_is_reported_as_invalid() -> None:
     decision = ScopeContract(includes=("10.10.0.0/24",)).evaluate_network("example.com")
     assert not decision.allowed and "not a network" in decision.detail
+
+
+@pytest.mark.parametrize(
+    ("include", "candidate"),
+    [
+        ("10.10.10.5", "10.10.10.5"),
+        ("10.10.10.0/24", "10.10.10.7"),
+        ("10.10.0.0/16", "10.10.11.0/24"),
+        ("example.com", "api.example.com"),
+        ("*.example.com", "a.b.example.com"),
+        ("https://a.example.com:8443", "https://a.example.com:8443"),
+    ],
+)
+def test_an_already_authorized_target_is_covered(include: str, candidate: str) -> None:
+    """Widening is what deserves a prompt; a repeat or a subset does not."""
+    assert ScopeContract(includes=(include,)).covers(candidate)
+
+
+@pytest.mark.parametrize(
+    ("include", "candidate"),
+    [
+        ("10.10.10.0/24", "10.10.11.0/24"),
+        ("example.com", "notexample.com"),
+        ("example.com", "example.org"),
+        ("https://a.example.com:8443", "https://a.example.com:443"),
+        ("10.10.10.5", "10.10.10.6"),
+    ],
+)
+def test_a_target_outside_the_rule_is_not_covered(include: str, candidate: str) -> None:
+    assert not ScopeContract(includes=(include,)).covers(candidate)
+
+
+def test_an_alias_counts_as_covered_and_a_narrow_rule_is_no_widening() -> None:
+    scope = ScopeContract(includes=("10.10.10.5",), hosts={"box.htb": "10.10.10.5"})
+    assert scope.covers("box.htb")
+
+
+def test_a_single_address_rule_does_not_cover_more_than_itself() -> None:
+    """/32 must stay a /32: that is the whole point of adding one."""
+    scope = ScopeContract(includes=("10.10.10.5",))
+    assert scope.covers("10.10.10.5/32")
+    assert not scope.covers("10.10.10.0/24")
+
+
+def test_an_unparsable_target_is_not_covered() -> None:
+    assert not ScopeContract(includes=("example.com",)).covers("not a target")
