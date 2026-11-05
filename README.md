@@ -92,6 +92,10 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/uninstall.
 - [`SECURITY.md`](SECURITY.md) — как сообщать об уязвимостях.
 - [`Agent.md`](Agent.md) — handoff для разработки.
 
+## Лицензия
+
+Apache-2.0 — см. [`LICENSE`](LICENSE). Использование, форк и вклад в код допускаются на условиях лицензии; патентный грант включён.
+
 ## Состояние
 
 Активная разработка: 1362 автотеста, гейты CI (ruff, strict mypy, pytest, секрет-скан, сборка пакета), подписанные релизы. Не сделано: distributed runners (кроме SSH-туннеля к демону), отдельные инструменты shodan и censys, плагины на Python-хуках. ADB и VBoxManage проверены mock-прогонами, гены не мерялись полевой серией.
