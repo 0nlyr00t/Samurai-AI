@@ -113,6 +113,12 @@ class ToolExecutionService:
         check_tool(definition, operation.offline)
         self._apply_relay(operation, adapter)
         validated = self.registry.validate_params(definition, params or {})
+        # the rule book answers before anything is prepared: a denied call must
+        # not fail on a missing image first
+        decision = self.rule_decision(definition, validated)
+        if decision is not None and decision.is_denied:
+            rule = decision.rule.format() if decision.rule is not None else "deny"
+            raise ToolDeniedError(f"{definition.id} denied by rule {rule}")
         resolved = self._resolve_params(
             validated, operation_id, optional=_optional_params(definition)
         )
@@ -134,10 +140,6 @@ class ToolExecutionService:
             # the tool builds its own env at invoke time, so the injected values
             # travel with the parameters rather than in a local copy
             resolved[SECRET_ENV_KEY] = injected
-        decision = self.rule_decision(definition, resolved)
-        if decision is not None and decision.is_denied:
-            rule = decision.rule.format() if decision.rule is not None else "deny"
-            raise ToolDeniedError(f"{definition.id} denied by rule {rule}")
         approval = self._resolve_approval(
             operation_id,
             definition,
