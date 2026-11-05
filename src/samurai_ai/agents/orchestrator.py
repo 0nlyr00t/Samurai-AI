@@ -988,6 +988,7 @@ class AgentOrchestrator:
                 if self._task_done(operation_id, run.task_id):
                     return None
                 self.kernel.complete_task(operation_id, run.task_id)
+                self._note_missing_finding(operation_id, run)
             elif isinstance(command, FailCommand):
                 raise AgentError(f"agent requested failure: {command.reason}")
             else:
@@ -1006,6 +1007,22 @@ class AgentOrchestrator:
             self._reject(operation_id, run, command, str(exc))
             return str(exc)
         return None
+
+    def _note_missing_finding(self, operation_id: str, run: AgentRun) -> None:
+        """A closed task with no finding is the quiet way to end up empty-handed."""
+        findings = self.kernel.kernel.list_findings(operation_id)
+        if any(run.task_id in (item.summary or "") for item in findings):
+            return
+        self._append_event(
+            make_note_event(
+                operation_id,
+                run.id,
+                f"run.{run.id}.closed-without-finding",
+                f"task {run.task_id} closed with no finding — if the result is "
+                "reportable, propose_finding with the artifact id",
+                self.redactor,
+            )
+        )
 
     def _command_ask_operator(
         self,
