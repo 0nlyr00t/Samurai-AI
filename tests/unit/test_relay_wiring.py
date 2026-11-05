@@ -99,3 +99,23 @@ def test_an_http_fetch_takes_the_relay_prefix() -> None:
 
     ToolExecutionService._apply_relay(None, operation, tool)  # type: ignore[arg-type]
     assert tool.relay == "prlctl exec '{uuid}'"
+
+
+def test_the_scope_line_is_always_there_and_names_the_targets() -> None:
+    from samurai_ai.agents.orchestrator import AgentOrchestrator, _rejection_block
+    from samurai_ai.domain.scope import ScopeContract
+
+    class Ops:
+        def get(self, _id: str) -> object:
+            return type(
+                "Op", (), {"scope": ScopeContract(includes=("10.0.0.5",), excludes=("10.0.0.6",))}
+            )()
+
+    stand = object.__new__(AgentOrchestrator)
+    stand.operations = Ops()  # type: ignore[assignment]
+    notice = stand._scope_notice("op_1")  # type: ignore[attr-defined]
+    assert "in-scope targets: 10.0.0.5" in notice
+    assert "excluded: 10.0.0.6" in notice
+
+    block = _rejection_block(["'127.0.0.1' is outside the operation scope"], "10.0.0.5")
+    assert "Only these targets are allowed: 10.0.0.5" in block
