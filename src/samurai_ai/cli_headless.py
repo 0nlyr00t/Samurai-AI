@@ -33,6 +33,12 @@ def register_headless_commands(
     run.add_argument("--workers", type=int, default=2)
     run.add_argument("--approval-id", dest="approval_id")
     run.add_argument(
+        "--relay",
+        default="",
+        metavar="PREFIX",
+        help="run network tools through this prefix (persisted on the operation)",
+    )
+    run.add_argument(
         "--auto-approve",
         dest="auto_approve",
         action="store_true",
@@ -54,6 +60,8 @@ def register_headless_commands(
 def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> int | None:
     if args.command != "headless":
         return None
+    if args.relay:
+        swarms.operations.set_relay(args.operation_id, args.relay)
     route = [args.model_id, *args.fallbacks]
     approval_id = args.approval_id
     if approval_id is None:

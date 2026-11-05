@@ -111,6 +111,7 @@ class ToolExecutionService:
                 f"tool {definition.id} is risk class r4 and cannot be executed"
             )
         check_tool(definition, operation.offline)
+        self._apply_relay(operation, adapter)
         validated = self.registry.validate_params(definition, params or {})
         resolved = self._resolve_params(
             validated, operation_id, optional=_optional_params(definition)
@@ -221,6 +222,19 @@ class ToolExecutionService:
             self._fail_run(run, action.id)
             raise ToolExecutionError(f"tool {definition.id} failed: {exc}") from exc
         return self._finish_run(run, action.id, output)
+
+    def _apply_relay(self, operation: Any, adapter: Any) -> None:
+        """Point a sandbox adapter at the operation's relay, or back at docker."""
+        from samurai_ai.execution.relay import RelaySandboxRunner, build_runner
+
+        if not hasattr(adapter, "_runner"):
+            return
+        relay = operation.relay.strip()
+        current = adapter._runner
+        if relay and not isinstance(current, RelaySandboxRunner):
+            adapter._runner = build_runner(relay)
+        elif not relay and isinstance(current, RelaySandboxRunner):
+            adapter._runner = None
 
     def rule_decision(
         self, definition: ToolDefinition, params: Mapping[str, Any]

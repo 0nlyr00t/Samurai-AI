@@ -85,4 +85,24 @@ class RelaySandboxRunner(DockerSandboxRunner):
         return self.verify_allowlist_signature()
 
 
-__all__ = ["MAX_RELAY_LENGTH", "RelaySandboxRunner", "relay_command", "validate_relay"]
+def build_runner(relay: str) -> RelaySandboxRunner:
+    """A relay runner wired to a host shell, ready to hand to an adapter."""
+    from samurai_ai.config import sandbox_allowlist_path, vault_key_path
+    from samurai_ai.execution.process import ProcessManager
+    from samurai_ai.services.vault import load_master_key
+
+    return RelaySandboxRunner(
+        ProcessManager(allowed_executables=frozenset({"bash"})),
+        sandbox_allowlist_path(),
+        lambda: load_master_key(vault_key_path()),
+        relay,
+    )
+
+
+__all__ = [
+    "MAX_RELAY_LENGTH",
+    "RelaySandboxRunner",
+    "build_runner",
+    "relay_command",
+    "validate_relay",
+]

@@ -51,6 +51,12 @@ def register_swarm_commands(
     )
     run.add_argument("--approval-id", dest="approval_id")
     run.add_argument(
+        "--relay",
+        default="",
+        metavar="PREFIX",
+        help="run network tools through this prefix (persisted on the operation)",
+    )
+    run.add_argument(
         "--ask",
         dest="auto_approve",
         action="store_false",
@@ -105,6 +111,8 @@ def handle_swarm_command(
             )
             return 2
         route = [model_id, *args.fallbacks]
+        if args.relay:
+            swarms.operations.set_relay(args.operation_id, args.relay)
         approval_id = args.approval_id
         if approval_id is None:
             approval = swarms.prepare_model_approval(args.operation_id, route)

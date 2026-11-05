@@ -93,5 +93,21 @@ class OperationService:
         self.repository.update(operation, expected_version, event)
         return operation
 
+    def set_relay(self, operation_id: str, relay: str) -> Operation:
+        """Point the operation at a relay prefix, or clear it with an empty value."""
+        from samurai_ai.execution.relay import validate_relay
+
+        value = validate_relay(relay) if relay.strip() else ""
+        operation = self.get(operation_id)
+        expected_version = operation.version
+        operation.relay = value
+        event = OperationEvent(
+            operation_id=operation.id,
+            event_type="operation.relay.changed",
+            payload={"relay": value},
+        )
+        self.repository.update(operation, expected_version, event)
+        return operation
+
     def check_scope(self, operation_id: str, target: str) -> ScopeDecision:
         return self.get(operation_id).scope.evaluate(target)
