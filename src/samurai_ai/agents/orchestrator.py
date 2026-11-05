@@ -1163,7 +1163,8 @@ class AgentOrchestrator:
             "already go through it — call those. shell.exec runs on the host, which has NO "
             "route to the target: a bare curl/nmap there shows 'filtered' and is "
             "a dead end unless it prefixes the same relay. Address the target by "
-            "its own IP, never 127.0.0.1.]\n"
+            "its own IP. 127.0.0.1 under a relay is the VM itself, not the "
+            "target — use it only if the target really is the VM.]\n"
         )
 
     def _genes_excerpt(self) -> str:
