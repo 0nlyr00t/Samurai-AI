@@ -79,7 +79,7 @@ def test_stage4d_operation_planning_acceptance(tmp_path: Path) -> None:
     stack.kernel.transition_operation(operation_id, OperationStatus.PLANNING)
 
     stack.kernel.start_task(operation_id, "scenario-draft")
-    stack.kernel.complete_task(operation_id, "scenario-draft")
+    stack.kernel.complete_task(operation_id, "scenario-draft", force=True)
     stack.kernel.start_task(operation_id, "mapping")
 
     # --- test cases with ATT&CK, kill chain, expectations, deps, stop points ---
@@ -141,7 +141,7 @@ def test_stage4d_operation_planning_acceptance(tmp_path: Path) -> None:
         task_id="test-design",
         gate_id="mapping-complete",
     )
-    stack.kernel.complete_task(operation_id, "mapping")
+    stack.kernel.complete_task(operation_id, "mapping", force=True)
     stack.kernel.start_task(operation_id, "test-design")
     stack.kernel.register_artifact(
         operation_id,
@@ -151,9 +151,9 @@ def test_stage4d_operation_planning_acceptance(tmp_path: Path) -> None:
         task_id="review",
         gate_id="tests-ready",
     )
-    stack.kernel.complete_task(operation_id, "test-design")
+    stack.kernel.complete_task(operation_id, "test-design", force=True)
     stack.kernel.start_task(operation_id, "review")
-    stack.kernel.complete_task(operation_id, "review")
+    stack.kernel.complete_task(operation_id, "review", force=True)
 
     # --- runbook generation in PLANNING status: no active actions executed ---
     runbook = stack.planning.generate_runbook(operation_id)
@@ -172,7 +172,7 @@ def test_stage4d_operation_planning_acceptance(tmp_path: Path) -> None:
     assert "***REDACTED***" in text
 
     stack.kernel.start_task(operation_id, "runbook")
-    stack.kernel.complete_task(operation_id, "runbook")
+    stack.kernel.complete_task(operation_id, "runbook", force=True)
 
     # --- continue the lifecycle to reporting ---
     stack.kernel.transition_operation(operation_id, OperationStatus.APPROVAL)

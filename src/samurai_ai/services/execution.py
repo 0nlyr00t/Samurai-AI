@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from samurai_ai.domain.execution import (
@@ -19,6 +20,13 @@ from samurai_ai.domain.execution import (
 from samurai_ai.domain.kernel import Approval, ApprovalStatus, ArtifactKind, RiskClass
 from samurai_ai.domain.offline import check_tool
 from samurai_ai.domain.operations import OperationEvent
+from samurai_ai.domain.permission import (
+    Decision,
+    PermissionRule,
+    classify_command,
+    decide,
+    parse_mode,
+)
 from samurai_ai.domain.scope_guard import ScopeGuardError, guard
 from samurai_ai.domain.vault import SecretNotFoundError, SecretScopeError, secret_references
 from samurai_ai.execution.registry import ToolOutput, ToolRegistry, default_registry
@@ -47,6 +55,8 @@ class ToolExecutionService:
         scanner: PromptInjectionScanner | None = None,
         vault: VaultService | None = None,
         traffic: TrafficService | None = None,
+        permission_rules: Callable[[], tuple[PermissionRule, ...]] | None = None,
+        permission_mode: Callable[[], str | None] | None = None,
     ) -> None:
         self.operations = operations
         self.kernel = kernel
@@ -57,6 +67,10 @@ class ToolExecutionService:
         self.scanner = scanner or PromptInjectionScanner()
         self.vault = vault
         self.traffic = traffic
+        #: the operator's rule book at the boundary: every path (CLI, TUI,
+        #: executor, daemon) obeys it, not just the ones that remembered to ask
+        self.permission_rules = permission_rules
+        self.permission_mode = permission_mode
 
     def list_tools(self) -> list[ToolDefinition]:
         return self.registry.definitions()
@@ -97,7 +111,14 @@ class ToolExecutionService:
                 f"tool {definition.id} is risk class r4 and cannot be executed"
             )
         check_tool(definition, operation.offline)
+        self._apply_relay(operation, adapter)
         validated = self.registry.validate_params(definition, params or {})
+        # the rule book answers before anything is prepared: a denied call must
+        # not fail on a missing image first
+        decision = self.rule_decision(definition, validated)
+        if decision is not None and decision.is_denied:
+            rule = decision.rule.format() if decision.rule is not None else "deny"
+            raise ToolDeniedError(f"{definition.id} denied by rule {rule}")
         resolved = self._resolve_params(
             validated, operation_id, optional=_optional_params(definition)
         )
@@ -120,7 +141,13 @@ class ToolExecutionService:
             # travel with the parameters rather than in a local copy
             resolved[SECRET_ENV_KEY] = injected
         approval = self._resolve_approval(
-            operation_id, definition, task_id, approval_id, approval_resolver
+            operation_id,
+            definition,
+            task_id,
+            approval_id,
+            approval_resolver,
+            allowed_by_rule=decision is not None and decision.is_allowed,
+            rule_label=(decision.rule.format() if decision is not None and decision.rule else ""),
         )
         redacted_params, _ = self._redact_params(validated)
 
@@ -198,6 +225,37 @@ class ToolExecutionService:
             raise ToolExecutionError(f"tool {definition.id} failed: {exc}") from exc
         return self._finish_run(run, action.id, output)
 
+    def _apply_relay(self, operation: Any, adapter: Any) -> None:
+        """Point a sandbox adapter at the operation's relay, or back at docker."""
+        from samurai_ai.execution.relay import RelaySandboxRunner, build_runner
+
+        if not hasattr(adapter, "_runner"):
+            return
+        relay = operation.relay.strip()
+        current = adapter._runner
+        if relay and not isinstance(current, RelaySandboxRunner):
+            adapter._runner = build_runner(relay)
+        elif not relay and isinstance(current, RelaySandboxRunner):
+            adapter._runner = None
+
+    def rule_decision(
+        self, definition: ToolDefinition, params: Mapping[str, Any]
+    ) -> Decision | None:
+        """The operator's answer for this call, when there is one.
+
+        Only shells and commands carry a rule-able text; a tool without one keeps
+        the old approval flow untouched.
+        """
+        if self.permission_rules is None:
+            return None
+        text = rule_text(params)
+        if text is None:
+            return None
+        mode = parse_mode(self.permission_mode() if self.permission_mode else None)
+        return decide(
+            self.permission_rules(), definition.id, text, mode, classify_command(text)
+        )
+
     def _resolve_approval(
         self,
         operation_id: str,
@@ -205,6 +263,9 @@ class ToolExecutionService:
         task_id: str | None,
         approval_id: str | None,
         resolver: Callable[[str], bool] | None = None,
+        *,
+        allowed_by_rule: bool = False,
+        rule_label: str = "",
     ) -> Approval:
         action = f"tool.run {definition.id}"
         if approval_id is None:
@@ -221,6 +282,8 @@ class ToolExecutionService:
                 reason=f"{definition.id} v{definition.version}",
                 requested_by="operator",
             )
+            if approval.status != ApprovalStatus.APPROVED and allowed_by_rule:
+                return self.kernel.approve(approval.id, decided_by=f"rule:{rule_label}")
             if approval.status != ApprovalStatus.APPROVED:
                 if resolver is None:
                     raise ApprovalRequiredError(approval.id)
@@ -439,6 +502,23 @@ class ToolExecutionService:
             return value
 
         return walk(params), count
+
+
+def rule_text(params: Mapping[str, Any]) -> str | None:
+    """The line an operator rule matches against.
+
+    A shell tool carries its own command; everything else is described by its
+    parameters, so a rule can still name the target that matters.
+    """
+    command = params.get("command")
+    if isinstance(command, str) and command.strip():
+        return command
+    rendered = json.dumps(
+        {key: value for key, value in params.items() if not str(key).startswith("_")},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return rendered or None
 
 
 def _optional_params(definition: object) -> frozenset[str]:

@@ -25,6 +25,7 @@ from samurai_ai.domain.kernel import (
     PlanTask,
     RiskClass,
     StageGate,
+    TaskEvidenceError,
     TaskStateError,
     TaskStatus,
 )
@@ -160,7 +161,9 @@ class KernelService:
 
         return self._apply_plan_mutation(operation_id, mutate)
 
-    def complete_task(self, operation_id: str, task_id: str) -> OperationPlan:
+    def complete_task(
+        self, operation_id: str, task_id: str, *, force: bool = False
+    ) -> OperationPlan:
         def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
             task = plan.task_by_id(task_id)
             if task is None:
@@ -174,10 +177,30 @@ class KernelService:
                     raise ArtifactError(
                         f"task {task_id} is missing required artifact {requirement!r}"
                     )
+            if not force and not self._task_has_evidence(operation_id, task_id):
+                raise TaskEvidenceError(
+                    f"task {task_id} has no evidence: run a tool, record a fact with an "
+                    "artifact id, or propose a finding — or close it with force"
+                )
             task.status = TaskStatus.DONE
             return "task.completed", {"plan_id": plan.id, "task_id": task_id}
 
         return self._apply_plan_mutation(operation_id, mutate)
+
+    def _task_has_evidence(self, operation_id: str, task_id: str) -> bool:
+        """Any artifact of this task, or a finding one of them proves."""
+        own = [
+            artifact.id
+            for artifact in self.kernel.list_artifacts(operation_id)
+            if artifact.task_id == task_id
+        ]
+        if own:
+            return True
+        return any(
+            finding.evidence_ids
+            for finding in self.kernel.list_findings(operation_id)
+            if set(finding.evidence_ids)
+        )
 
     def reset_task(self, operation_id: str, task_id: str) -> OperationPlan:
         """Return a task to pending: after a stopped subagent, or to redo it."""

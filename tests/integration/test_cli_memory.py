@@ -259,6 +259,19 @@ def setup_agent_operation(database: str, llm_url: str, capsys) -> str:
     capsys.readouterr()
     assert main(["--db", database, "task", "start", operation_id, "recon"]) == 0
     capsys.readouterr()
+    # the completion gate wants evidence; the scripted executor runs no tools
+    assert (
+        main(["--db", database, "artifact", "add", operation_id,
+              "--kind", "note", "--text", "seed", "--task", "recon"])
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(["--db", database, "artifact", "add", operation_id,
+              "--kind", "note", "--text", "seed", "--task", "testing"])
+        == 0
+    )
+    capsys.readouterr()
     assert (
         main(["--db", database, "model", "register", "fake",
               "--base-url", f"{llm_url}/v1"])

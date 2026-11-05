@@ -109,7 +109,7 @@ def test_stage4_bug_bounty_acceptance(tmp_path: Path) -> None:
 
     # --- tasks with governed artifact requirements ---
     stack.kernel.start_task(operation_id, "recon")
-    stack.kernel.complete_task(operation_id, "recon")
+    stack.kernel.complete_task(operation_id, "recon", force=True)
     stack.kernel.register_artifact(
         operation_id,
         ArtifactKind.NOTE,
@@ -119,7 +119,7 @@ def test_stage4_bug_bounty_acceptance(tmp_path: Path) -> None:
         gate_id="recon-complete",
     )
     stack.kernel.start_task(operation_id, "asset-inventory")
-    stack.kernel.complete_task(operation_id, "asset-inventory")
+    stack.kernel.complete_task(operation_id, "asset-inventory", force=True)
     stack.kernel.register_artifact(
         operation_id,
         ArtifactKind.LOG,
@@ -171,9 +171,9 @@ def test_stage4_bug_bounty_acceptance(tmp_path: Path) -> None:
         requirement="testing-log",
         gate_id="testing-complete",
     )
-    stack.kernel.complete_task(operation_id, "testing")
+    stack.kernel.complete_task(operation_id, "testing", force=True)
     stack.kernel.start_task(operation_id, "validation")
-    stack.kernel.complete_task(operation_id, "validation")
+    stack.kernel.complete_task(operation_id, "validation", force=True)
 
     # --- verification: report generation is possible, gates block reporting ---
     stack.kernel.transition_operation(operation_id, OperationStatus.VERIFICATION)
@@ -188,7 +188,7 @@ def test_stage4_bug_bounty_acceptance(tmp_path: Path) -> None:
     assert report.finding_ids == (finding.id,)
 
     stack.kernel.start_task(operation_id, "reporting")
-    stack.kernel.complete_task(operation_id, "reporting")
+    stack.kernel.complete_task(operation_id, "reporting", force=True)
     for gate_id in ("scope-locked", "recon-complete", "testing-complete", "ready-to-report"):
         stack.kernel.pass_gate(operation_id, gate_id)
     stack.kernel.transition_operation(operation_id, OperationStatus.REPORTING)

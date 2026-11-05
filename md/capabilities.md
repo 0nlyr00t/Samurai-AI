@@ -129,6 +129,10 @@ samurai run "Lab" --mode ctf-htb --include 192.0.2.1 \
 
 
 
+## Релeй к удалённой сети
+
+Если VPN живёт в VM или за jump-хостом, `--relay "<префикс>"` (`prlctl exec '<uuid>'`, `ssh -J jump`) уводит сетевые инструменты туда: `bash -lc "<префикс> <инструмент> <аргументы>"` на хосте. Контейнер и образ не нужны, scope-guard, allowlist и артефакты остаются.
+
 ## Внешняя разведка (shodan, censys)
 
 `intel.shodan` и `intel.censys` — пассивный lookup по in-scope IP или домену. Ключ лежит в vault и подставляется по имени переменной, в argv не попадает; исполняется stdlib-драйвером в закреплённом python-образе, прокси передаётся через `HTTP(S)_PROXY`.

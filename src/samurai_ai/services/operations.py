@@ -26,9 +26,15 @@ class OperationService:
         *,
         offline: bool = False,
         objective: str = "",
+        relay: str = "",
     ) -> Operation:
         operation = Operation(
-            name=name, mode=mode, scope=scope, objective=objective, offline=offline
+            name=name,
+            mode=mode,
+            scope=scope,
+            objective=objective,
+            offline=offline,
+            relay=relay.strip(),
         )
         event = OperationEvent(
             operation_id=operation.id,
@@ -83,6 +89,22 @@ class OperationService:
                 "scope": operation.scope.model_dump(mode="json"),
                 "hosts": operation.scope.hosts,
             },
+        )
+        self.repository.update(operation, expected_version, event)
+        return operation
+
+    def set_relay(self, operation_id: str, relay: str) -> Operation:
+        """Point the operation at a relay prefix, or clear it with an empty value."""
+        from samurai_ai.execution.relay import validate_relay
+
+        value = validate_relay(relay) if relay.strip() else ""
+        operation = self.get(operation_id)
+        expected_version = operation.version
+        operation.relay = value
+        event = OperationEvent(
+            operation_id=operation.id,
+            event_type="operation.relay.changed",
+            payload={"relay": value},
         )
         self.repository.update(operation, expected_version, event)
         return operation

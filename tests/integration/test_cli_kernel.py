@@ -161,13 +161,13 @@ def test_cli_kernel_end_to_end(tmp_path: Path, capsys) -> None:
 
     assert main(["--db", database, "task", "start", operation_id, "recon"]) == 0
     capsys.readouterr()
-    assert main(["--db", database, "task", "complete", operation_id, "recon"]) == 0
+    assert main(["--db", database, "task", "complete", operation_id, "recon", "--force"]) == 0
     capsys.readouterr()
     assert main(["--db", database, "gate", "pass", operation_id, "recon-complete"]) == 0
     capsys.readouterr()
     assert main(["--db", database, "task", "start", operation_id, "review"]) == 0
     capsys.readouterr()
-    assert main(["--db", database, "task", "complete", operation_id, "review"]) == 0
+    assert main(["--db", database, "task", "complete", operation_id, "review", "--force"]) == 0
     capsys.readouterr()
 
     assert main(["--db", database, "operation", "transition", operation_id, "verification"]) == 0
