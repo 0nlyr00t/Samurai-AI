@@ -5014,6 +5014,15 @@ def _chat_ready_stack(tmp_path: Path, provider: object):
     return stack, operation
 
 
+async def _wait_busy(app, pilot) -> None:  # type: ignore[no-untyped-def]
+    """Let the turn actually start; a press before that only arms the exit."""
+    for _ in range(60):
+        if app._chat_busy:
+            return
+        await pilot.pause()
+    raise AssertionError("the turn never started")
+
+
 def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
     """A stop finishes the round; an idle press only arms the exit."""
     provider = _TwoToolRoundsProvider()
@@ -5030,7 +5039,7 @@ def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
             ):
                 app.query_one("#command-input", Input).value = "проверь вход"
                 await pilot.press("enter")
-                await pilot.pause()
+                await _wait_busy(app, pilot)
                 await pilot.press("ctrl+c")
                 await pilot.pause()
                 # the round's own calls still run: results must not be lost
@@ -5061,7 +5070,7 @@ def test_the_stop_note_reaches_the_model_once(tmp_path: Path) -> None:
             await pilot.pause()
             app.query_one("#command-input", Input).value = "проверь вход"
             await pilot.press("enter")
-            await pilot.pause()
+            await _wait_busy(app, pilot)
             await pilot.press("ctrl+c")
             await app.workers.wait_for_complete()
             await pilot.pause()
