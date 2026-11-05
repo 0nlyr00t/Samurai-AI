@@ -5425,7 +5425,9 @@ def test_a_new_finding_reaches_the_tab_without_a_refresh_beat(tmp_path: Path) ->
             await pilot.pause()
             app._switch_view("view-hunt")
             await pilot.pause()
-            stack[1].create_finding(operation.id, "Valid creds for svc_backup", FindingSeverity.CRITICAL)
+            stack[1].create_finding(
+                operation.id, "Valid creds for svc_backup", FindingSeverity.CRITICAL
+            )
             app.refresh_hunt()
             await pilot.pause()
             lines = "\n".join(strip.text for strip in app.query_one("#view-hunt").lines)
