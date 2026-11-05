@@ -87,6 +87,9 @@ def render_argv(manifest: ToolManifest, params: dict[str, Any]) -> list[str]:
     """Substitute placeholders; literal tokens come from the (reviewed) manifest."""
     def substitute(match: re.Match[str]) -> str:
         name = match.group(1)
+        if name not in manifest.params:
+            # a brace from an inline script, not a placeholder
+            return match.group(0)
         value = params.get(name, manifest.params[name].default)
         return render_value(manifest, name, value)
 
@@ -181,6 +184,11 @@ class ManifestTool:
         self._definition = manifest.definition()
 
     @property
+    def profile_id(self) -> str:
+        """The generated profile; the executor reads its declared env names."""
+        return self.manifest.profile_id
+
+    @property
     def definition(self) -> ToolDefinition:
         return self._definition
 
@@ -254,6 +262,11 @@ class ManifestTool:
             )
         argv = render_argv(self.manifest, resolved)
         profile = self.manifest.profile()
+        # env the executor resolved from the vault (declared names only)
+        extra_env = resolved.get("_secret_env") or {}
+        env = dict(self.manifest.env)
+        if isinstance(extra_env, dict):
+            env.update({str(key): str(value) for key, value in extra_env.items()})
         run_id = uuid4().hex[:12]
         outcome = self.runner.run(
             profile,
@@ -261,7 +274,7 @@ class ManifestTool:
             self.manifest.executable,
             argv,
             scope if profile.network_mode == "scoped" else None,
-            env=dict(self.manifest.env) or None,
+            env=env or None,
             stdin_data=render_stdin(self.manifest, resolved),
         )
         result = outcome.result

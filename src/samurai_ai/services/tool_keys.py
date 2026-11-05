@@ -28,10 +28,17 @@ class ToolKey:
 #: Every env name any profile declares. The catalogue is what the settings screen
 #: lists; a name missing here still works if a tool declares it.
 CATALOGUE: tuple[ToolKey, ...] = (
-    ToolKey("SHODAN_API_KEY", "Shodan", "recon.subfinder-passive",
-            "https://account.shodan.io", "passive subdomains"),
-    ToolKey("CENSYS_API_KEY", "Censys", "recon.subfinder-passive",
-            "https://search.censys.io/account/api", "passive subdomains"),
+    ToolKey("SHODAN_API_KEY", "Shodan", "intel.shodan",
+            "https://account.shodan.io", "host lookup and domain DNS map"),
+    ToolKey("CENSYS_API_KEY", "Censys (subfinder)", "recon.subfinder-passive",
+            "https://accounts.censys.io/settings/personal-access-tokens",
+            "passive subdomains via subfinder"),
+    ToolKey("CENSYS_API_TOKEN", "Censys (tool)", "intel.censys",
+            "https://accounts.censys.io/settings/personal-access-tokens",
+            "host lookup and certificate search"),
+    ToolKey("CENSYS_ORG_ID", "Censys organization id", "intel.censys",
+            "https://accounts.censys.io/settings/personal-access-tokens",
+            "optional, for paid plans"),
     ToolKey("VIRUSTOTAL_API_KEY", "VirusTotal", "recon.subfinder-passive",
             "https://www.virustotal.com/gui/my-apikey", "passive subdomains"),
     ToolKey("SECURITYTRAILS_API_KEY", "SecurityTrails", "recon.subfinder-passive",
