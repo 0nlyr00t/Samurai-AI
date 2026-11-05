@@ -937,3 +937,21 @@ def test_an_answered_question_reaches_the_next_step(
         message.content for message in fake.requests[-1].messages if message.role == "user"
     )
     assert '"selected": ["Yes"]' in later_prompt
+
+
+def test_closing_without_a_finding_leaves_a_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty report is the quiet failure mode; the note says it out loud."""
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue('{"steps": ["probe"]}', '{"commands": [{"type": "complete_task"}]}')
+    orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+
+    notes = [
+        event.payload["key"]
+        for event in service.events(operation_id)
+        if event.event_type == "agent.note"
+    ]
+    assert any("closed-without-finding" in key for key in notes)
