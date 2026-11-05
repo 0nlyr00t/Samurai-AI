@@ -87,7 +87,7 @@ def test_stage4b_ctf_acceptance(tmp_path: Path) -> None:
 
     # --- recon and hypothesis loop with governed artifacts ---
     stack.kernel.start_task(operation_id, "recon")
-    stack.kernel.complete_task(operation_id, "recon")
+    stack.kernel.complete_task(operation_id, "recon", force=True)
     stack.kernel.register_artifact(
         operation_id,
         ArtifactKind.NOTE,
@@ -114,7 +114,7 @@ def test_stage4b_ctf_acceptance(tmp_path: Path) -> None:
         task_id="exploitation",
         gate_id="solution-confirmed",
     )
-    stack.kernel.complete_task(operation_id, "hypothesis-loop")
+    stack.kernel.complete_task(operation_id, "hypothesis-loop", force=True)
     stack.kernel.start_task(operation_id, "exploitation")
 
     # --- flag capture: proof artifact, format enforcement, gate artifact ---
@@ -134,9 +134,9 @@ def test_stage4b_ctf_acceptance(tmp_path: Path) -> None:
     )
     assert stack.kernel.kernel.artifact_exists(operation_id, "flag-proof")
 
-    stack.kernel.complete_task(operation_id, "exploitation")
+    stack.kernel.complete_task(operation_id, "exploitation", force=True)
     stack.kernel.start_task(operation_id, "flag-capture")
-    stack.kernel.complete_task(operation_id, "flag-capture")
+    stack.kernel.complete_task(operation_id, "flag-capture", force=True)
 
     # --- verification: writeup possible, reporting blocked by gates ---
     stack.kernel.transition_operation(operation_id, OperationStatus.VERIFICATION)
@@ -159,7 +159,7 @@ def test_stage4b_ctf_acceptance(tmp_path: Path) -> None:
     assert "***REDACTED***" in writeup_text
 
     stack.kernel.start_task(operation_id, "writeup")
-    stack.kernel.complete_task(operation_id, "writeup")
+    stack.kernel.complete_task(operation_id, "writeup", force=True)
     for gate_id in (
         "challenge-locked",
         "solution-confirmed",

@@ -45,14 +45,32 @@ def direction(command: str) -> str | None:
     if not tokens:
         return None
     binary = tokens[0].rsplit("/", 1)[-1].lower()
-    plain = [token for token in tokens[1:] if not token.startswith("-")]
+    rest = tokens[1:]
+    if binary == "prlctl":
+        # a relay wrapper: the interesting command is the one it runs remotely,
+        # and its uuid would otherwise be the same for every call
+        rest = [
+            token
+            for token in rest
+            if token != "exec" and token.strip("'{}").count("-") < 1
+        ]
+    plain = [token for token in rest if not token.startswith("-")]
     if not plain:
         return binary
+    if binary == "prlctl":
+        binary = plain[0].rsplit("/", 1)[-1].lower()
+        plain = plain[1:]
     # A flag value (`-p 443`) sits among the plain tokens too; a target usually
     # carries a dot, a slash or a colon, so prefer the first such token and only
     # fall back to the last plain one.
     target = next((token for token in plain if any(mark in token for mark in "./:")), plain[-1])
-    return f"{binary} {target.lower()}"
+    lower = target.lower()
+    # a URL carries many endpoints under one host; the last path-bearing token
+    # is what makes /login and /checkout different places
+    deeper = [token for token in plain if token != target and "://" in token]
+    if deeper:
+        return f"{binary} {lower} {deeper[-1].lower()}"
+    return f"{binary} {lower}"
 
 
 class Stagnation:

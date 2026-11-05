@@ -18,7 +18,7 @@ import pytest
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRunStatus
-from samurai_ai.domain.kernel import PlanTask, RiskClass
+from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass
 from samurai_ai.domain.models import (
     ApiFamily,
     ModelCapability,
@@ -159,6 +159,10 @@ class Stack:
         self.kernel.create_plan(
             operation.id, "plan",
             [PlanTask(id="probe", title="Probe", risk_class=RiskClass.R1)], [],
+        )
+        # scripted answers run no tools; the completion gate wants evidence
+        self.kernel.register_artifact(
+            operation.id, ArtifactKind.NOTE, "seed", task_id="probe"
         )
         approval = self.kernel.request_approval(
             operation.id, "model.call fake/agent@v1", RiskClass.R2

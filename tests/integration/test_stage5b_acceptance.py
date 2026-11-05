@@ -22,7 +22,7 @@ import pytest
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
 from samurai_ai.domain.agents import AgentRunStatus
-from samurai_ai.domain.kernel import PlanTask, RiskClass, TaskStatus
+from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass, TaskStatus
 from samurai_ai.domain.memory import MemoryKind, MemoryNotFoundError
 from samurai_ai.domain.models import (
     ApiFamily,
@@ -195,6 +195,11 @@ class Stack:
             name, OperationMode.BUG_BOUNTY, ScopeContract(includes=("example.com",))
         )
         self.kernel.create_plan(operation.id, f"{name} plan", tasks, [])
+        # scripted answers run no tools; the completion gate wants evidence
+        for task in tasks:
+            self.kernel.register_artifact(
+                operation.id, ArtifactKind.NOTE, "seed", task_id=task.id
+            )
         approval = self.kernel.request_approval(
             operation.id, "model.call fake/agent@v1", RiskClass.R2
         )
@@ -323,6 +328,11 @@ def test_custom_playbook_and_trusted_skills_e2e(
     )
     stack.kernel.approve(approval.id, decided_by="operator")
 
+    # the scripted executor never runs a tool, so evidence is seeded per task
+    for task in plan.tasks:
+        stack.kernel.register_artifact(
+            operation.id, ArtifactKind.NOTE, "seed", task_id=task.id
+        )
     _CapturingHandler.queue = [PLANNER_ANSWER, PLANNER_ANSWER]
     _CapturingHandler.executor_queue = [EXECUTOR_ANSWER, EXECUTOR_ANSWER]
     swarm = stack.swarms.start(

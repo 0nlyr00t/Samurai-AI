@@ -33,6 +33,11 @@ from samurai_ai.services.operations import OperationService
 from samurai_ai.storage.swarm import SwarmRunRepository
 
 
+def always_approve(_approval_id: str) -> bool:
+    """The unattended answer: a run without an operator approves its own calls."""
+    return True
+
+
 class SwarmService:
     def __init__(
         self,

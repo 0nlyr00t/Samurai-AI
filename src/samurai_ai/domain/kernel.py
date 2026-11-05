@@ -22,6 +22,10 @@ class TaskStateError(KernelError):
     pass
 
 
+class TaskEvidenceError(TaskStateError):
+    """The task is ready to close but nothing proves it was worked on."""
+
+
 class GateStateError(KernelError):
     pass
 
