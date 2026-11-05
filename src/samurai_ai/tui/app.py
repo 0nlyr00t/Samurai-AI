@@ -305,7 +305,9 @@ class SamuraiApp(
     }
 
     BINDINGS = [
-        Binding("ctrl+c", "quit_requested", "Stop / quit", show=False),
+        Binding("ctrl+c", "quit_requested", "Copy / stop / quit", show=False),
+        # copy without the ladder: the gesture people expect from a terminal
+        Binding("ctrl+shift+c", "copy_selection", "Copy selection", show=False, priority=True),
         Binding("ctrl+o", "toggle_journal", "Toggle journal", show=False),
         Binding("ctrl+p", "command_palette", "Commands", show=False, priority=True),
         Binding("f1", "show_help", "Keys", show=False),
@@ -712,6 +714,22 @@ class SamuraiApp(
         command_input.value = value
         command_input.cursor_position = len(value)
 
+    def _selected_text(self) -> str | None:
+        """What is selected in the active screen, if anything."""
+        screen = self.screen
+        getter = getattr(screen, "get_selected_text", None)
+        text = getter() if callable(getter) else None
+        return text or None
+
+    def action_copy_selection(self) -> None:
+        """Ctrl+Shift+C: copy the selection, always, in every screen."""
+        text = self._selected_text()
+        if text is None:
+            self._write_dim(self.translator.t("mouse.nothing-selected"))
+            return
+        self.copy_to_clipboard(text)
+        self._write_dim(self.translator.t("mouse.copied", chars=len(text)))
+
     def action_quit_requested(self) -> None:
         """First press stops the work, second press leaves.
 
@@ -720,6 +738,13 @@ class SamuraiApp(
         the step in flight finishes, the next one is not started — so nothing is
         left half-done; interrupting again is how you leave anyway.
         """
+        # a selection is what the operator wants to copy; quitting is the rare
+        # case once something is highlighted
+        selected = self._selected_text()
+        if selected is not None:
+            self.copy_to_clipboard(selected)
+            self._write_dim(self.translator.t("mouse.copied", chars=len(selected)))
+            return
         now = time.monotonic()
         if now - self._last_quit_request <= self._QUIT_CONFIRM_SECONDS:
             self.exit()

@@ -327,11 +327,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.compact": "/compact          Compress the conversation context",
         "help.clear": "/clear            Forget the conversation, here and in the database",
         "help.mouse": "/mouse            Toggle mouse capture (off = native selection)",
+        "help.copy-key": "Ctrl-Shift-C      Copy the selection (double click selects a word)",
         "help.trust": "/trust           Manage directory access trust",
         "help.exit": "/exit             Close Samurai AI",
         "help.ctrl-o": "Ctrl-O            Toggle the event journal",
         "help.ctrl-c": (
-            "Ctrl-C            Copy the in-app selection (with /mouse on); double-press to quit"
+            "Ctrl-C            Copy the selection; with nothing selected: stop the run, then quit"
         ),
         "error.unknown-command": "Unknown command: {name}. Use /help.",
         "chat.no-model": "No default model configured — pick one with /model.",
@@ -488,7 +489,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "bounty.findings": "Current findings",
         "strip.agents": "agents {running}/{total}",
         "strip.todo": "todo {done}/{total}",
-        "mouse.enabled": "mouse capture on (hover and click work; drag-select + Ctrl+C to copy)",
+        "mouse.copied": "copied {chars} chars",
+        "mouse.nothing-selected": "nothing is selected",
+        "mouse.enabled": "mouse capture on (drag over the journal, then Ctrl+C copies)",
         "mouse.disabled": "mouse capture off — the terminal handles selection and copy natively",
         "side.workspace": "workspace",
         "newop.title": "New operation tab",
@@ -889,11 +892,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.compact": "/compact          Сжать контекст разговора",
         "help.clear": "/clear            Забыть переписку — здесь и в базе",
         "help.mouse": "/mouse            Захват мыши (выкл = обычное выделение терминала)",
+        "help.copy-key": "Ctrl-Shift-C      Копировать выделение (двойной клик — слово)",
         "help.trust": "/trust           Управление доверием к директории",
         "help.exit": "/exit             Закрыть Samurai AI",
         "help.ctrl-o": "Ctrl-O            Переключить журнал событий",
         "help.ctrl-c": (
-            "Ctrl-C            Копировать выделение в приложении (при /mouse); дважды — выход"
+            "Ctrl-C            Копировать выделение; без выделения — остановка, затем выход"
         ),
         "error.unknown-command": "Неизвестная команда: {name}. Используйте /help.",
         "chat.no-model": "Модель по умолчанию не настроена — выберите её через /model.",
@@ -1037,7 +1041,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "bounty.findings": "Текущие находки",
         "strip.agents": "агенты {running}/{total}",
         "strip.todo": "todo {done}/{total}",
-        "mouse.enabled": "захват мыши включён (hover и клики; выделение + Ctrl+C для копии)",
+        "mouse.copied": "скопировано символов: {chars}",
+        "mouse.nothing-selected": "ничего не выделено",
+        "mouse.enabled": "захват мыши включён (выделяй по журналу, Ctrl+C скопирует)",
         "mouse.disabled": "захват мыши выключен — выделение и копирование обычные, как в терминале",
         "side.workspace": "workspace",
         "newop.title": "Новая вкладка операции",
@@ -1172,6 +1178,7 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.new",
     "help.open",
     "help.mouse",
+    "help.copy-key",
     "help.trust",
     "help.exit",
     "help.ctrl-o",

@@ -5256,3 +5256,112 @@ def test_a_failed_turn_shows_its_process_log_without_a_press(tmp_path: Path) -> 
             assert "▾ ⚙" in text and "boom" in text
 
     asyncio.run(exercise())
+
+
+def _select_journal(pilot, journal) -> None:  # type: ignore[no-untyped-def]
+    """Drag over the journal the way an operator copies a line."""
+    pilot.app.screen.clear_selection() if hasattr(pilot.app.screen, "clear_selection") else None
+    await_down = pilot.mouse_down(offset=(2, 1), widget=journal)
+    return await_down
+
+
+def test_ctrl_c_copies_the_selection_instead_of_quitting(tmp_path: Path) -> None:
+    """Copying is what a selected line is for; quitting is the rare case."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+    copied: list[str] = []
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            app.query_one("#command-input", Input).value = "проверь вход"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            with patch.object(app, "copy_to_clipboard", side_effect=copied.append):
+                await pilot.mouse_down(offset=(2, 1), widget=journal)
+                await pilot.hover(journal, offset=(30, 4))
+                await pilot.mouse_up(offset=(30, 4), widget=journal)
+                await pilot.pause()
+                assert app._selected_text()
+                await pilot.press("ctrl+c")
+                await pilot.pause()
+            assert copied, "the selection must reach the clipboard"
+            assert copied[0].strip()
+            # the app did not leave, and no stop was armed by the copy
+            assert app.is_running
+            assert not app._stop_requested
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_shift_c_copies_and_says_so(tmp_path: Path) -> None:
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+    copied: list[str] = []
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            app.query_one("#command-input", Input).value = "проверь вход"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.mouse_down(offset=(2, 1), widget=journal)
+            await pilot.hover(journal, offset=(30, 4))
+            await pilot.mouse_up(offset=(30, 4), widget=journal)
+            await pilot.pause()
+            with patch.object(app, "copy_to_clipboard", side_effect=copied.append):
+                app.action_copy_selection()
+                await pilot.pause()
+            assert copied and "copied" in "\n".join(
+                _message_text(m) for m in app.query_one("#journal", RichLog).lines
+            )
+
+    asyncio.run(exercise())
+
+
+def test_without_a_selection_ctrl_c_still_stops_and_quits(tmp_path: Path) -> None:
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert app._selected_text() is None
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert app.is_running
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert not app.is_running
+
+    asyncio.run(exercise())
+
+
+def test_the_attach_tail_is_selectable_too(tmp_path: Path) -> None:
+    """Every surface that holds text allows the drag, not just the journal."""
+    from samurai_ai.i18n import Translator
+    from samurai_ai.tui.screens.attach import AttachScreen
+    from samurai_ai.tui.widgets import SelectableRichLog
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.push_screen(AttachScreen(Translator("en"), tmp_path / "s.sock", "op_1"))
+            await pilot.pause()
+            log = app.screen.query_one("#attach-log")
+            assert isinstance(log, SelectableRichLog)
+            assert log.allow_select
+            await pilot.press("escape")
+
+    asyncio.run(exercise())
