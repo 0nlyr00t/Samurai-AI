@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/samurai-logo.jpg" width="880" alt="Samurai AI — самурай с катаной в красном росчерке-кольце, вордмарк и слоган по дуге">
+  <img src="assets/samurai-logo.jpg" width="880" alt="Samurai AI — самурай с катаной в красном росчерке-кольце и вордмарк SAMURAI-AI">
 </p>
 
 <p align="center">
