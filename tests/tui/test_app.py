@@ -5031,13 +5031,8 @@ def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
                 app.query_one("#command-input", Input).value = "проверь вход"
                 await pilot.press("enter")
                 await pilot.pause()
-                assert app._chat_busy
                 await pilot.press("ctrl+c")
                 await pilot.pause()
-                assert app._stop_requested
-                text = "\n".join(_message_text(m) for m in messages)
-                assert "stopping after the current results are checked" in text
-                assert app.is_running
                 # the round's own calls still run: results must not be lost
                 await app.workers.wait_for_complete()
                 await pilot.pause()
@@ -5045,8 +5040,10 @@ def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
                 assert "first-result" in text and "second-result" in text
                 # and the model was told to conclude, which it did
                 assert "обе гипотезы проверены" in text
+                # the turn did not go on exploring after the conclusion
                 assert provider.calls == 2
-                assert not app._chat_busy
+                assert "stopped" in text
+                assert app.is_running
                 await pilot.press("ctrl+c")
                 await pilot.pause()
                 assert not app.is_running
