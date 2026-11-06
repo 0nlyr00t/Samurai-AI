@@ -7,6 +7,7 @@ from test_app import _minimal_stack
 
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.tui.journal import BlockJournal
 from samurai_ai.tui.app import SamuraiApp
 from samurai_ai.tui.screens.attach import AttachScreen
 
@@ -47,5 +48,5 @@ def _capture(app: SamuraiApp, sink: list[str]):
 
     from textual.widgets import RichLog
 
-    journal = app.query_one("#journal", RichLog)
+    journal = app.query_one("#journal", BlockJournal)
     return patch.object(journal, "write", side_effect=lambda message: sink.append(str(message)))

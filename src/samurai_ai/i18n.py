@@ -377,9 +377,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "summary follows without tools."
         ),
         "chat.tool-exit": "exit {code}",
-        "chat.tool-collapsed": (
-            "▸ ⚙ {command} — exit {code} · {lines} lines · /expand to show"
-        ),
+        "chat.tool-collapsed": "⚙ {command} — exit {code} · {lines} lines",
         "chat.expand-empty": "nothing to expand yet — no folded process or output",
         "chat.process-block": "{lines} step(s) folded — Ctrl+E, Enter or a click to open",
         "chat.process-title": "process log",
@@ -946,9 +944,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-denied": "отклонено оператором: {command}",
         "chat.tool-limit": "лимит раундов команд — подвожу итог без инструментов",
         "chat.tool-exit": "код выхода {code}",
-        "chat.tool-collapsed": (
-            "▸ ⚙ {command} — exit {code} · строк: {lines} · /expand покажет вывод"
-        ),
+        "chat.tool-collapsed": "⚙ {command} — exit {code} · строк: {lines}",
         "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",
         "chat.process-block": "{lines} шаг(ов) свёрнуто — Ctrl+E, Enter или клик, чтобы открыть",
         "chat.process-title": "журнал процесса",

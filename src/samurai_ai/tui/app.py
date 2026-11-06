@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from rich.markdown import Markdown
-from rich.padding import Padding
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -94,6 +93,7 @@ from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
 from samurai_ai.tui.hunt import REFRESH_SECONDS as HUNT_REFRESH_SECONDS
 from samurai_ai.tui.hunt import HuntController, tally
+from samurai_ai.tui.journal import BlockJournal, UserBlock
 from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
@@ -429,7 +429,6 @@ class SamuraiApp(
         self._stop_requested = False
         self._stop_note_sent = False
         self._process_block = []
-        self._collapsed = []
         self._shell_running = ""
         self._shell_background = False
         self._expandable: list[tuple[str, int | None, str, str]] = []
@@ -509,7 +508,7 @@ class SamuraiApp(
         return Text(text, style=style)
 
     def _write_line(self, text: str) -> None:
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(self._styled(text))
 
     def _write_dim(self, text: str, *, process: bool = True) -> None:
@@ -523,34 +522,34 @@ class SamuraiApp(
         if process and self._chat_busy:
             self._process_block.append(text)
             return
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(Text(text, style=self.paint(self._DIM_STYLE)))
 
     def _close_process_block(self) -> None:
-        """Collapse the turn's grey lines into one line the operator can open."""
+        """Collapse the turn's grey lines into one block the operator can open."""
         if not self._process_block:
             return
         title = self.translator.t("chat.process-block", lines=len(self._process_block))
-        self._collapsed.append((self.translator.t("chat.process-title"), list(self._process_block)))
+        journal = self.query_one("#journal", BlockJournal)
+        journal.add_tool_block(
+            Text(f"⚙ {title}", style=self.paint(self._DIM_STYLE)),
+            list(self._process_block),
+            body_style=self.paint(self._DIM_STYLE),
+            expanded=False,
+        )
         self._process_block.clear()
-        journal = self.query_one("#journal", RichLog)
-        journal.write(Text(f"▸ ⚙ {title}", style=self.paint(self._DIM_STYLE)))
 
     def _brand_text(self) -> Text:
         """The side strip carries the name; the logo lives in the README."""
         return Text("Samurai AI", style=self.paint("bold accent"))
 
     def _write_user_message(self, text: str) -> None:
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(Text())
-        journal.write(
-            Padding(
-                Text(text, style=self.paint("bold $text")), (0, 2), style=self.paint("on panel-alt")
-            )
-        )
+        journal.add_block(UserBlock(text))
 
     def _write_ai_message(self, response) -> None:  # type: ignore[no-untyped-def]
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         header = (
             f"{response.model_id} · {response.latency_ms}ms · "
             f"{response.usage.prompt_tokens}+{response.usage.completion_tokens} tok"
@@ -577,7 +576,7 @@ class SamuraiApp(
         yield Static(id="welcome")
         with Horizontal(id="body"):
             with ContentSwitcher(initial="journal", id="views"):
-                yield SelectableRichLog(id="journal", markup=False, wrap=True, auto_scroll=True)
+                yield BlockJournal(id="journal")
                 yield SelectableRichLog(id="view-ops", markup=False, wrap=True)
                 yield SelectableRichLog(id="view-bounty", markup=False, wrap=True)
                 yield SelectableRichLog(id="view-hunt", markup=False, wrap=True)
@@ -655,7 +654,7 @@ class SamuraiApp(
         )
 
     def _write_welcome(self) -> None:
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(self._banner())
         self._write_dim(self.translator.t("welcome.help-hint"))
 
@@ -671,8 +670,6 @@ class SamuraiApp(
         widget: Any = event.widget
         while widget is not None:
             if getattr(widget, "id", None) == "journal":
-                if self._collapsed:
-                    self._expand_outputs()
                 return
             widget = widget.parent
 
@@ -877,7 +874,7 @@ class SamuraiApp(
         self._auto_title = None
         self._graph_used = False
         self._chat_history.clear()
-        self.query_one("#journal", RichLog).clear()
+        self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
         self._write_dim(self.translator.t("newop.created", name=name, mode=mode))
         self._switch_view("journal")
@@ -2629,7 +2626,7 @@ class SamuraiApp(
             return
         self.operation = latest
         self._chat_history.clear()
-        self.query_one("#journal", RichLog).clear()
+        self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
         self._restore_chat()
         self._refresh_chrome()

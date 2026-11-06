@@ -67,6 +67,7 @@ from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
+from samurai_ai.tui.journal import BlockJournal, ToolHeader, UserBlock
 
 
 def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> None:
@@ -262,7 +263,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
             brand = app.query_one("#brand", Static)
             assert "Samurai AI" in str(brand.render())
 
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             command_input = app.query_one("#command-input", Input)
             messages: list[str] = []
             with patch.object(
@@ -549,7 +550,7 @@ def test_double_ctrl_c_quits(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -654,7 +655,7 @@ def test_brand_shows_name_and_version(tmp_path: Path) -> None:
             strip = app.query_one("#brand", Static).render()
             assert "Samurai AI" in strip.plain
             assert "╪" not in strip.plain  # the mark stays out of the shell
-            banner = "\n".join(line.text for line in app.query_one("#journal", RichLog).lines)
+            banner = "\n".join(line.text for line in app.query_one("#journal", BlockJournal).lines)
             assert "Samurai AI" in banner
             assert __version__ in banner
             status_bar = str(app.query_one("#status-bar", Static).render())
@@ -802,7 +803,7 @@ def test_command_suggestions(tmp_path: Path) -> None:
             await pilot.pause()
             command_input = app.query_one("#command-input", Input)
             popup = app.query_one("#command-suggestions", OptionList)
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -903,7 +904,7 @@ def test_ctrl_c_copies_selection_then_quits(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             app.screen.selections = {journal: SELECT_ALL}
             await pilot.press("ctrl+c")
             await pilot.pause()
@@ -919,6 +920,15 @@ def test_ctrl_c_copies_selection_then_quits(tmp_path: Path) -> None:
             assert not app.is_running
 
     asyncio.run(exercise())
+
+
+def _tool_blocks_text(journal) -> str:  # type: ignore[no-untyped-def]
+    """Titles and bodies of the journal's tool blocks, as plain text."""
+    parts: list[str] = []
+    for block in journal.tool_blocks:
+        parts.append(block._title.plain)
+        parts.extend(block._body)
+    return "\n".join(parts)
 
 
 def _message_text(message) -> str:  # type: ignore[no-untyped-def]
@@ -982,7 +992,7 @@ def test_chat_model_call_is_auto_allowed(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1014,7 +1024,7 @@ def test_chat_yolo_auto_allows(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1041,7 +1051,7 @@ def test_chat_without_model_shows_error(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1091,23 +1101,27 @@ def test_chat_renders_markdown_and_copy_commands(tmp_path: Path) -> None:
 
     async def exercise() -> None:
         from rich.markdown import Markdown
-        from rich.padding import Padding
-
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
-            with patch.object(
-                journal, "write", side_effect=lambda message: messages.append(message)
+            blocks: list[object] = []
+            with (
+                patch.object(
+                    journal, "write", side_effect=lambda message: messages.append(message)
+                ),
+                patch.object(
+                    journal, "add_block", side_effect=lambda block: blocks.append(block)
+                ),
             ):
                 command_input.value = "show me code"
                 await pilot.press("enter")
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                # operator message is a padded bubble, agent reply is Markdown
-                assert any(isinstance(m, Padding) for m in messages)
+                # operator message is a bubble block, agent reply is Markdown
+                assert any(isinstance(b, UserBlock) for b in blocks)
                 assert any(isinstance(m, Markdown) for m in messages)
                 # /copy grabs the whole reply, /copy code only the fenced block
                 command_input.value = "/copy"
@@ -1240,7 +1254,7 @@ def test_chat_tool_loop_executes_shell_command(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1253,17 +1267,18 @@ def test_chat_tool_loop_executes_shell_command(tmp_path: Path) -> None:
                 # round 1: tool call, round 2: final text answer
                 assert provider.calls == 2
                 text = "\n".join(_message_text(m) for m in messages)
-                assert "echo hello-from-tool" in text
+                assert "echo hello-from-tool" in text + _tool_blocks_text(journal)
                 # output is collapsed under an arrow, not spilled as a wall
-                assert "▸ ⚙ echo hello-from-tool" in text
+                assert "⚙ echo hello-from-tool" in _tool_blocks_text(journal)
                 assert "ran it" in text
-                # /expand reveals the full collapsed output
+                # /expand opens the collapsed block in place
+                block = app._collapsed[0]
+                assert not block.expanded
                 command_input.value = "/expand"
                 await pilot.press("enter")
                 await pilot.pause()
-                text = "\n".join(_message_text(m) for m in messages)
-                assert "▾ ⚙ echo hello-from-tool" in text
-                assert "  hello-from-tool" in text
+                assert block.expanded
+                assert "hello-from-tool" in "\n".join(block._body)
                 # the tool result was fed back to the model
                 second = provider.requests[1]
                 history = [
@@ -1306,7 +1321,7 @@ def test_chat_tool_call_denied_by_operator(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1358,7 +1373,7 @@ def test_chat_without_operation_autocreates_one(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             assert app.operation is None
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1443,7 +1458,7 @@ def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1563,7 +1578,7 @@ def test_copy_without_reply_shows_hint(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -1765,7 +1780,7 @@ def test_restart_restores_the_transcript(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            lines = [line.text for line in app.query_one("#journal", BlockJournal).lines]
             text = "\n".join(lines)
             assert "first question" in text
             assert "restored" in text
@@ -2003,7 +2018,7 @@ def test_goal_command_starts_a_goal_and_shows_it(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -2057,7 +2072,7 @@ def test_goal_step_budget_blocks_the_goal(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -2082,7 +2097,7 @@ def test_goal_commands_without_a_goal_report_cleanly(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -2206,7 +2221,7 @@ def test_shell_mode_runs_without_a_model_round(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -2268,7 +2283,7 @@ def test_ctrl_e_expands_collapsed_tool_output(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -2279,13 +2294,13 @@ def test_ctrl_e_expands_collapsed_tool_output(tmp_path: Path) -> None:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 assert app._collapsed, "shell run must leave a folded entry"
-                assert not any(
-                    "  expand-me" in _message_text(m) for m in messages
-                )
+                block = app._collapsed[0]
+                assert not block.expanded
 
                 await pilot.press("ctrl+e")
                 await pilot.pause()
-                assert any("  expand-me" in _message_text(m) for m in messages)
+                assert block.expanded
+                assert "expand-me" in "\n".join(block._body)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -2330,7 +2345,7 @@ def test_undo_drops_the_last_turn_and_its_output(tmp_path: Path) -> None:
                 Message(role="user", content="second"),
                 Message(role="assistant", content="answer2"),
             ]
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -2362,7 +2377,7 @@ def test_undo_on_an_empty_history_reports(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -2392,7 +2407,7 @@ def test_compact_folds_old_messages_into_a_digest(tmp_path: Path) -> None:
                 app._chat_history.append(
                     Message(role="assistant", content=f"a{index}")
                 )
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -2425,7 +2440,7 @@ def test_compact_without_enough_history_skips(tmp_path: Path) -> None:
                 Message(role="system", content="prompt"),
                 Message(role="user", content="only"),
             ]
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -2485,7 +2500,7 @@ def test_palette_runs_an_action(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -2516,7 +2531,7 @@ def test_palette_asks_for_an_argument(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -2738,7 +2753,7 @@ def test_inspector_unknown_run_reports(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -2760,7 +2775,7 @@ def test_inspector_with_no_runs_reports(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -2864,7 +2879,7 @@ def test_open_without_history_reports(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -3611,7 +3626,7 @@ def test_commands_are_gated_by_role(tmp_path: Path) -> None:
             await pilot.pause()
             app._handle_command("/tasks")
             await pilot.pause()
-            log = " ".join(str(line.text) for line in app.query("RichLog").first().lines)
+            log = " ".join(str(line.text) for line in app.query_one("#journal", BlockJournal).lines)
             assert "not signed in" in log
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
@@ -3644,7 +3659,7 @@ def test_team_command_lists_the_owner(tmp_path: Path) -> None:
             app.team.claim_owner(operation.id, app.access.current())
             app._handle_command("/team")
             await pilot.pause()
-            log = " ".join(str(line.text) for line in app.query("RichLog").first().lines)
+            log = " ".join(str(line.text) for line in app.query_one("#journal", BlockJournal).lines)
             assert "owner: local" in log
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
@@ -3691,7 +3706,7 @@ def test_skills_gaps_report_lists_misses(tmp_path: Path) -> None:
 
             app._handle_command("/skills gaps")
             await pilot.pause()
-            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            lines = [line.text for line in app.query_one("#journal", BlockJournal).lines]
             assert any("invented-skill" in line and "misses=1" in line for line in lines)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
@@ -3803,7 +3818,7 @@ def test_repeating_one_direction_raises_a_stagnation_note(tmp_path: Path) -> Non
             await pilot.pause()
             notes = [m.content for m in app._chat_history if m.content.startswith("[progress]")]
             assert notes and "nmap" in notes[0]
-            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            lines = [line.text for line in app.query_one("#journal", BlockJournal).lines]
             assert any("repeating" in line for line in lines)
             app._end_turn(TerminalReason.ROUNDS)
             reasons = [
@@ -4282,7 +4297,7 @@ def test_finding_without_evidence_says_so(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -4416,7 +4431,7 @@ def test_boards_report_missing_operation(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -4648,8 +4663,8 @@ def test_keys_screen_refuses_a_taken_key(tmp_path: Path) -> None:
             await pilot.press("ctrl+t")
             await pilot.pause()
             assert app.keymap["toggle_journal"] == "ctrl+o"
-            journal = app.query_one("#journal", RichLog)
-            assert any("taken" in str(line.text) for line in journal.lines)
+            journal = app.query_one("#journal", BlockJournal)
+            assert "taken" in journal.text()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -4737,7 +4752,7 @@ def test_greeting_is_the_name_and_version_only(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(90, 26)) as pilot:
             await pilot.pause()
-            lines = [line.text for line in app.query_one("#journal", RichLog).lines]
+            lines = [line.text for line in app.query_one("#journal", BlockJournal).lines]
             assert any("Samurai AI" in line for line in lines)
             assert not any("one shot" in line for line in lines)
             await pilot.press("ctrl+c")
@@ -4845,7 +4860,7 @@ def test_no_legacy_hint_even_with_an_old_state_directory(tmp_path: Path, monkeyp
         app = SamuraiApp(*stack)
         async with app.run_test(size=(110, 26)) as pilot:
             await pilot.pause()
-            text = " ".join(line.text for line in app.query_one("#journal", RichLog).lines)
+            text = " ".join(line.text for line in app.query_one("#journal", BlockJournal).lines)
             assert ".samurai" not in text
             assert "--db" not in text
             await pilot.press("ctrl+c")
@@ -4898,7 +4913,7 @@ def test_a_deny_rule_blocks_a_chat_tool_call(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -4926,7 +4941,7 @@ def test_the_rules_command_lists_and_edits(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
             with patch.object(
@@ -5035,7 +5050,7 @@ def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -5049,6 +5064,7 @@ def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 text = "\n".join(_message_text(m) for m in messages)
+                text += _tool_blocks_text(journal)
                 assert "first-result" in text and "second-result" in text
                 # and the model was told to conclude, which it did
                 assert "обе гипотезы проверены" in text
@@ -5106,7 +5122,7 @@ def test_ctrl_c_when_idle_only_arms_the_exit(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -5158,7 +5174,7 @@ def test_a_tool_handler_error_becomes_a_result_not_a_crash(tmp_path: Path) -> No
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -5181,7 +5197,7 @@ def test_grey_process_lines_fold_into_one_line(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -5191,11 +5207,12 @@ def test_grey_process_lines_fold_into_one_line(tmp_path: Path) -> None:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 text = "\n".join(_message_text(m) for m in messages)
+                blocks = _tool_blocks_text(journal)
                 # the grey lines of the turn are behind one collapsed entry
-                assert "folded" in text
+                assert "folded" in blocks
                 assert app._collapsed, "the folded process log must stay openable"
                 # the tool summaries and the answer stay visible
-                assert "⚙ echo first-result" in text
+                assert "⚙ echo first-result" in blocks
                 assert "обе гипотезы проверены" in text
 
     asyncio.run(exercise())
@@ -5209,7 +5226,7 @@ def test_enter_on_an_empty_line_opens_the_folded_block(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)
@@ -5219,10 +5236,10 @@ def test_enter_on_an_empty_line_opens_the_folded_block(tmp_path: Path) -> None:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 assert app._collapsed
+                block = app._collapsed[0]
                 await pilot.press("enter")
                 await pilot.pause()
-                text = "\n".join(_message_text(m) for m in messages)
-                assert "▾ ⚙" in text
+                assert block.expanded
 
     asyncio.run(exercise())
 
@@ -5241,9 +5258,11 @@ def test_a_click_on_the_journal_opens_the_folded_block(tmp_path: Path) -> None:
             await pilot.pause()
             before = len(app._collapsed)
             assert before
-            await pilot.click("#journal")
+            oldest = app._collapsed[0]
+            await pilot.click(oldest.query_one(ToolHeader))
             await pilot.pause()
-            # one click opens the oldest folded block, the rest stay folded
+            # one click opens that block, the rest stay folded
+            assert oldest.expanded
             assert len(app._collapsed) == before - 1
 
     asyncio.run(exercise())
@@ -5258,7 +5277,7 @@ def test_a_failed_turn_shows_its_process_log_without_a_press(tmp_path: Path) -> 
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             messages: list[str] = []
             original = app._request_chat_completion
             calls = {"n": 0}
@@ -5277,7 +5296,11 @@ def test_a_failed_turn_shows_its_process_log_without_a_press(tmp_path: Path) -> 
                 await app.workers.wait_for_complete()
                 await pilot.pause()
             text = "\n".join(_message_text(m) for m in messages)
-            assert "▾ ⚙" in text and "boom" in text
+            blocks = _tool_blocks_text(journal)
+            assert "boom" in text + blocks
+            assert any(
+                b.expanded and "folded" in b._title.plain for b in journal.tool_blocks
+            ), "the folded process log opens on its own after a failed turn"
 
     asyncio.run(exercise())
 
@@ -5299,13 +5322,14 @@ def test_ctrl_c_copies_the_selection_instead_of_quitting(tmp_path: Path) -> None
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             app.query_one("#command-input", Input).value = "проверь вход"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
             with patch.object(app, "copy_to_clipboard", side_effect=copied.append):
                 await pilot.mouse_down(offset=(2, 1), widget=journal)
+                await pilot.hover(journal, offset=(30, 2))
                 await pilot.hover(journal, offset=(30, 4))
                 await pilot.mouse_up(offset=(30, 4), widget=journal)
                 await pilot.pause()
@@ -5330,7 +5354,7 @@ def test_ctrl_shift_c_copies_and_says_so(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             app.query_one("#command-input", Input).value = "проверь вход"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
@@ -5343,7 +5367,7 @@ def test_ctrl_shift_c_copies_and_says_so(tmp_path: Path) -> None:
                 app.action_copy_selection()
                 await pilot.pause()
             assert copied and "copied" in "\n".join(
-                _message_text(m) for m in app.query_one("#journal", RichLog).lines
+                _message_text(m) for m in app.query_one("#journal", BlockJournal).lines
             )
 
     asyncio.run(exercise())
@@ -5485,7 +5509,7 @@ def test_the_tab_hides_when_the_plan_has_no_searches(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_a_failed_tool_line_carries_the_error_and_the_wall_folds(tmp_path: Path) -> None:
+def test_a_failed_tool_block_carries_the_error_and_opens(tmp_path: Path) -> None:
     """A bare grey line reads like a hang; failures must say something."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
@@ -5494,22 +5518,16 @@ def test_a_failed_tool_line_carries_the_error_and_the_wall_folds(tmp_path: Path)
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
-            messages: list[str] = []
-            app._chat_busy = True  # the row only shows inside a turn
-            with patch.object(
-                journal, "write", side_effect=lambda message: messages.append(message)
-            ):
-                app._write_tool_line("⚙ cmd — exit 2", 2, "", "prlctl: Invalid argument")
-                assert any("Invalid argument" in _message_text(m) for m in messages)
-                messages.clear()
-                app._write_tool_line("⚙ silent — exit 2", 2, "", "")
-                assert any("no output" in _message_text(m) for m in messages)
-
-                messages.clear()
-                for index in range(app._TOOL_LINES_VISIBLE + 2):
-                    app._write_tool_line(f"⚙ many {index}", 0, "ok", "")
-                assert app._process_block, "later lines fold instead of walling the turn"
-                app._chat_busy = False
+            journal = app.query_one("#journal", BlockJournal)
+            app._write_tool_block("⚙ cmd — exit 2", 2, "", "prlctl: Invalid argument")
+            app._write_tool_block("⚙ silent — exit 2", 2, "", "")
+            app._write_tool_block("⚙ fine — exit 0", 0, "ok", "")
+            await pilot.pause()
+            first, second, third = journal.tool_blocks
+            assert "Invalid argument" in first._title.plain
+            assert first.failed and first.expanded
+            assert "no output" in second._title.plain
+            assert second.failed and second.expanded
+            assert not third.failed and not third.expanded
 
     asyncio.run(exercise())

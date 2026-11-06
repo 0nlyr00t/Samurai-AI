@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from rich.text import Text
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, Static
 
 from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, ImagePart, Message, ToolCall, ToolSpec
@@ -49,6 +49,7 @@ from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.tui.journal import BlockJournal, ToolBlock
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import AccessPromptScreen
 
@@ -133,7 +134,7 @@ class ChatController:
         _shell_background: bool
         _ctx_tokens: int
         _process_block: list[str]
-        _collapsed: list[tuple[str, list[str]]]
+        _DIM_STYLE: str
         _last_ai_text: str | None
         _last_ai_code: str | None
         _thinking_timer: Any
@@ -517,7 +518,7 @@ class ChatController:
         system = Message(role="system", content=self._chat_system_prompt())
         self._chat_history = [system, *([marker()] if truncated else []), *messages]
         self._trim_chat_history()
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(Text())
         self._write_dim(self.translator.t("chat.restored", count=total))
         if truncated:
@@ -543,8 +544,7 @@ class ChatController:
             return
         removed = self.chat_history.clear(self.operation.id)
         self._chat_history.clear()
-        self._collapsed.clear()
-        self.query_one("#journal", RichLog).clear()
+        self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
         self._write_dim(self.translator.t("chat.cleared", count=removed))
 
@@ -602,7 +602,6 @@ class ChatController:
         if self._auto_title is None:
             # The tab names itself from the task at hand
             self._auto_title = title
-        self._collapsed.clear()
         self._write_user_message(text)
         self._thinking_start()
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
@@ -707,8 +706,7 @@ class ChatController:
         prefix = "[bg] " if self._shell_background else ""
         if not self._graph_used:
             self._progress.last_stuck = self._progress.record(command)
-        self._fold(f"!{command}", result.run.exit_code, result.stdout, result.stderr)
-        self._write_tool_line(
+        self._write_tool_block(
             prefix + self.translator.t(
                 "chat.tool-collapsed",
                 command=f"!{command}",
@@ -736,7 +734,6 @@ class ChatController:
         self._chat_busy = True
         self._stop_requested = False
         self._stop_note_sent = False
-        self._tool_lines = 0
         reason = TerminalReason.CANCELLED
         try:
             reason = await self._chat_loop(text, model_id, approval_id)
@@ -752,7 +749,7 @@ class ChatController:
             self._close_process_block()
             if reason is not TerminalReason.COMPLETED and self._collapsed:
                 # a failure or a stop is exactly when the detail is wanted
-                self._reveal_block(self._collapsed.pop())
+                self._collapsed[-1].toggle()
             self._shell_running = ""
             self._shell_background = False
             self._thinking_stop()
@@ -1430,9 +1427,8 @@ class ChatController:
         self._progress.last_stuck = (
             None if self._graph_used else self._progress.record(command)
         )
-        # Long tool output collapses under an arrow; /expand reveals it.
-        self._fold(command, exit_code, result.stdout, result.stderr)
-        self._write_tool_line(
+        # The run lands as a collapsible block; a failure opens on its own.
+        self._write_tool_block(
             self.translator.t(
                 "chat.tool-collapsed",
                 command=command,
@@ -1452,49 +1448,42 @@ class ChatController:
             ),
         )
 
-    #: after this many tool lines the turn's own summaries start folding too
-    _TOOL_LINES_VISIBLE = 6
-
-    def _write_tool_line(
-        self, line: str, exit_code: int | None, stdout: str, stderr: str
+    def _write_tool_block(
+        self, title: str, exit_code: int | None, stdout: str, stderr: str
     ) -> None:
-        """One grey line per tool run: a failure stays visible and speaks up.
+        """A tool run as a collapsible block; a failure speaks and opens.
 
-        A run that failed with nothing on stderr used to leave a bare line in the
-        journal, which reads like a hang. Past a handful of runs the lines fold
-        with the rest of the chatter instead of walling off the transcript.
+        A run that failed with nothing on stderr used to leave a bare line in
+        the journal, which reads like a hang — so the header of a failed block
+        carries the last error line, or says outright that there was no output.
         """
-        text = line
-        if exit_code not in (0, None):
+        journal = self.query_one("#journal", BlockJournal)
+        failed = exit_code not in (0, None)
+        if failed:
             error = (stderr.strip() or stdout.strip()).splitlines()
             if error:
-                text += f"  ← {error[-1][:120]}"
+                title += f"  ← {error[-1][:120]}"
             else:
-                text += f"  ← exit {exit_code}, no output"
-        self._tool_lines = getattr(self, "_tool_lines", 0) + 1
-        self._write_dim(text, process=self._tool_lines > self._TOOL_LINES_VISIBLE)
+                title += f"  ← exit {exit_code}, no output"
+        body = (stdout if stdout.strip() else stderr).rstrip()
+        journal.add_tool_block(
+            Text(title, style=self.paint(self._DIM_STYLE)),
+            body.splitlines() if body else [],
+            failed=failed,
+            body_style=self.paint(self._DIM_STYLE),
+        )
 
-    def _fold(
-        self, command: str, exit_code: int | None, stdout: str, stderr: str
-    ) -> None:
-        """Keep a tool output behind its summary line until it is asked for."""
-        text = (stdout if stdout.strip() else stderr).rstrip()
-        title = f"{command} — " + self.translator.t("chat.tool-exit", code=exit_code)
-        self._collapsed.append((title, text.splitlines() if text else []))
+    @property
+    def _collapsed(self) -> list[ToolBlock]:
+        """Folded journal blocks, oldest first (was a list of tuples)."""
+        journal = self.query_one("#journal", BlockJournal)
+        return [block for block in journal.tool_blocks if not block.expanded]
 
     def _expand_outputs(self) -> None:
         """Reveal the oldest folded block, so presses walk down the reply."""
-        if not self._collapsed:
+        journal = self.query_one("#journal", BlockJournal)
+        if journal.expand_oldest() is None:
             self._write_dim(self.translator.t("chat.expand-empty"))
-            return
-        self._reveal_block(self._collapsed.pop(0))
-
-    def _reveal_block(self, block: tuple[str, list[str]]) -> None:
-        """Write a collapsed block out in full, under its own header."""
-        title, lines = block
-        self._write_dim(f"▾ ⚙ {title}", process=False)
-        for line in lines:
-            self._write_dim(f"  {line}")
 
     def _copy_last(self, what: str) -> None:
         text = self._last_ai_code if what == "code" else self._last_ai_text
