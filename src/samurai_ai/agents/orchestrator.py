@@ -180,8 +180,13 @@ _EXECUTOR_INSTRUCTION = (
     '"timeout":120} — ask the operator and keep working if nobody answers, '
     'propose_finding '
     '{"type":"propose_finding","title":...,"summary":...,"severity":...,'
-    '"artifact_ids":[...]}, complete_task {"type":"complete_task"}, fail '
-    '{"type":"fail","reason":...}. No prose.'
+    '"artifact_ids":[...]}, complete_task {"type":"complete_task"} — a task '
+    'without a finding closes as {"type":"complete_task","no_finding":"<why>"}, '
+    'fail {"type":"fail","reason":...}. No prose. '
+    "A task that ends at the landing page is not done: when a registration form "
+    "exists, register and log in; after logging in enumerate what changed; on a "
+    "login form try the obvious defaults; follow the app's own links and forms "
+    "before concluding there is nothing."
 )
 
 
