@@ -708,15 +708,16 @@ class ChatController:
         if not self._graph_used:
             self._progress.last_stuck = self._progress.record(command)
         self._fold(f"!{command}", result.run.exit_code, result.stdout, result.stderr)
-        self._write_dim(
-            prefix
-            + self.translator.t(
+        self._write_tool_line(
+            prefix + self.translator.t(
                 "chat.tool-collapsed",
                 command=f"!{command}",
                 code=result.run.exit_code,
                 lines=len(result.stdout.strip().splitlines()),
             ),
-            process=False,
+            result.run.exit_code,
+            result.stdout,
+            result.stderr,
         )
         body = (result.stdout if result.stdout.strip() else result.stderr).rstrip()
         self._remember(
@@ -735,6 +736,7 @@ class ChatController:
         self._chat_busy = True
         self._stop_requested = False
         self._stop_note_sent = False
+        self._tool_lines = 0
         reason = TerminalReason.CANCELLED
         try:
             reason = await self._chat_loop(text, model_id, approval_id)
@@ -1430,14 +1432,16 @@ class ChatController:
         )
         # Long tool output collapses under an arrow; /expand reveals it.
         self._fold(command, exit_code, result.stdout, result.stderr)
-        self._write_dim(
+        self._write_tool_line(
             self.translator.t(
                 "chat.tool-collapsed",
                 command=command,
                 code=exit_code,
                 lines=len(result.stdout.strip().splitlines()),
             ),
-            process=False,
+            exit_code,
+            result.stdout,
+            result.stderr,
         )
         stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
         stderr = result.stderr[:1000]
@@ -1447,6 +1451,28 @@ class ChatController:
                 f"[tool result {call.name} exit={exit_code}]\nstdout:\n{stdout}\nstderr:\n{stderr}"
             ),
         )
+
+    #: after this many tool lines the turn's own summaries start folding too
+    _TOOL_LINES_VISIBLE = 6
+
+    def _write_tool_line(
+        self, line: str, exit_code: int | None, stdout: str, stderr: str
+    ) -> None:
+        """One grey line per tool run: a failure stays visible and speaks up.
+
+        A run that failed with nothing on stderr used to leave a bare line in the
+        journal, which reads like a hang. Past a handful of runs the lines fold
+        with the rest of the chatter instead of walling off the transcript.
+        """
+        text = line
+        if exit_code not in (0, None):
+            error = (stderr.strip() or stdout.strip()).splitlines()
+            if error:
+                text += f"  ← {error[-1][:120]}"
+            else:
+                text += f"  ← exit {exit_code}, no output"
+        self._tool_lines = getattr(self, "_tool_lines", 0) + 1
+        self._write_dim(text, process=self._tool_lines > self._TOOL_LINES_VISIBLE)
 
     def _fold(
         self, command: str, exit_code: int | None, stdout: str, stderr: str

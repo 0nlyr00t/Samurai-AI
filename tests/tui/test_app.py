@@ -5483,3 +5483,33 @@ def test_the_tab_hides_when_the_plan_has_no_searches(tmp_path: Path) -> None:
             await pilot.press("escape")
 
     asyncio.run(exercise())
+
+
+def test_a_failed_tool_line_carries_the_error_and_the_wall_folds(tmp_path: Path) -> None:
+    """A bare grey line reads like a hang; failures must say something."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", RichLog)
+            messages: list[str] = []
+            app._chat_busy = True  # the row only shows inside a turn
+            with patch.object(
+                journal, "write", side_effect=lambda message: messages.append(message)
+            ):
+                app._write_tool_line("⚙ cmd — exit 2", 2, "", "prlctl: Invalid argument")
+                assert any("Invalid argument" in _message_text(m) for m in messages)
+                messages.clear()
+                app._write_tool_line("⚙ silent — exit 2", 2, "", "")
+                assert any("no output" in _message_text(m) for m in messages)
+
+                messages.clear()
+                for index in range(app._TOOL_LINES_VISIBLE + 2):
+                    app._write_tool_line(f"⚙ many {index}", 0, "ok", "")
+                assert app._process_block, "later lines fold instead of walling the turn"
+                app._chat_busy = False
+
+    asyncio.run(exercise())
