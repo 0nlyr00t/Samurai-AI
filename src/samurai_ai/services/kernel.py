@@ -162,7 +162,12 @@ class KernelService:
         return self._apply_plan_mutation(operation_id, mutate)
 
     def complete_task(
-        self, operation_id: str, task_id: str, *, force: bool = False
+        self,
+        operation_id: str,
+        task_id: str,
+        *,
+        force: bool = False,
+        no_finding: str = "",
     ) -> OperationPlan:
         def mutate(plan: OperationPlan) -> tuple[str, dict[str, Any]]:
             task = plan.task_by_id(task_id)
@@ -182,10 +187,35 @@ class KernelService:
                     f"task {task_id} has no evidence: run a tool, record a fact with an "
                     "artifact id, or propose a finding — or close it with force"
                 )
+            if not force and not no_finding.strip() and not self._task_has_finding(
+                operation_id, task_id
+            ):
+                raise TaskEvidenceError(
+                    f"task {task_id} produced no finding: propose_finding with an artifact "
+                    "id, or close with a no_finding reason"
+                )
             task.status = TaskStatus.DONE
-            return "task.completed", {"plan_id": plan.id, "task_id": task_id}
+            return "task.completed", {
+                "plan_id": plan.id,
+                "task_id": task_id,
+                "no_finding": no_finding.strip(),
+            }
 
         return self._apply_plan_mutation(operation_id, mutate)
+
+    def _task_has_finding(self, operation_id: str, task_id: str) -> bool:
+        """A finding proven by one of this task's own artifacts."""
+        own = {
+            artifact.id
+            for artifact in self.kernel.list_artifacts(operation_id)
+            if artifact.task_id == task_id
+        }
+        if not own:
+            return False
+        return any(
+            own & set(finding.evidence_ids)
+            for finding in self.kernel.list_findings(operation_id)
+        )
 
     def _task_has_evidence(self, operation_id: str, task_id: str) -> bool:
         """Any artifact of this task, or a finding one of them proves."""

@@ -109,6 +109,9 @@ class CompleteTaskCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["complete_task"]
+    #: why a task ends without anything reportable — the explicit verdict the
+    #: closing gate wants instead of a silent stop
+    no_finding: str = Field(default="", max_length=300)
 
 
 class FailCommand(BaseModel):

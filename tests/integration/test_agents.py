@@ -178,7 +178,7 @@ def test_full_orchestrated_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "local.echo", "params": {"text": "agent-echo"}},'
         '{"type": "note", "key": "shared.result", "value": "probe done"},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}",
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -226,7 +226,7 @@ def test_unknown_tool_command_rejected_without_side_effects(
         '{"steps": ["try tool"]}',
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}",
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -269,7 +269,7 @@ def test_malformed_output_recovers_on_retry(
     fake.queue(
         '{"steps": ["step one"]}',
         "garbage",
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert run.status is AgentRunStatus.COMPLETED
@@ -288,7 +288,7 @@ def test_propose_finding_unknown_artifact_rejected(
         '{"commands": ['
         '{"type": "propose_finding", "title": "ghost evidence", '
         '"artifact_ids": ["art_missing"]},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}",
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -315,7 +315,7 @@ def test_propose_finding_with_real_artifact_creates_candidate(
         '{"commands": ['
         f'{{"type": "propose_finding", "title": "real finding", "severity": "medium", '
         f'"summary": "s", "artifact_ids": ["{artifact.id}"]}},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}",
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -335,12 +335,12 @@ def test_complete_task_without_required_artifact_rejected(
     make_plan(kernel, operation_id, required=("probe-proof",))
     fake.queue(
         '{"steps": ["finish"]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
         # retry in the step, then two closing attempts, all refused for the
         # same missing artifact
-        '{"commands": [{"type": "complete_task"}]}',
-        '{"commands": [{"type": "complete_task"}]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert run.status is AgentRunStatus.COMPLETED
@@ -359,7 +359,7 @@ def test_budget_exceeded_mid_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     models.set_budget(operation_id, ModelBudget(max_calls=1))
     fake.queue(
         '{"steps": ["step"]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert run.status is AgentRunStatus.BUDGET_EXCEEDED
@@ -388,7 +388,7 @@ def test_subagent_depth_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     make_plan(kernel, operation_id)
     fake.queue(
         '{"steps": ["s"]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     parent = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert parent.depth == 0
@@ -397,7 +397,7 @@ def test_subagent_depth_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     make_plan_for_second_task(kernel2, operation_id)
     fake.queue(
         '{"steps": ["s"]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     child = orchestrator.run_task(
         operation_id, "probe2", [MODEL_ID], parent_run_id=parent.id
@@ -473,7 +473,7 @@ def test_approval_resolver_decides_instead_of_raising(
         '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "echo hi"}}'
         "]}",
         # the task is still open, so the closing step runs and closes it
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     seen: list[str] = []
 
@@ -504,7 +504,7 @@ def test_denied_resolver_rejects_the_command_and_the_run_continues(
         '{"steps": ["probe"]}',
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "echo hi"}},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}",
     )
     run = orchestrator.run_task(
@@ -560,7 +560,7 @@ def test_read_only_only_mode_rejects_mutating_tools(
         '{"type": "request_tool_run", "tool_id": "shell.exec", "params": {"command": "ls"}}'
         "]}",
         # the rejection leaves the task open, so the closing step closes it
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     assert orchestrator._is_read_only("shell.exec") is False
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID], read_only_only=True)
@@ -583,7 +583,7 @@ def test_a_refused_step_is_asked_again_with_the_reason(
     fake.queue(
         '{"steps": ["probe"]}',
         '{"commands": [{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}}]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
 
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -607,7 +607,7 @@ def test_a_partly_accepted_step_is_not_asked_again(
         '{"steps": ["probe"]}',
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}",
     )
 
@@ -628,9 +628,9 @@ def test_completing_an_already_done_task_is_not_a_refusal(
         '{"steps": ["probe"]}',
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}",
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
 
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -658,7 +658,7 @@ def test_a_fail_next_to_a_tool_call_does_not_end_the_task(
         '{"type": "fail", "reason": "tool not found: completed_task"},'
         '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}}'
         "]}",
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
 
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
@@ -679,12 +679,12 @@ def test_a_third_identical_call_earns_a_repeat_note(
         '{"commands": ['
         '{"type": "request_tool_run", "tool_id": "local.echo", "params": {"text": "again"}},'
         '{"type": "note", "key": "shared.same", "value": "same"},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}"
     )
     fake.queue(
         '{"steps": ["one", "two", "three", "four"]}', same, same, same,
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     orchestrator.run_task(operation_id, "probe", [MODEL_ID], max_steps=4)
 
@@ -708,7 +708,7 @@ def test_the_wall_deadline_ends_a_slow_run(
         '{"steps": ["one", "two"]}',
         '{"commands": [{"type": "request_tool_run", "tool_id": "local.echo", '
         '"params": {"text": "x"}}]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(
         operation_id, "probe", [MODEL_ID], max_steps=2, max_wall_seconds=0.0
@@ -743,7 +743,7 @@ def test_active_genes_reach_the_executor_prompt(
     kernel.register_artifact(operation_id, ArtifactKind.NOTE, "probe", task_id="probe")
     fake.queue(
         '{"steps": ["probe"]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     orchestrator.run_task(operation_id, "probe", [MODEL_ID])
 
@@ -772,7 +772,10 @@ def test_a_run_gets_a_wall_deadline_by_default(
     orchestrator._execute_steps = spy  # type: ignore[method-assign]
     operation_id = make_operation(service)
     make_plan(kernel, operation_id)
-    fake.queue('{"steps": ["one"]}', '{"commands": [{"type": "complete_task"}]}')
+    fake.queue(
+        '{"steps": ["one"]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+    )
     orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert seen == [module.DEFAULT_MAX_WALL_SECONDS]
     _ = orchestrator_run
@@ -794,7 +797,10 @@ def test_active_genes_reach_the_planner_prompt(
 
     operation_id = make_operation(service)
     make_plan(kernel, operation_id)
-    fake.queue('{"steps": ["probe"]}', '{"commands": [{"type": "complete_task"}]}')
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+    )
     orchestrator.run_task(operation_id, "probe", [MODEL_ID])
 
     # the planner call is the first one: the hint must be there already
@@ -827,7 +833,7 @@ def test_the_model_can_escalate_impact(
         f'{{"type": "record_impact", "finding_id": "{finding.id}", '
         '"level": "auth-bypass", "evidence": ["'
         f'{artifact.id}"], "rollback": "delete created user"}},'
-        '{"type": "complete_task"}]}',
+        '{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     orchestrator.run_task(operation_id, "probe", [MODEL_ID])
 
@@ -861,7 +867,7 @@ def test_a_bad_impact_command_is_refused_not_fatal(
         '{"commands": ['
         f'{{"type": "record_impact", "finding_id": "{finding.id}", '
         f'"level": "write", "evidence": ["{artifact.id}"]}}]}}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
     assert run.status.value == "completed"
@@ -889,7 +895,7 @@ def test_the_model_asks_the_operator_and_keeps_going(
         '{"commands": [{"type": "ask_operator", "timeout": 1, "questions": '
         '[{"id": "next", "question": "Go deeper?", "header": "Decide", '
         '"options": [{"label": "Yes", "recommended": true}, {"label": "No"}]}]}]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
 
@@ -928,7 +934,7 @@ def test_an_answered_question_reaches_the_next_step(
         '{"commands": [{"type": "ask_operator", "questions": '
         '[{"id": "next", "question": "Go deeper?", '
         '"options": [{"label": "Yes"}, {"label": "No"}]}]}]}',
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
 
@@ -946,7 +952,10 @@ def test_closing_without_a_finding_leaves_a_note(
     service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
     operation_id = make_operation(service)
     make_plan(kernel, operation_id)
-    fake.queue('{"steps": ["probe"]}', '{"commands": [{"type": "complete_task"}]}')
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+    )
     orchestrator.run_task(operation_id, "probe", [MODEL_ID])
 
     notes = [
