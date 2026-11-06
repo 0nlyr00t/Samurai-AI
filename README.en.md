@@ -76,7 +76,7 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 
 **Autonomy.** The agent picks the step inside the plan, including the impact grade; outside it are the rails: scope, risk classes, approvals, subagents on tasks, campaign memory, genes scored by eval, an evaluation harness, a headless mode for CI.
 
-**Interface.** A TUI with journal, plan, findings and access tabs, an action palette, a run inspector, boards and a key overlay; RU/EN; three themes; rebindable keys. A CLI with a stable exit-code contract.
+**Interface.** A TUI with a block-based feed: every tool run is a collapsible block with a status icon and the error in its header, click or Enter expands it; text is selectable and copyable at any time (Ctrl+C / Ctrl+Shift+C); task, finding, artifact and approval ids are clickable — an inline summary first, Enter opens the full detail screen; the status bar shows the turn clock, the tool in flight and the token total. Journal, plan, findings and access tabs, an action palette, boards and a key overlay; RU/EN; three themes; rebindable keys. A CLI with a stable exit-code contract.
 
 ## How it works
 

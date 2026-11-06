@@ -15,6 +15,7 @@ from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
+from textual import events
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Markdown, Static
@@ -68,13 +69,22 @@ class StreamBlock(Static):
         self._parts.append(text)
         self.update(Text("\n").join(self._parts))
 
+    def replace_lines(self, parts: list[Text]) -> None:
+        """Swap the whole content in place — no unmount/remount race."""
+        self._parts = list(parts)
+        self.update(Text("\n").join(self._parts))
+
 
 class ToolHeader(Static, can_focus=True):
     """The one-line summary of a tool run; click or Enter toggles the body."""
 
     BINDINGS = [Binding("enter", "toggle_body", show=False)]
 
-    def on_click(self) -> None:
+    def on_click(self, event: events.Click) -> None:
+        # a click that landed on a link span belongs to the link's action
+        style = getattr(event, "style", None)
+        if style is not None and "@click" in getattr(style, "meta", {}):
+            return
         block = self.parent
         if isinstance(block, ToolBlock):
             block.toggle()
@@ -164,6 +174,42 @@ class ToolBlock(Vertical):
         return text
 
 
+class InspectSummaryBlock(Static, can_focus=True):
+    """Inline drill-down summary; Enter opens the full-screen inspector.
+
+    First click on an entity link lands here — a few lines in the flow of the
+    transcript. Enter (or the underlined link) goes to the full detail screen.
+    """
+
+    BINDINGS = [Binding("enter", "open_full", show=False)]
+
+    DEFAULT_CSS = """
+    InspectSummaryBlock {
+        height: auto;
+        padding: 0 2;
+        border-left: thick $accent;
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, text: Text, kind: str, ref: str) -> None:
+        super().__init__(text)
+        self.kind = kind
+        self.ref = ref
+
+    def action_open_full(self) -> None:
+        open_full = getattr(self.app, "_inspect_full", None)
+        if open_full is not None:
+            open_full(self.kind, self.ref)
+
+    def on_click(self, event: events.Click) -> None:
+        # a click on the summary itself (not the link) still goes deeper
+        style = getattr(event, "style", None)
+        if style is not None and "@click" in getattr(style, "meta", {}):
+            return
+        self.action_open_full()
+
+
 class BlockJournal(VerticalScroll, can_focus=False):
     """The chat transcript: a vertical scroll of message and tool blocks.
 
@@ -239,6 +285,21 @@ class BlockJournal(VerticalScroll, can_focus=False):
 
     def add_block(self, widget: Static) -> None:
         self._mount(widget)
+
+    def set_lines(self, lines: list[Text]) -> None:
+        """Panel content: one persistent stream block, updated in place.
+
+        ``clear()`` then ``write()`` races — the scheduled removal can eat the
+        freshly mounted block — so panels keep a single stream block and only
+        swap its text.
+        """
+        if len(self.children) == 1 and isinstance(self.children[0], StreamBlock):
+            self.children[0].replace_lines(lines)
+            return
+        self.remove_children()
+        block = StreamBlock()
+        block.replace_lines(lines)
+        self._mount(block)
 
     def expand_oldest(self) -> ToolBlock | None:
         """Open the oldest collapsed block; the operator walks down the reply."""

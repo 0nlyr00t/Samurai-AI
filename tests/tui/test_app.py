@@ -1,12 +1,13 @@
 import asyncio
 import json
 import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from rich.text import Text
-from textual.widgets import Button, ContentSwitcher, Input, OptionList, RichLog, Static, Tab, Tabs
+from textual.widgets import Button, ContentSwitcher, Input, OptionList, Static, Tab, Tabs
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message, ToolCall
@@ -67,7 +68,12 @@ from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import SamuraiApp
-from samurai_ai.tui.journal import BlockJournal, ToolHeader, UserBlock
+from samurai_ai.tui.journal import (
+    BlockJournal,
+    InspectSummaryBlock,
+    ToolHeader,
+    UserBlock,
+)
 
 
 def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> None:
@@ -777,14 +783,14 @@ def test_tabs_switch_views(tmp_path: Path) -> None:
             tabs.active = "tab-ops"
             await pilot.pause()
             assert switcher.current == "view-ops"
-            ops_log = app.query_one("#view-ops", RichLog)
+            ops_log = app.query_one("#view-ops", BlockJournal)
             text = "\n".join(strip.text for strip in ops_log.lines)
             assert "Map the service" in text
             assert "recon-complete" in text
             tabs.active = "tab-bounty"
             await pilot.pause()
             assert switcher.current == "view-bounty"
-            bounty_log = app.query_one("#view-bounty", RichLog)
+            bounty_log = app.query_one("#view-bounty", BlockJournal)
             bounty_text = "\n".join(strip.text for strip in bounty_log.lines)
             assert "*.example.com" in bounty_text
             await pilot.press("ctrl+c")
@@ -5444,7 +5450,9 @@ def test_the_progress_tab_shows_a_percentage_and_a_top_finding(tmp_path: Path) -
             assert app.query_one("#tab-hunt").display
             app._switch_view("view-hunt")
             await pilot.pause()
-            lines = "\n".join(strip.text for strip in app.query_one("#view-hunt").lines)
+            lines = "\n".join(
+                strip.text for strip in app.query_one("#view-hunt", BlockJournal).lines
+            )
             assert "50%" in lines and "1/2" in lines
             assert "brute force" in lines
             # the recon task is not a hunt and stays out of the counters
@@ -5479,7 +5487,9 @@ def test_a_new_finding_reaches_the_tab_without_a_refresh_beat(tmp_path: Path) ->
             )
             app.refresh_hunt()
             await pilot.pause()
-            lines = "\n".join(strip.text for strip in app.query_one("#view-hunt").lines)
+            lines = "\n".join(
+                strip.text for strip in app.query_one("#view-hunt", BlockJournal).lines
+            )
             assert "Valid creds for svc_backup" in lines
             await pilot.press("escape")
 
@@ -5529,5 +5539,162 @@ def test_a_failed_tool_block_carries_the_error_and_opens(tmp_path: Path) -> None
             assert "no output" in second._title.plain
             assert second.failed and second.expanded
             assert not third.failed and not third.expanded
+
+    asyncio.run(exercise())
+
+
+def test_entity_links_open_an_inline_summary_and_enter_goes_deeper(tmp_path: Path) -> None:
+    """Click → inline summary in the flow; Enter → the full-screen detail."""
+    stack, _provider, operation = _sequence_stack(tmp_path, ["echo drill-me"])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            app.query_one("#command-input", Input).value = "!echo drill-me"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            run = stack[4].list_runs(operation.id)[0]
+            # the tool block carries an inspect link for its run
+            titles = "\n".join(b._title.plain for b in journal.tool_blocks)
+            assert "ⓘ" in titles
+
+            app.action_inspect("run", run.id)
+            await pilot.pause()
+            summaries = [
+                child
+                for child in journal.children
+                if isinstance(child, InspectSummaryBlock)
+            ]
+            assert summaries, "the click must land an inline summary"
+            assert summaries[0].kind == "run" and summaries[0].ref == run.id
+            assert run.tool_id in str(summaries[0].render())
+
+            # Enter on the summary opens the full-screen inspector
+            summaries[0].action_open_full()
+            await pilot.pause()
+            assert app.screen.__class__.__name__ == "InspectorScreen"
+            await pilot.press("escape")
+            await pilot.pause()
+            # an unknown id is a note, not a crash
+            app.action_inspect("run", "run_missing")
+            await pilot.pause()
+            assert "nothing to show" in journal.text()
+
+    asyncio.run(exercise())
+
+
+def test_artifact_drill_down_shows_its_content(tmp_path: Path) -> None:
+    """An artifact summary drills into metadata and the stored bytes."""
+    stack, _provider, operation = _sequence_stack(tmp_path, ["echo drill-me"])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            app.query_one("#command-input", Input).value = "!echo drill-me"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            artifacts = stack[3].kernel.kernel.list_artifacts(operation.id)
+            assert artifacts
+            artifact = artifacts[0]
+            app.action_inspect("artifact", artifact.id)
+            await pilot.pause()
+            summaries = [
+                c for c in journal.children if isinstance(c, InspectSummaryBlock)
+            ]
+            assert any(s.kind == "artifact" for s in summaries)
+            app._inspect_full("artifact", artifact.id)
+            await pilot.pause()
+            screen = app.screen
+            assert screen.__class__.__name__ == "InspectorScreen"
+            body = "\n".join(
+                str(w.render()) for w in screen.query(".inspector-line")
+            )
+            assert "sha256" in body and "drill-me" in body
+            await pilot.press("escape")
+
+    asyncio.run(exercise())
+
+
+def test_panel_rows_carry_drill_down_links(tmp_path: Path) -> None:
+    """A task id in the Plan tab is a link: click → summary, Enter → detail."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hunt", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt plan",
+        [PlanTask(id="t-1", title="Brute force SSH", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._switch_view("view-ops")
+            await pilot.pause()
+            view = app.query_one("#view-ops", BlockJournal)
+            assert "Brute force SSH" in view.text()
+            # the row's id span carries the inspect action in its style meta
+            block = view.children[0]
+            visual = block._render()
+            metas = [
+                span.style.meta.get("@click")
+                for span in getattr(visual, "spans", [])
+                if getattr(span.style, "meta", None)
+            ]
+            assert "inspect('task','t-1')" in metas
+            # and the action lands an inline summary
+            app.action_inspect("task", "t-1")
+            await pilot.pause()
+            summaries = [
+                c
+                for c in app.query_one("#journal", BlockJournal).children
+                if isinstance(c, InspectSummaryBlock)
+            ]
+            assert summaries and summaries[0].kind == "task"
+
+    asyncio.run(exercise())
+
+
+def test_the_status_bar_shows_the_live_turn(tmp_path: Path) -> None:
+    """While a turn runs the bar carries elapsed time and the current tool."""
+    stack, _provider, operation = _sequence_stack(tmp_path, ["echo live-bar"])
+    stack[2].set_value("tui.permission_mode", "never")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            status = app.query_one("#status-bar", Static)
+            assert "⏱" not in str(status.render())
+            # a running turn shows the clock and the tool in flight
+            app._turn_started = time.monotonic() - 65
+            app._current_tool = "scan.nmap -sT 10.0.0.1"
+            app._status_tick()
+            await pilot.pause()
+            shown = str(status.render())
+            assert "1:05" in shown and "▶ scan.nmap" in shown
+            # the turn ends: clock leaves, the token sum stays
+            app._turn_started = None
+            app._current_tool = ""
+            app._run_tokens = 42
+            app._status_tick()
+            app._refresh_chrome()
+            await pilot.pause()
+            shown = str(status.render())
+            assert "⏱" not in shown and "Σ 42 tok" in shown
 
     asyncio.run(exercise())

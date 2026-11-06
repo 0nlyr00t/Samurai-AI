@@ -49,7 +49,7 @@ from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.vault import VaultService
-from samurai_ai.tui.journal import BlockJournal, ToolBlock
+from samurai_ai.tui.journal import BlockJournal, ToolBlock, entity_span
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import AccessPromptScreen
 
@@ -131,6 +131,9 @@ class ChatController:
         _stop_note_sent: bool
         screen: Any
         _shell_running: str
+        _turn_started: float | None
+        _current_tool: str
+        _run_tokens: int
         _shell_background: bool
         _ctx_tokens: int
         _process_block: list[str]
@@ -607,6 +610,7 @@ class ChatController:
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
 
     def _shell_mode(self, command: str) -> None:
+        self._current_tool = f"!{command}"
         """`!cmd`: run on the host without spending a model round."""
         if not command:
             self._write_dim(self.translator.t("shell.empty"))
@@ -716,6 +720,7 @@ class ChatController:
             result.run.exit_code,
             result.stdout,
             result.stderr,
+            run_id=result.run.id,
         )
         body = (result.stdout if result.stdout.strip() else result.stderr).rstrip()
         self._remember(
@@ -729,11 +734,14 @@ class ChatController:
         )
         self._trim_chat_history()
         self._shell_running = ""
+        self._current_tool = ""
 
     async def _chat(self, text: str, model_id: str, approval_id: str | None) -> None:
         self._chat_busy = True
         self._stop_requested = False
         self._stop_note_sent = False
+        self._turn_started = time.monotonic()
+        self._current_tool = ""
         reason = TerminalReason.CANCELLED
         try:
             reason = await self._chat_loop(text, model_id, approval_id)
@@ -746,6 +754,8 @@ class ChatController:
             self._stop_requested = False
             self._end_turn(reason)
             self._chat_busy = False
+            self._turn_started = None
+            self._current_tool = ""
             self._close_process_block()
             if reason is not TerminalReason.COMPLETED and self._collapsed:
                 # a failure or a stop is exactly when the detail is wanted
@@ -975,7 +985,12 @@ class ChatController:
                 role="user",
                 content="[tool agent_spawn] the subagent did not start (see the journal)",
             )
-        self._write_dim(self.translator.t("subagent.tool-started", run=run_id))
+        self._write_entity_line(
+            self.translator.t("subagent.tool-started", run=run_id),
+            "agent",
+            run_id,
+            run_id,
+        )
         return Message(
             role="user",
             content=(
@@ -1054,7 +1069,18 @@ class ChatController:
             return Message(role="user", content=f"[tool record_fact] {exc}")
         if artifacts:
             self._progress.finding_seen()
-        self._write_dim(self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id))
+        artifact_ids = cast("list[str]", fact.payload.get("artifact_ids") or [])
+        if artifact_ids:
+            self._write_entity_line(
+                self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id),
+                "artifact",
+                str(artifact_ids[0]),
+                str(artifact_ids[0]),
+            )
+        else:
+            self._write_dim(
+                self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id)
+            )
         return Message(
             role="user", content=f"[tool record_fact] {fact.id} recorded for {intent.id}"
         )
@@ -1148,8 +1174,11 @@ class ChatController:
         except (GraphError, KernelError) as exc:
             return Message(role="user", content=f"[tool propose_finding] {exc}")
         self._progress.finding_seen()
-        self._write_line(
-            self.translator.t("graph.finding", finding=finding.id, title=finding.title)
+        self._write_entity_line(
+            "◆ " + self.translator.t("graph.finding", finding=finding.id, title=finding.title),
+            "finding",
+            finding.id,
+            self.translator.t("inspect.more"),
         )
         # a finding is the one thing worth showing the moment it lands
         self.refresh_hunt()
@@ -1360,6 +1389,7 @@ class ChatController:
         risk = classify_command(command, str(self._cwd))
         badge = f"  [{risk.label()}]" if not risk.empty else ""
         self._write_dim(f"⚙ {command}{badge}")
+        self._current_tool = command
         # A tool already approved for this operation is not asked again, except
         # for a sensitive path or a destructive shape, which stay worth a look.
         mode = self._permission_mode
@@ -1438,6 +1468,7 @@ class ChatController:
             exit_code,
             result.stdout,
             result.stderr,
+            run_id=result.run.id,
         )
         stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
         stderr = result.stderr[:1000]
@@ -1449,7 +1480,12 @@ class ChatController:
         )
 
     def _write_tool_block(
-        self, title: str, exit_code: int | None, stdout: str, stderr: str
+        self,
+        title: str,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        run_id: str | None = None,
     ) -> None:
         """A tool run as a collapsible block; a failure speaks and opens.
 
@@ -1466,11 +1502,30 @@ class ChatController:
             else:
                 title += f"  ← exit {exit_code}, no output"
         body = (stdout if stdout.strip() else stderr).rstrip()
+        title_text = Text(title, style=self.paint(self._DIM_STYLE))
+        if run_id:
+            title_text.append(" ")
+            title_text.append_text(
+                entity_span("ⓘ", "run", run_id, base_style=self.paint("accent"))
+            )
         journal.add_tool_block(
-            Text(title, style=self.paint(self._DIM_STYLE)),
+            title_text,
             body.splitlines() if body else [],
             failed=failed,
             body_style=self.paint(self._DIM_STYLE),
+        )
+        self._current_tool = ""
+
+    def _write_entity_line(
+        self, prefix: str, kind: str, ref: str, label: str
+    ) -> None:
+        """A journal line whose tail is a clickable entity link."""
+        journal = self.query_one("#journal", BlockJournal)
+        journal.write(
+            Text.assemble(
+                (prefix + " ", self.paint(self._DIM_STYLE)),
+                entity_span(label, kind, ref, base_style=self.paint("accent")),
+            )
         )
 
     @property

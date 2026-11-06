@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from textual.widgets import Input, OptionList, RichLog
+from textual.widgets import Input, OptionList
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
@@ -41,8 +41,8 @@ from samurai_ai.storage.reports import ReportRepository
 from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
-from samurai_ai.tui.journal import BlockJournal
 from samurai_ai.tui.app import LanguagePromptScreen, SamuraiApp
+from samurai_ai.tui.journal import BlockJournal
 
 
 def make_stack(
