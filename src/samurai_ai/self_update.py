@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 REPO_URL = "https://github.com/0nlyr00t/Samurai-AI.git"
 UV_INSTALL_HINT = "install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -74,6 +75,37 @@ def install_tag(
     )
 
 
+def _uv_git_cache() -> Path | None:
+    """uv's bare-clone cache (``<cache>/git-v0``), if uv can name its cache."""
+    uv = shutil.which("uv")
+    if uv is None:
+        return None
+    try:
+        result = subprocess.run(
+            [uv, "cache", "dir"], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return Path(result.stdout.strip()) / "git-v0"
+
+
+def clear_uv_git_cache() -> bool:
+    """Drop uv's cached git clones.
+
+    A history rewrite on the remote leaves that cache with dangling objects,
+    and the next install dies deep inside git ("unable to read sha1 file").
+    The cache is disposable by definition, so a failed install may clear it
+    and retry once.
+    """
+    cache = _uv_git_cache()
+    if cache is None or not cache.exists():
+        return False
+    shutil.rmtree(cache)
+    return True
+
+
 def run_update(check: bool = False) -> int:
     from samurai_ai import __version__
 
@@ -108,6 +140,11 @@ def run_update(check: bool = False) -> int:
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if result.returncode != 0:
+        # most often this is uv's stale git cache after a history rewrite
+        if clear_uv_git_cache():
+            print("note: cleared uv's git cache, retrying")
+            result = install_tag(tag)
     if result.returncode != 0:
         print("error: uv tool install failed", file=sys.stderr)
         return 2
