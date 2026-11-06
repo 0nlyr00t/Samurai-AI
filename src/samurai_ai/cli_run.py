@@ -44,6 +44,12 @@ def add_run_command(subcommands: Any, add_parser: Any) -> None:
         help="try this model when the first one is unavailable",
     )
     run.add_argument(
+        "--no-relay-host",
+        dest="relay_host",
+        action="store_false",
+        help="do not add the relay host's own address to the scope",
+    )
+    run.add_argument(
         "--no-preflight",
         action="store_true",
         help="start even when no target answers",
@@ -140,6 +146,29 @@ def _relay_report(relay: str, operation_id: str, operations: Any) -> None:
     )
 
 
+def _allow_relay_host(relay: str, operation_id: str, operations: Any) -> None:
+    """The VM is part of the picture; in scope it stops being a refused literal."""
+    from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
+    from samurai_ai.execution.relay import relay_host
+
+    address = relay_host(relay)
+    if not address:
+        return
+    operation = operations.get(operation_id)
+    if address in operation.scope.includes:
+        return
+    try:
+        scope = ScopeContract(
+            includes=(*operation.scope.includes, address),
+            excludes=operation.scope.excludes,
+            hosts=operation.scope.hosts,
+        )
+    except ScopeValidationError:
+        return
+    operations.replace_scope(operation_id, scope)
+    print(f"note: relay host {address} added to the scope", file=sys.stderr)
+
+
 def _port_list() -> str:
     from samurai_ai.services.reachability import PROBE_PORTS
 
@@ -173,6 +202,8 @@ def _run(args: argparse.Namespace) -> int:
         return 2
     if args.relay:
         _relay_report(args.relay, operation_id, operations)
+        if args.relay_host:
+            _allow_relay_host(args.relay, operation_id, operations)
     socket_path = Path(getattr(args, "socket", None) or serve_socket_path())
     if socket_path.exists():
         return _through_daemon(args, socket_path, operation_id, plan_id)
