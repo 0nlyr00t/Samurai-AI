@@ -69,18 +69,25 @@ class SettingsScreen(ModalScreen[None]):
     }
     """
 
+    _LIMITS_ID = "__limits__"
+
     def __init__(
         self,
         translator: Translator,
         states: dict[str, str],
         on_save: Callable[[str, str], None],
         on_clear: Callable[[str], None],
+        *,
+        max_tool_rounds: int = 0,
+        on_save_limit: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__()
         self.translator = translator
         self.states = states
         self.on_save = on_save
         self.on_clear = on_clear
+        self.max_tool_rounds = max_tool_rounds
+        self.on_save_limit = on_save_limit
         self.rows: list[ToolKey] = list(CATALOGUE)
 
     def compose(self) -> ComposeResult:
@@ -108,6 +115,15 @@ class SettingsScreen(ModalScreen[None]):
                     id=entry.env_name,
                 )
             )
+        if self.on_save_limit is not None:
+            options.append(
+                Option(
+                    self.translator.t(
+                        "settings.rounds-row", value=self.max_tool_rounds or "—"
+                    ),
+                    id=self._LIMITS_ID,
+                )
+            )
         return options
 
     def on_mount(self) -> None:
@@ -122,11 +138,26 @@ class SettingsScreen(ModalScreen[None]):
             return None
         return self.rows[index]
 
+    def _selected_id(self) -> str | None:
+        listed = self.query_one("#settings-keys", OptionList)
+        index = listed.highlighted
+        if index is None:
+            return None
+        if index >= len(self.rows):
+            return self._LIMITS_ID if self.on_save_limit is not None else None
+        return self.rows[index].env_name
+
     def action_edit(self) -> None:
-        entry = self.selected()
-        if entry is None:
+        selected_id = self._selected_id()
+        if selected_id is None:
             return
         field = self.query_one("#settings-input", Input)
+        field.password = selected_id != self._LIMITS_ID
+        field.placeholder = self.translator.t(
+            "settings.rounds-placeholder"
+            if selected_id == self._LIMITS_ID
+            else "settings.placeholder"
+        )
         field.add_class("visible")
         field.value = ""
         field.focus()
@@ -140,9 +171,20 @@ class SettingsScreen(ModalScreen[None]):
         self._refresh()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        entry = self.selected()
+        selected_id = self._selected_id()
         value = event.value.strip()
-        if entry is None or not value:
+        if selected_id is None or not value:
+            return
+        if selected_id == self._LIMITS_ID:
+            if self.on_save_limit is not None:
+                self.on_save_limit(value)
+            event.input.value = ""
+            event.input.remove_class("visible")
+            self._refresh()
+            self.query_one("#settings-keys", OptionList).focus()
+            return
+        entry = self.selected()
+        if entry is None:
             return
         self.on_save(entry.env_name, value)
         self.states[entry.env_name] = "set"
