@@ -315,3 +315,21 @@ def test_httpx_probe_falls_back_to_curl_under_a_relay(monkeypatch: Any) -> None:
     record = json.loads(output.stdout.strip().splitlines()[0])
     assert record["status_code"] == 200
     assert record["title"] == "Airways"
+
+
+def test_shell_exec_rewrites_a_command_that_starts_with_the_relay() -> None:
+    """The model types the prefix by hand, with a stray -- and lost quotes."""
+    from samurai_ai.execution.relay import normalize_relayed
+
+    relay = "prlctl exec '<uuid>'"
+    rewritten = normalize_relayed(relay, "prlctl exec '<uuid>' -- bash -c 'id; whoami'")
+    # the stray -- is gone and the tail is quoted twice for the far side
+    assert " -- " not in rewritten
+    assert rewritten.startswith(relay)
+    assert chr(39) + chr(34) + chr(39) in rewritten
+
+    # a plain command is untouched
+    assert normalize_relayed(relay, "ls -la") == "ls -la"
+    # double quotes around the uuid match too
+    rewritten2 = normalize_relayed(relay, 'prlctl exec "<uuid>" id')
+    assert rewritten2.startswith(relay) and "id" in rewritten2
