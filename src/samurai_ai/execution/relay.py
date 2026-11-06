@@ -14,6 +14,7 @@ break out of the command.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 import shlex
 from dataclasses import dataclass
@@ -195,6 +196,32 @@ def html_to_text(html: str) -> tuple[str, list[str], str]:
     return title, links, _BLANKS.sub("\n\n", text).strip()
 
 
+def relay_host(relay: str, *, timeout: float = 20.0) -> str:
+    """The relay host's own first IPv4 address, or an empty string.
+
+    The agent keeps reaching for it ("the machine I am going through"), so the
+    address belongs in scope; we ask the far side instead of parsing the prefix.
+    """
+    from samurai_ai.execution.process import ProcessManager
+
+    # no inner `bash -c`: prlctl re-splits a quoted string, so the flag must be
+    # an argument of the program itself
+    argv = ["bash", "-lc", relay_command(relay, "hostname", ["-I"])]
+    manager = ProcessManager(allowed_executables=frozenset({"bash"}))
+    try:
+        result = asyncio.run(manager.run(argv, timeout_seconds=timeout))
+    except Exception:  # noqa: BLE001 - an unanswered probe is just "no address"
+        return ""
+    for token in result.stdout.split():
+        try:
+            ipaddress.ip_address(token)
+        except ValueError:
+            continue
+        if not token.startswith(("127.", "::")):
+            return token
+    return ""
+
+
 def build_runner(relay: str) -> RelaySandboxRunner:
     """A relay runner wired to a host shell, ready to hand to an adapter."""
     from samurai_ai.config import sandbox_allowlist_path, vault_key_path
@@ -216,6 +243,7 @@ __all__ = [
     "PROBE_TOOLS",
     "probe_tools",
     "html_to_text",
+    "relay_host",
     "relay_command",
     "relayed_fetch",
     "RelayResponse",
