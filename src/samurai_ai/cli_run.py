@@ -272,10 +272,25 @@ def _swarm_until_done(
 
     done = 0
     failed = 0
+    retried: set[str] = set()
     while True:
         ready = swarms.ready_tasks(operation_id)
         if not ready:
-            break
+            # a task the agent left blocked gets exactly one fresh attempt —
+            # a second agent with the evidence notes is a different run
+            plan = swarms.kernel.get_current_plan(operation_id)
+            retryable = [
+                task
+                for task in (plan.tasks if plan else [])
+                if task.status.value in ("blocked", "in-progress")
+                and task.id not in retried
+            ]
+            if not retryable:
+                break
+            for task in retryable:
+                retried.add(task.id)
+                swarms.kernel.reset_task(operation_id, task.id)
+            continue
         swarm = swarms.start(
             operation_id,
             [task.id for task in ready],
@@ -294,8 +309,7 @@ def _swarm_until_done(
                 done += 1
             else:
                 failed += 1
-        if swarm.status.value == "failed":
-            break
+        # a failed swarm is not the end: the loop retries blocked tasks once
     print(f"tasks done={done} failed={failed}")
     return 0 if failed == 0 and done else 1
 

@@ -150,7 +150,7 @@ _MAX_BLACKBOARD_ITEMS = 20
 #: blackboard items kept at each context-recovery level (0 = normal)
 _CONTEXT_LEVELS = {0: _MAX_BLACKBOARD_ITEMS, 1: 6, 2: 2}
 MAX_CONTEXT_RETRIES = 2
-_CLOSE_OUT_ATTEMPTS = 2
+_CLOSE_OUT_ATTEMPTS = 3
 _CLOSE_OUT_STEP = (
     "The planned steps are done. Emit exactly one command: complete_task if the task is "
     'finished ({"type":"complete_task"} — a task with no finding closes as '
@@ -609,6 +609,23 @@ class AgentOrchestrator:
                 model_approvals=model_approvals,
                 stop_event=stop_event,
             )
+            if self._task_open(operation_id, run.task_id):
+                # the closing attempts are spent: leave the plan truthful
+                # instead of a task that hangs "in progress" forever
+                try:
+                    self.kernel.block_task(operation_id, run.task_id)
+                except Exception:  # noqa: BLE001 - a race with the operator's board
+                    pass
+                self._append_event(
+                    OperationEvent(
+                        operation_id=operation_id,
+                        event_type="task.blocked",
+                        payload={
+                            "task_id": run.task_id,
+                            "reason": "closing attempts spent without evidence",
+                        },
+                    )
+                )
 
     def _run_commands(
         self,

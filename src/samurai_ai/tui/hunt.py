@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
+from samurai_ai.domain.graph import NodeKind
 from samurai_ai.domain.kernel import Finding, FindingStatus
 from samurai_ai.tui.journal import entity_span
 
@@ -91,6 +92,7 @@ class HuntController:
     if TYPE_CHECKING:
         operation: Any
         kernel: Any
+        graph: Any
         translator: Any
 
         def paint(self, token: str) -> str: ...
@@ -152,12 +154,62 @@ class HuntController:
             )
         lines.append(Text())
         lines.append(
+            Text(self.translator.t("hunt.title-hypotheses"), style=self.paint("bold $accent"))
+        )
+        for state_mark, title, outcome in self._hypothesis_rows():
+            lines.append(
+                Text.assemble(
+                    (f"{state_mark} ", self.paint("$text")),
+                    (title, self.paint("$text")),
+                    (f"  — {outcome}", self.paint("dim text-dim")) if outcome else ("", ""),
+                )
+            )
+        lines.append(Text())
+        lines.append(
             Text(
                 self.translator.t("hunt.hint", shortcut="Ctrl-T"),
                 style=self.paint("dim text-faint"),
             )
         )
         return lines
+
+    _HYPOTHESIS_ORDER = ("running", "open", "paused", "blocked", "done", "exhausted")
+    _HYPOTHESIS_MARKS = {
+        "running": "▶",
+        "open": "○",
+        "paused": "⏸",
+        "blocked": "⛔",
+        "done": "✓",
+        "exhausted": "✗",
+    }
+
+    def _hypothesis_rows(self) -> list[tuple[str, str, str]]:
+        """Open and settled hypotheses, live ones first; the graph is the log."""
+        if self.operation is None:
+            return []
+        intents = [
+            node
+            for node in self.graph.for_operation(self.operation.id)
+            if node.kind is NodeKind.INTENT
+        ]
+        intents.sort(
+            key=lambda node: self._HYPOTHESIS_ORDER.index(node.state.value)
+            if node.state.value in self._HYPOTHESIS_ORDER
+            else len(self._HYPOTHESIS_ORDER)
+        )
+        rows: list[tuple[str, str, str]] = []
+        for node in intents[:12]:
+            mark = self._HYPOTHESIS_MARKS.get(node.state.value, "?")
+            outcome = str(
+                node.payload.get("outcome")
+                or node.blocked_reason
+                or node.payload.get("reason")
+                or ""
+            )
+            rows.append((mark, node.text(), outcome))
+        if not rows:
+            return [("", self.translator.t("hunt.no-hypotheses"), "")]
+        return rows
 
     def refresh_hunt(self) -> None:
         """Re-render the tab if it is the visible pane."""
