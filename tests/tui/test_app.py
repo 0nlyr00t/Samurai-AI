@@ -5717,3 +5717,41 @@ def test_the_rounds_ceiling_is_a_setting_with_a_higher_default(tmp_path: Path) -
     assert ChatController._max_tool_rounds(app) == 200  # and above
     stack[2].set_value("tui.max_tool_rounds", "banana")
     assert ChatController._max_tool_rounds(app) == 32  # junk falls back
+
+
+def test_the_hunt_tab_lists_hypotheses(tmp_path: Path) -> None:
+    """The graph's intents are the hunt's narrative: open and settled alike."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hunt", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt plan",
+        [PlanTask(id="t-1", title="Brute force SSH", risk_class=RiskClass.R1)],
+        [],
+    )
+    app_holder: list = []
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        app_holder.append(app)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            intent = app.graph.open_intent(operation.id, "t-1", "weak ssh password", origin.id)
+            app.graph.start_intent(intent.id)
+            other = app.graph.open_intent(operation.id, "t-1", "default creds", origin.id)
+            app.graph.close_intent(other.id, "exhausted", "wordlist done")
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            text = app.query_one("#view-hunt", BlockJournal).text()
+            assert "Hypotheses" in text
+            assert "weak ssh password" in text
+            assert "default creds" in text
+            # the exhausted hypothesis shows its mark; the reason is kept only
+            # for blocked/deleted by the graph store
+            assert "✗" in text
+
+    asyncio.run(exercise())
