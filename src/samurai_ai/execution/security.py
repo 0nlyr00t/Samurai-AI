@@ -1110,7 +1110,8 @@ class FfufFuzzTool(_ScopedSandboxTool):
             risk_class=RiskClass.R2,
             read_only=True,
             network=NetworkAccess.PROXIED,
-            timeout_seconds=300,
+            # 4751 words over a relay and a VPN do not fit in five minutes
+            timeout_seconds=900,
             output_limit_bytes=262144,
             parameters={
                 "type": "object",
