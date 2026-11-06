@@ -14,8 +14,10 @@ break out of the command.
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 from dataclasses import dataclass
+from html import unescape as _unescape
 from typing import Any
 
 from samurai_ai.domain.execution import ToolExecutionError, ToolValidationError
@@ -169,6 +171,30 @@ def probe_tools(
     return {name: name in found for name in names}
 
 
+_TAG = re.compile(r"<[^>]+>")
+_SCRIPT_STYLE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
+_LINK = re.compile(r"""href=["']([^"'#]+)["']""", re.I)
+_BLANKS = re.compile(r"\n{3,}")
+
+
+def html_to_text(html: str) -> tuple[str, list[str], str]:
+    """Title, links and readable text from a page, without a browser.
+
+    A relayed read loses the browser: enough stays for the model to work with
+    (what the page says, where it points), and the raw body is still an artifact.
+    """
+    title = ""
+    match = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    if match:
+        title = " ".join(match.group(1).split())[:200]
+    links: list[str] = [str(link) for link in _LINK.findall(html)][:50]
+    text = _SCRIPT_STYLE.sub(" ", html)
+    text = _TAG.sub("\n", text)
+    text = _unescape(text)
+    text = "\n".join(" ".join(line.split()) for line in text.splitlines())
+    return title, links, _BLANKS.sub("\n\n", text).strip()
+
+
 def build_runner(relay: str) -> RelaySandboxRunner:
     """A relay runner wired to a host shell, ready to hand to an adapter."""
     from samurai_ai.config import sandbox_allowlist_path, vault_key_path
@@ -189,6 +215,7 @@ __all__ = [
     "build_runner",
     "PROBE_TOOLS",
     "probe_tools",
+    "html_to_text",
     "relay_command",
     "relayed_fetch",
     "RelayResponse",
