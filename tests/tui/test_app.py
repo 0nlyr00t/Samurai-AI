@@ -4209,7 +4209,7 @@ def test_task_board_filter_reveals_finished_rows(tmp_path: Path) -> None:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             stack[1].start_task(operation.id, "recon")
-            stack[1].complete_task(operation.id, "recon")
+            stack[1].complete_task(operation.id, "recon", no_finding="scripted")
             app._show_task_board()
             await pilot.pause()
             listed = app.screen.query_one("#board-list", OptionList)
@@ -5410,7 +5410,7 @@ def test_the_progress_tab_shows_a_percentage_and_a_top_finding(tmp_path: Path) -
     )
     stack[1].start_task(operation.id, "t-1")
     stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "seed", task_id="t-1")
-    stack[1].complete_task(operation.id, "t-1")
+    stack[1].complete_task(operation.id, "t-1", no_finding="scripted")
     finding = stack[1].create_finding(operation.id, "IDOR on /user", FindingSeverity.HIGH)
 
     async def exercise() -> None:
