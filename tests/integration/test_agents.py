@@ -336,8 +336,9 @@ def test_complete_task_without_required_artifact_rejected(
     fake.queue(
         '{"steps": ["finish"]}',
         '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
-        # retry in the step, then two closing attempts, all refused for the
+        # retry in the step, then three closing attempts, all refused for the
         # same missing artifact
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
         '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
         '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
         '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
@@ -346,10 +347,12 @@ def test_complete_task_without_required_artifact_rejected(
     assert run.status is AgentRunStatus.COMPLETED
     plan = kernel.get_current_plan(operation_id)
     assert plan is not None
-    assert plan.task_by_id("probe").status == TaskStatus.IN_PROGRESS  # type: ignore[union-attr]
+    # the closing attempts are spent: the task is blocked, not left hanging
+    assert plan.task_by_id("probe").status == TaskStatus.BLOCKED  # type: ignore[union-attr]
     events = service.events(operation_id)
     rejected = [e for e in events if e.event_type == "agent.command.rejected"]
     assert rejected and "missing required artifact" in rejected[0].payload["reason"]
+    assert any(e.event_type == "task.blocked" for e in events)
 
 
 def test_budget_exceeded_mid_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
