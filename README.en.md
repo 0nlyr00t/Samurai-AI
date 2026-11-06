@@ -62,7 +62,7 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 
 **Remote daemon.** `attach --ssh host` works against a daemon on another machine through its forwarded socket; permissions stay on the far side.
 
-**Network behind a relay.** When a target is only reachable from a VM or a jump host, `--relay "prlctl exec '<uuid>'"` sends the network tools there; no container, while scope and artifacts stay.
+**Network behind a relay.** When a target is only reachable from a VM or a jump host, `--relay "prlctl exec '<uuid>'"` sends the network tools there; no container, while scope and artifacts stay and the relay's own address joins the scope. `samurai doctor --relay "<prefix>"` says up front which tools the far side lacks.
 
 **Offline mode.** `--offline` on an operation refuses remote models and tools that need the internet; the refusal carries a reason and comes before the attempt, `offline check` lists what is refused.
 
