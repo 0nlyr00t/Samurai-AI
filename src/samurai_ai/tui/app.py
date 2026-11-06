@@ -2993,6 +2993,19 @@ class SamuraiApp(
             return None
         return self.goals.current(self.operation.id)
 
+    def _agent_now_text(self, task_id: str) -> str:
+        """What the active agent does right now: its latest tool in flight."""
+        if self.operation is None:
+            return ""
+        runs = [
+            run
+            for run in self.execution.list_runs(self.operation.id)
+            if run.task_id == task_id and run.status.value in ("running", "queued")
+        ]
+        if not runs:
+            return ""
+        return str(self.translator.t("strip.agent-now", tool=runs[-1].tool_id))
+
     def _refresh_ops_strip(self) -> None:
         agents_item = self.query_one("#strip-agents", Static)
         todo_item = self.query_one("#strip-todo", Static)
@@ -3011,7 +3024,8 @@ class SamuraiApp(
             if active is not None:
                 agents_item.update(
                     Text(
-                        self.translator.t("strip.subagent", run=active.run_id, task=active.task_id),
+                        self.translator.t("strip.subagent", run=active.run_id, task=active.task_id)
+                        + self._agent_now_text(active.task_id),
                         style=self.paint("$accent-alt"),
                     )
                 )
