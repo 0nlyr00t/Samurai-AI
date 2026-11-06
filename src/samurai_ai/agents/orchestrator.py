@@ -153,8 +153,9 @@ MAX_CONTEXT_RETRIES = 2
 _CLOSE_OUT_ATTEMPTS = 2
 _CLOSE_OUT_STEP = (
     "The planned steps are done. Emit exactly one command: complete_task if the task is "
-    'finished ({"type":"complete_task"}), otherwise fail with the reason '
-    '({"type":"fail","reason":...}). No tool runs.'
+    'finished ({"type":"complete_task"} — a task with no finding closes as '
+    '{"type":"complete_task","no_finding":"why recon found nothing to report"}), '
+    'otherwise fail with the reason ({"type":"fail","reason":...}). No tool runs.'
 )
 
 _PLANNER_INSTRUCTION = (

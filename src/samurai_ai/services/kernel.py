@@ -192,7 +192,8 @@ class KernelService:
             ):
                 raise TaskEvidenceError(
                     f"task {task_id} produced no finding: propose_finding with an artifact "
-                    "id, or close with a no_finding reason"
+                    "id, or close it with the reason explicitly — "
+                    '{"type":"complete_task","no_finding":"<why>"}'  # noqa: E501
                 )
             task.status = TaskStatus.DONE
             return "task.completed", {
