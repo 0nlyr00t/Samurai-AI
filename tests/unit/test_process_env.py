@@ -103,3 +103,28 @@ def test_a_deadline_does_not_extend_a_short_timeout() -> None:
     result = asyncio.run(manager.run(("sh", "-c", "sleep 30"), timeout_seconds=0.2))
     assert result.timed_out is True
     assert manager.remaining_seconds() is not None
+
+
+def test_the_breaker_half_opens_after_a_cooldown(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Three sick-target timeouts must not poison the rest of the run."""
+    import asyncio
+    import time
+
+    from samurai_ai.execution.process import ProcessManager
+
+    manager = ProcessManager(
+        allowed_executables=frozenset({"false", "true"}),
+    )
+    for _ in range(3):
+        asyncio.run(manager.run(["false"], timeout_seconds=5))
+    opened_at = time.monotonic()
+    manager._breaker_opened_at = opened_at
+    from samurai_ai.execution.process import CircuitBreakerOpenError
+
+    with pytest.raises(CircuitBreakerOpenError):
+        asyncio.run(manager.run(["true"], timeout_seconds=5))
+    # the cooldown elapsed: the next call probes again and closes on success
+    manager._breaker_opened_at = opened_at - 200
+    result = asyncio.run(manager.run(["true"], timeout_seconds=5))
+    assert result.exit_code == 0
+    assert manager._consecutive_failures == 0
