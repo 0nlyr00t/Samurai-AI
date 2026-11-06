@@ -119,3 +119,92 @@ def test_the_scope_line_is_always_there_and_names_the_targets() -> None:
 
     block = _rejection_block(["'127.0.0.1' is outside the operation scope"], "10.0.0.5")
     assert "Only these targets are allowed: 10.0.0.5" in block
+
+
+def test_an_exploit_run_takes_the_relay_and_skips_the_tunnel() -> None:
+    """A PoC in a container is blind under a relay; it runs on the far side instead."""
+    import asyncio
+
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.execution.exploits import ExploitRunTool
+
+    tool = ExploitRunTool()
+    assert tool.relay_supported is True
+    operation = type("Op", (), {"relay": "prlctl exec '{uuid}'"})()
+    from samurai_ai.services.execution import ToolExecutionService
+
+    ToolExecutionService._apply_relay(None, operation, tool)  # type: ignore[arg-type]
+    assert tool.relay == "prlctl exec '{uuid}'"
+
+    seen: dict[str, object] = {}
+
+    class _Manager:
+        stall_seconds = 120.0
+
+        async def run(self, argv, timeout_seconds=0, **_k):  # noqa: ANN001, ANN003
+            seen["argv"] = argv
+            return type(
+                "R", (), {"stdout": "poc ok", "stderr": "", "exit_code": 0,
+                          "timed_out": False, "truncated": False}
+            )()
+
+    class _Tool(ExploitRunTool):
+        async def _manager(self):  # noqa: D102 - replaced below
+            raise NotImplementedError
+
+    import samurai_ai.execution.process as process_module
+
+    original = process_module.ProcessManager
+    process_module.ProcessManager = lambda **_k: _Manager()  # type: ignore[assignment]
+    try:
+        output = asyncio.run(
+            tool._run_relayed("print(1)", "10.0.0.1", 80)
+        )
+    finally:
+        process_module.ProcessManager = original  # type: ignore[assignment]
+    assert output.stdout == "poc ok"
+    command = seen["argv"]
+    assert isinstance(command, list) and command[0] == "bash"
+    assert "10.0.0.1:80" in command[2]
+    assert ScopeContract is not None
+
+
+def test_a_relayed_read_falls_back_to_a_plain_fetch() -> None:
+    """No browser image on the far side: curl plus stripping still gives a read."""
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.execution import process as process_module
+    from samurai_ai.execution import relay as relay_module
+    from samurai_ai.execution.security import ResearchReadTool
+
+    tool = ResearchReadTool()
+    tool.relay = "prlctl exec '{uuid}'"
+    assert tool.relay_supported is True
+
+    class _Manager:
+        stall_seconds = 120.0
+
+        async def run(self, *_a, **_k):  # noqa: ANN002, ANN003
+            body = "<title>Dash</title><a href='/x'>go</a><p>hello world</p>"
+            return type(
+                "R", (), {"stdout": f"HTTP/1.1 200 OK\r\n\r\n{body}", "stderr": "",
+                          "exit_code": 0, "timed_out": False}
+            )()
+
+    original = process_module.ProcessManager
+    process_module.ProcessManager = lambda **_k: _Manager()  # type: ignore[assignment]
+    try:
+        output = tool.invoke(
+            {"url": "http://10.0.0.1/", "max_chars": 500},
+            ScopeContract(includes=("10.0.0.1",)),
+        )
+    finally:
+        process_module.ProcessManager = original  # type: ignore[assignment]
+
+    import json
+
+    payload = json.loads(output.stdout)
+    assert payload["status"] == 200
+    assert payload["title"] == "Dash"
+    assert "hello world" in payload["text"]
+    assert "relayed, no browser" in output.stderr
+    assert relay_module is not None
