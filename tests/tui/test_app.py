@@ -5698,3 +5698,21 @@ def test_the_status_bar_shows_the_live_turn(tmp_path: Path) -> None:
             assert "⏱" not in shown and "Σ 42 tok" in shown
 
     asyncio.run(exercise())
+
+
+def test_the_rounds_ceiling_is_a_setting_with_a_higher_default(tmp_path: Path) -> None:
+    """8 rounds ended real turns mid-work; 32 by default, bounded, overridable."""
+    stack = _minimal_stack(tmp_path)
+    app = SamuraiApp.__new__(SamuraiApp)  # settings only, no event loop needed
+    app.__dict__["settings"] = stack[2]
+    from samurai_ai.tui.chat import ChatController
+
+    assert ChatController._max_tool_rounds(app) == 32
+    stack[2].set_value("tui.max_tool_rounds", "16")
+    assert ChatController._max_tool_rounds(app) == 16
+    stack[2].set_value("tui.max_tool_rounds", "1")
+    assert ChatController._max_tool_rounds(app) == 4  # bounded below
+    stack[2].set_value("tui.max_tool_rounds", "9999")
+    assert ChatController._max_tool_rounds(app) == 200  # and above
+    stack[2].set_value("tui.max_tool_rounds", "banana")
+    assert ChatController._max_tool_rounds(app) == 32  # junk falls back
