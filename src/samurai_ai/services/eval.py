@@ -33,7 +33,12 @@ from samurai_ai.domain.eval import (
     metrics_from_events,
     utc_now,
 )
-from samurai_ai.domain.kernel import ArtifactKind, PlanTask, RiskClass
+from samurai_ai.domain.kernel import (
+    ArtifactKind,
+    FindingSeverity,
+    PlanTask,
+    RiskClass,
+)
 from samurai_ai.domain.models import (
     ApiFamily,
     ModelCapability,
@@ -453,12 +458,16 @@ class EvalService:
                 operation.id, f"model.call {scenario.model_id}", RiskClass.R2
             )
             stack.kernel.approve(approval.id, decided_by="eval-harness")
-            # a scripted answer set rarely runs tools, and the completion gate
-            # wants evidence: one note artifact per task stands in for it
+            # a scripted answer set rarely runs tools, and the closing gates want
+            # evidence plus a result: a note artifact and a finding on it stand in
             for task in scenario.tasks:
-                stack.kernel.register_artifact(
+                artifact = stack.kernel.register_artifact(
                     operation.id, ArtifactKind.NOTE, f"{scenario.id}-{task.id}", task_id=task.id
                 )
+                finding = stack.kernel.create_finding(
+                    operation.id, f"eval {scenario.id}/{task.id}", FindingSeverity.INFO
+                )
+                stack.kernel.attach_evidence(finding.id, artifact.id)
             started = time.monotonic()
             if scenario.workers == 1:
                 for task in scenario.tasks:

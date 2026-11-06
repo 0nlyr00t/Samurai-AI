@@ -118,7 +118,7 @@ def test_cli_agent_run_list_show(
             '{"type": "request_tool_run", "tool_id": "local.echo", '
             '"params": {"text": "cli-agent-ok"}},'
             '{"type": "note", "key": "shared.done", "value": "yes"},'
-            '{"type": "complete_task"}'
+            '{"type": "complete_task", "no_finding": "scripted"}'
             "]}",
         ]
     )
@@ -182,7 +182,7 @@ def test_cli_agent_show_rejected_commands(
             '{"steps": ["s"]}',
             '{"commands": ['
             '{"type": "request_tool_run", "tool_id": "missing.tool", "params": {}},'
-            '{"type": "complete_task"}'
+            '{"type": "complete_task", "no_finding": "scripted"}'
             "]}",
         ]
     )
@@ -239,7 +239,7 @@ def test_cli_agent_run_uses_default_model_from_settings(
     RESPONSES.extend(
         [
             '{"steps": ["s"]}',
-            '{"commands": [{"type": "complete_task"}]}',
+            '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
         ]
     )
     assert main(["--db", database, "agent", "run", operation_id, "probe"]) == 2
@@ -292,7 +292,7 @@ def test_auto_approve_runs_a_tool_without_a_pre_granted_approval(
         [
             '{"steps": ["s"]}',
             '{"commands": [{"type": "request_tool_run", "tool_id": "local.echo",'
-            ' "params": {"text": "unattended"}}, {"type": "complete_task"}]}',
+            ' "params": {"text": "unattended"}}, {"type": "complete_task", "no_finding": "scripted"}]}',
         ]
     )
     assert (

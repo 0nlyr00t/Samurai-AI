@@ -53,13 +53,13 @@ EXECUTOR_ANSWER = (
     '{"commands": ['
     '{"type": "request_tool_run", "tool_id": "local.echo", "params": {"text": "swarm-probe"}},'
     '{"type": "note", "key": "probe", "value": "done"},'
-    '{"type": "complete_task"}'
+    '{"type": "complete_task", "no_finding": "scripted"}'
     "]}"
 )
 FAIL_ANSWER = '{"commands": [{"type": "fail", "reason": "cannot proceed"}]}'
 
 
-CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task"}]}'
+CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}'
 
 
 class _SwarmHandler(BaseHTTPRequestHandler):

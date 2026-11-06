@@ -61,6 +61,12 @@ def register_kernel_commands(
         action="store_true",
         help="close even when the task produced no evidence",
     )
+    task_complete.add_argument(
+        "--no-finding",
+        default="",
+        metavar="REASON",
+        help="close with an explicit verdict instead of a finding",
+    )
     task_complete.add_argument("operation_id")
     task_complete.add_argument("task_id")
 
@@ -191,7 +197,10 @@ def handle_kernel_command(
             _emit(started, args.json_output)
             return 0
         plan = kernel.complete_task(
-            args.operation_id, _resolve_task(kernel, args), force=args.force
+            args.operation_id,
+            _resolve_task(kernel, args),
+            force=args.force,
+            no_finding=args.no_finding,
         )
         _emit(plan, args.json_output)
         return 0

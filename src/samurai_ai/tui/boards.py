@@ -206,7 +206,11 @@ class BoardController:
         self._plan_action(
             self.translator.t("board.action.d"),
             task_id,
-            lambda: self.kernel.complete_task(self.operation.id, task_id),  # type: ignore[union-attr]
+            # the board is the operator's own hand: the closing gates are for the
+            # agent, which has to prove what it claims
+            lambda: self.kernel.complete_task(
+                self.operation.id, task_id, force=True  # type: ignore[union-attr]
+            ),
         )
 
     def _task_skip(self, task_id: str) -> None:

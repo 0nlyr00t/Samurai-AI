@@ -18,7 +18,7 @@ PLANNER_ANSWER = '{"steps": ["probe it"]}'
 EXECUTOR_ANSWER = (
     '{"commands": ['
     '{"type": "note", "key": "shared.done", "value": "yes"},'
-    '{"type": "complete_task"}'
+    '{"type": "complete_task", "no_finding": "scripted"}'
     "]}"
 )
 

@@ -53,7 +53,7 @@ EXECUTOR_ANSWER = (
     '{"commands": ['
     '{"type": "request_tool_run", "tool_id": "local.echo", "params": {"text": "acceptance-probe"}},'
     '{"type": "note", "key": "shared.probe", "value": "probe done"},'
-    '{"type": "complete_task"}'
+    '{"type": "complete_task", "no_finding": "scripted"}'
     "]}"
 )
 

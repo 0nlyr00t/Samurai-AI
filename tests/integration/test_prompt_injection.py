@@ -191,7 +191,7 @@ def test_canary_secret_never_reaches_provider_journal_or_artifacts(
             '{"type": "request_tool_run", "tool_id": "local.echo", '
             '"params": {"text": "token is {{secret:canary}}"}},'
             '{"type": "note", "key": "probe", "value": "done"},'
-            '{"type": "complete_task"}'
+            '{"type": "complete_task", "no_finding": "scripted"}'
             "]}"
         ),
     ]
@@ -226,7 +226,7 @@ def test_injection_text_in_tool_output_stays_inert(
             '{"type": "request_tool_run", "tool_id": "local.echo", '
             f'"params": {{"text": "{INJECTION}"}}}},'
             '{"type": "note", "key": "probe", "value": "scanned"},'
-            '{"type": "complete_task"}'
+            '{"type": "complete_task", "no_finding": "scripted"}'
             "]}"
         ),
     ]
@@ -252,7 +252,7 @@ def test_model_cannot_write_memory_or_escape_command_whitelist(
     malicious = (
         '{"commands": ['
         '{"type": "write_memory", "key": "shared.x", "value": "poisoned"},'
-        '{"type": "complete_task"}'
+        '{"type": "complete_task", "no_finding": "scripted"}'
         "]}"
     )
     _RecordingHandler.queue = [PLANNER_ANSWER, malicious, malicious, malicious]
@@ -278,7 +278,7 @@ def test_skill_with_injection_enters_prompt_bounded_and_redacted(
     operation_id, approval_id = stack.make_operation()
     _RecordingHandler.queue = [
         PLANNER_ANSWER,
-        '{"commands": [{"type": "complete_task"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     ]
     run = stack.orchestrator.run_task(
         operation_id, "probe", ["fake/agent@v1"], approval_id=approval_id,

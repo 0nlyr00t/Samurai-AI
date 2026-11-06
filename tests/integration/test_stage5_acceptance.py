@@ -56,12 +56,12 @@ EXECUTOR_ANSWER = (
     '{"commands": ['
     '{"type": "request_tool_run", "tool_id": "local.echo", "params": {"text": "acc"}},'
     '{"type": "note", "key": "probe", "value": "done"},'
-    '{"type": "complete_task"}'
+    '{"type": "complete_task", "no_finding": "scripted"}'
     "]}"
 )
 
 
-CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task"}]}'
+CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}'
 
 
 class _LatencyHandler(BaseHTTPRequestHandler):

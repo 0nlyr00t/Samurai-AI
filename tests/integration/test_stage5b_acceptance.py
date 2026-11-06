@@ -64,12 +64,12 @@ PLANNER_ANSWER = '{"steps": ["do it"]}'
 EXECUTOR_ANSWER = (
     '{"commands": ['
     '{"type": "note", "key": "done", "value": "yes"},'
-    '{"type": "complete_task"}'
+    '{"type": "complete_task", "no_finding": "scripted"}'
     "]}"
 )
 
 
-CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task"}]}'
+CLOSE_OUT_ANSWER = '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}'
 
 
 _PLANNER_MARKER = "You are the planner"
