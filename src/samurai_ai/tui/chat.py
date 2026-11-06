@@ -186,7 +186,9 @@ class ChatController:
 
     # --- AI chat ---------------------------------------------------------
 
-    _CHAT_MAX_TOOL_ROUNDS = 8
+    _CHAT_MAX_TOOL_ROUNDS = 32  # default; the setting tui.max_tool_rounds wins
+    _TOOL_ROUNDS_MIN = 4
+    _TOOL_ROUNDS_MAX = 200
     _CHAT_HISTORY_LIMIT = 40
     _TOOL_OUTPUT_FEEDBACK_LIMIT = 4000
 
@@ -847,8 +849,9 @@ class ChatController:
         if not self._chat_history:
             # rebuilt every launch, never persisted
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
+        rounds_left = self._max_tool_rounds()
         self._remember(Message(role="user", content=text))
-        for _round in range(self._CHAT_MAX_TOOL_ROUNDS):
+        for _round in range(rounds_left):
             self._drain_steering()
             self._count_goal_step()
             try:
@@ -935,6 +938,19 @@ class ChatController:
             self._remember(await self._run_chat_tool(call))
         if response.text.strip():
             self._remember(Message(role="assistant", content=response.text))
+
+    def _max_tool_rounds(self) -> int:
+        """Tool rounds per turn: the operator's setting, bounded, default 32.
+
+        Eight rounds ended real HTB turns mid-work; the ceiling is a loop
+        guard, not a budget — the loop detector stays the guard against waste.
+        """
+        raw = self.settings.get_value("tui.max_tool_rounds")
+        try:
+            value = int(raw) if raw else self._CHAT_MAX_TOOL_ROUNDS
+        except ValueError:
+            return self._CHAT_MAX_TOOL_ROUNDS
+        return min(max(value, self._TOOL_ROUNDS_MIN), self._TOOL_ROUNDS_MAX)
 
     def _chat_tool_read_only(self, name: str) -> bool:
         tool_id = self._CHAT_TOOL_IDS.get(name)

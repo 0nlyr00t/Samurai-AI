@@ -3068,9 +3068,23 @@ class SamuraiApp(
                     self.vault, env_name, value, by=self._actor()
                 ),
                 lambda env_name: set_key(self.vault, env_name, ""),
+                max_tool_rounds=self._max_tool_rounds(),
+                on_save_limit=self._save_max_tool_rounds,
             )
         )
         self._write_line("[settings] " + self.translator.t("settings.opened"))
+
+    def _save_max_tool_rounds(self, raw: str) -> None:
+        """The rounds ceiling from /settings; a bad value is a note, not a crash."""
+        try:
+            value = int(raw)
+        except ValueError:
+            self._write_dim(self.translator.t("settings.rounds-bad", value=raw))
+            return
+        self.settings.set_value("tui.max_tool_rounds", str(value))
+        self._write_dim(
+            self.translator.t("settings.rounds-set", value=self._max_tool_rounds())
+        )
 
     def _show_model_picker(self) -> None:
         self.run_worker(self._open_model_picker(), exclusive=True)
