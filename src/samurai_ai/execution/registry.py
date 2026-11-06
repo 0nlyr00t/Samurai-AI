@@ -27,6 +27,7 @@ from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.http import HttpEgressBroker
 from samurai_ai.execution.process import ProcessManager
+from samurai_ai.execution.relay import normalize_relayed
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 
 
@@ -310,10 +311,14 @@ class ShellExecTool:
     mode) and is recorded with redacted, bounded output artifacts.
     """
 
+    #: the operation's relay prefixes every command on the host side too
+    relay_supported = True
+
     def __init__(self, manager: ProcessManager | None = None) -> None:
         self.manager = manager or ProcessManager(
             allowed_executables=frozenset({"bash", "sh"})
         )
+        self.relay = ""
         self._definition = ToolDefinition(
             id="shell.exec",
             version=1,
@@ -347,6 +352,8 @@ class ShellExecTool:
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         command = str(params["command"])
+        if self.relay:
+            command = normalize_relayed(self.relay, command)
         shell = "bash" if shutil.which("bash") else "sh"
         result = asyncio.run(
             self.manager.run(

@@ -55,6 +55,30 @@ def relay_command(relay: str, executable: str, args: list[str]) -> str:
     return f"{relay} {' '.join(doubled)}"
 
 
+def normalize_relayed(relay: str, command: str) -> str:
+    """Rewrite a model-written command that already starts with the relay.
+
+    The model types `prlctl exec '<uuid>' -- bash -c '...'` by hand and loses
+    to the relay's re-splitting (a stray `--`, a vanished quote). When the
+    command already begins with the relay prefix, rebuild the tail through
+    `relay_command` so it arrives quoted for the far side. Anything else is
+    left alone.
+    """
+    try:
+        relay_tokens = shlex.split(relay)
+        tokens = shlex.split(command)
+    except ValueError:
+        return command
+    if not relay_tokens or tokens[: len(relay_tokens)] != relay_tokens:
+        return command
+    tail = tokens[len(relay_tokens):]
+    if tail and tail[0] == "--":
+        tail = tail[1:]
+    if not tail:
+        return command
+    return relay_command(relay, tail[0], tail[1:])
+
+
 class RelaySandboxRunner(DockerSandboxRunner):
     """Docker runner that hands the command to a relay prefix instead."""
 
