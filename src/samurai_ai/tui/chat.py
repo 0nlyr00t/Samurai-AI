@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from rich.text import Text
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, Static
 
 from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, ImagePart, Message, ToolCall, ToolSpec
@@ -49,6 +49,7 @@ from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.vault import VaultService
+from samurai_ai.tui.journal import BlockJournal, ToolBlock, entity_span
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import AccessPromptScreen
 
@@ -130,10 +131,13 @@ class ChatController:
         _stop_note_sent: bool
         screen: Any
         _shell_running: str
+        _turn_started: float | None
+        _current_tool: str
+        _run_tokens: int
         _shell_background: bool
         _ctx_tokens: int
         _process_block: list[str]
-        _collapsed: list[tuple[str, list[str]]]
+        _DIM_STYLE: str
         _last_ai_text: str | None
         _last_ai_code: str | None
         _thinking_timer: Any
@@ -517,7 +521,7 @@ class ChatController:
         system = Message(role="system", content=self._chat_system_prompt())
         self._chat_history = [system, *([marker()] if truncated else []), *messages]
         self._trim_chat_history()
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(Text())
         self._write_dim(self.translator.t("chat.restored", count=total))
         if truncated:
@@ -543,8 +547,7 @@ class ChatController:
             return
         removed = self.chat_history.clear(self.operation.id)
         self._chat_history.clear()
-        self._collapsed.clear()
-        self.query_one("#journal", RichLog).clear()
+        self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
         self._write_dim(self.translator.t("chat.cleared", count=removed))
 
@@ -602,12 +605,12 @@ class ChatController:
         if self._auto_title is None:
             # The tab names itself from the task at hand
             self._auto_title = title
-        self._collapsed.clear()
         self._write_user_message(text)
         self._thinking_start()
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
 
     def _shell_mode(self, command: str) -> None:
+        self._current_tool = f"!{command}"
         """`!cmd`: run on the host without spending a model round."""
         if not command:
             self._write_dim(self.translator.t("shell.empty"))
@@ -707,16 +710,17 @@ class ChatController:
         prefix = "[bg] " if self._shell_background else ""
         if not self._graph_used:
             self._progress.last_stuck = self._progress.record(command)
-        self._fold(f"!{command}", result.run.exit_code, result.stdout, result.stderr)
-        self._write_dim(
-            prefix
-            + self.translator.t(
+        self._write_tool_block(
+            prefix + self.translator.t(
                 "chat.tool-collapsed",
                 command=f"!{command}",
                 code=result.run.exit_code,
                 lines=len(result.stdout.strip().splitlines()),
             ),
-            process=False,
+            result.run.exit_code,
+            result.stdout,
+            result.stderr,
+            run_id=result.run.id,
         )
         body = (result.stdout if result.stdout.strip() else result.stderr).rstrip()
         self._remember(
@@ -730,11 +734,14 @@ class ChatController:
         )
         self._trim_chat_history()
         self._shell_running = ""
+        self._current_tool = ""
 
     async def _chat(self, text: str, model_id: str, approval_id: str | None) -> None:
         self._chat_busy = True
         self._stop_requested = False
         self._stop_note_sent = False
+        self._turn_started = time.monotonic()
+        self._current_tool = ""
         reason = TerminalReason.CANCELLED
         try:
             reason = await self._chat_loop(text, model_id, approval_id)
@@ -747,10 +754,12 @@ class ChatController:
             self._stop_requested = False
             self._end_turn(reason)
             self._chat_busy = False
+            self._turn_started = None
+            self._current_tool = ""
             self._close_process_block()
             if reason is not TerminalReason.COMPLETED and self._collapsed:
                 # a failure or a stop is exactly when the detail is wanted
-                self._reveal_block(self._collapsed.pop())
+                self._collapsed[-1].toggle()
             self._shell_running = ""
             self._shell_background = False
             self._thinking_stop()
@@ -976,7 +985,12 @@ class ChatController:
                 role="user",
                 content="[tool agent_spawn] the subagent did not start (see the journal)",
             )
-        self._write_dim(self.translator.t("subagent.tool-started", run=run_id))
+        self._write_entity_line(
+            self.translator.t("subagent.tool-started", run=run_id),
+            "agent",
+            run_id,
+            run_id,
+        )
         return Message(
             role="user",
             content=(
@@ -1055,7 +1069,18 @@ class ChatController:
             return Message(role="user", content=f"[tool record_fact] {exc}")
         if artifacts:
             self._progress.finding_seen()
-        self._write_dim(self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id))
+        artifact_ids = cast("list[str]", fact.payload.get("artifact_ids") or [])
+        if artifact_ids:
+            self._write_entity_line(
+                self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id),
+                "artifact",
+                str(artifact_ids[0]),
+                str(artifact_ids[0]),
+            )
+        else:
+            self._write_dim(
+                self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id)
+            )
         return Message(
             role="user", content=f"[tool record_fact] {fact.id} recorded for {intent.id}"
         )
@@ -1149,8 +1174,11 @@ class ChatController:
         except (GraphError, KernelError) as exc:
             return Message(role="user", content=f"[tool propose_finding] {exc}")
         self._progress.finding_seen()
-        self._write_line(
-            self.translator.t("graph.finding", finding=finding.id, title=finding.title)
+        self._write_entity_line(
+            "◆ " + self.translator.t("graph.finding", finding=finding.id, title=finding.title),
+            "finding",
+            finding.id,
+            self.translator.t("inspect.more"),
         )
         # a finding is the one thing worth showing the moment it lands
         self.refresh_hunt()
@@ -1361,6 +1389,7 @@ class ChatController:
         risk = classify_command(command, str(self._cwd))
         badge = f"  [{risk.label()}]" if not risk.empty else ""
         self._write_dim(f"⚙ {command}{badge}")
+        self._current_tool = command
         # A tool already approved for this operation is not asked again, except
         # for a sensitive path or a destructive shape, which stay worth a look.
         mode = self._permission_mode
@@ -1428,16 +1457,18 @@ class ChatController:
         self._progress.last_stuck = (
             None if self._graph_used else self._progress.record(command)
         )
-        # Long tool output collapses under an arrow; /expand reveals it.
-        self._fold(command, exit_code, result.stdout, result.stderr)
-        self._write_dim(
+        # The run lands as a collapsible block; a failure opens on its own.
+        self._write_tool_block(
             self.translator.t(
                 "chat.tool-collapsed",
                 command=command,
                 code=exit_code,
                 lines=len(result.stdout.strip().splitlines()),
             ),
-            process=False,
+            exit_code,
+            result.stdout,
+            result.stderr,
+            run_id=result.run.id,
         )
         stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
         stderr = result.stderr[:1000]
@@ -1448,27 +1479,66 @@ class ChatController:
             ),
         )
 
-    def _fold(
-        self, command: str, exit_code: int | None, stdout: str, stderr: str
+    def _write_tool_block(
+        self,
+        title: str,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        run_id: str | None = None,
     ) -> None:
-        """Keep a tool output behind its summary line until it is asked for."""
-        text = (stdout if stdout.strip() else stderr).rstrip()
-        title = f"{command} — " + self.translator.t("chat.tool-exit", code=exit_code)
-        self._collapsed.append((title, text.splitlines() if text else []))
+        """A tool run as a collapsible block; a failure speaks and opens.
+
+        A run that failed with nothing on stderr used to leave a bare line in
+        the journal, which reads like a hang — so the header of a failed block
+        carries the last error line, or says outright that there was no output.
+        """
+        journal = self.query_one("#journal", BlockJournal)
+        failed = exit_code not in (0, None)
+        if failed:
+            error = (stderr.strip() or stdout.strip()).splitlines()
+            if error:
+                title += f"  ← {error[-1][:120]}"
+            else:
+                title += f"  ← exit {exit_code}, no output"
+        body = (stdout if stdout.strip() else stderr).rstrip()
+        title_text = Text(title, style=self.paint(self._DIM_STYLE))
+        if run_id:
+            title_text.append(" ")
+            title_text.append_text(
+                entity_span("ⓘ", "run", run_id, base_style=self.paint("accent"))
+            )
+        journal.add_tool_block(
+            title_text,
+            body.splitlines() if body else [],
+            failed=failed,
+            body_style=self.paint(self._DIM_STYLE),
+        )
+        self._current_tool = ""
+
+    def _write_entity_line(
+        self, prefix: str, kind: str, ref: str, label: str
+    ) -> None:
+        """A journal line whose tail is a clickable entity link."""
+        journal = self.query_one("#journal", BlockJournal)
+        journal.write(
+            Text.assemble(
+                (prefix + " ", self.paint(self._DIM_STYLE)),
+                entity_span(label, kind, ref, base_style=self.paint("accent")),
+            )
+        )
+
+    @property
+    def _collapsed(self) -> list[ToolBlock]:
+        """Folded journal blocks, oldest first (was a list of tuples)."""
+        journal = self.query_one("#journal", BlockJournal)
+        return [block for block in journal.tool_blocks if not block.expanded]
 
     def _expand_outputs(self) -> None:
         """Reveal the oldest folded block, so presses walk down the reply."""
-        if not self._collapsed:
+        journal = self.query_one("#journal", BlockJournal)
+        if journal.expand_oldest() is None:
             self._write_dim(self.translator.t("chat.expand-empty"))
-            return
-        self._reveal_block(self._collapsed.pop(0))
-
-    def _reveal_block(self, block: tuple[str, list[str]]) -> None:
-        """Write a collapsed block out in full, under its own header."""
-        title, lines = block
-        self._write_dim(f"▾ ⚙ {title}", process=False)
-        for line in lines:
-            self._write_dim(f"  {line}")
 
     def _copy_last(self, what: str) -> None:
         text = self._last_ai_code if what == "code" else self._last_ai_text

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from textual.widgets import Input, OptionList, RichLog
+from textual.widgets import Input, OptionList
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.registry import ModelRegistry
@@ -42,6 +42,7 @@ from samurai_ai.storage.skills import SkillRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
 from samurai_ai.storage.vault import VaultRepository
 from samurai_ai.tui.app import LanguagePromptScreen, SamuraiApp
+from samurai_ai.tui.journal import BlockJournal
 
 
 def make_stack(
@@ -145,7 +146,7 @@ def test_first_run_language_choice_persists_ru(tmp_path: Path, monkeypatch) -> N
             assert not isinstance(app.screen, LanguagePromptScreen)
             assert stack[2].get_locale() == "ru"
 
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             command_input = app.query_one("#command-input", Input)
             messages: list[str] = []
             with patch.object(
@@ -198,7 +199,7 @@ def test_persisted_locale_ru_skips_chooser(tmp_path: Path) -> None:
             await pilot.pause()
             assert not isinstance(app.screen, LanguagePromptScreen)
 
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             command_input = app.query_one("#command-input", Input)
             messages: list[str] = []
             with patch.object(
@@ -233,7 +234,7 @@ def test_lang_command_switches_language_without_losing_operation(tmp_path: Path)
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            journal = app.query_one("#journal", RichLog)
+            journal = app.query_one("#journal", BlockJournal)
             command_input = app.query_one("#command-input", Input)
             messages: list[str] = []
             with patch.object(

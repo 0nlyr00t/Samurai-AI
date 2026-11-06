@@ -31,13 +31,9 @@ JOURNAL = [
     "[events] operation created",
     "[scope] includes 127.0.0.1, juice-shop",
     "[attach] connected to the session daemon",
-    "[tool] scan.nmap -sT -Pn -p 1-1000 127.0.0.1 … 3 open",
     "[agent] chose 3000/http over 22/ssh — wider surface for one step",
     "[approval] model.call kimi/kimi-k2-turbo-preview@v1 — waiting",
-    "[tool] research.read http://juice-shop/ — 200, 4 links",
-    "[finding] reflected XSS in the search box (candidate)",
     "[agent] a read is cheap; replaying it with a token stealer is not",
-    "[impact] read → auth-bypass, evidence art_7f3a",
     "[agent] next: dump the user table, then prove it in the report",
 ]
 
@@ -73,13 +69,13 @@ def build_stack(
     )
     kernel.approve_plan(operation.id)
     kernel.start_task(operation.id, "step1")
-    kernel.complete_task(operation.id, "step1")
     artifact = kernel.register_artifact(
         operation.id,
         ArtifactKind.COMMAND_OUTPUT,
         "HTTP/1.1 200 OK\n<title>Juice Shop</title>",
         summary="landing page",
         requirement="step1",
+        task_id="step1",
     )
     finding = kernel.create_finding(
         operation.id,
@@ -88,13 +84,14 @@ def build_stack(
         summary="The q parameter is echoed unescaped into the results heading.",
     )
     kernel.attach_evidence(finding.id, artifact.id)
+    kernel.complete_task(operation.id, "step1")
     kernel.request_approval(
         operation.id,
         "model.call kimi/kimi-k2-turbo-preview@v1",
         RiskClass.R3,
         reason="second step needs the model",
     )
-    return services, operation, plan
+    return services, operation, plan, finding.id
 
 
 def _task(ident: str, title: str) -> Any:
@@ -135,7 +132,7 @@ async def shot(language: str, out: Path) -> None:
     with tempfile.TemporaryDirectory() as directory:
         home = Path(directory) / "home"
         home.mkdir()
-        services, operation, _plan = build_stack(
+        services, operation, _plan, finding_id = build_stack(
             Path(directory) / "shot.db", home, language
         )
         settings = services[2]
@@ -147,8 +144,28 @@ async def shot(language: str, out: Path) -> None:
         async with app.run_test(size=SIZE) as pilot:
             await pilot.pause()
             journal = app.query_one("#journal")
-            for line in JOURNAL:
-                journal.write(line)
+            for line in JOURNAL[:4]:
+                journal.write(app._styled(line))
+            app._write_tool_block(
+                "⚙ scan.nmap -sT -Pn -p 1-1000 127.0.0.1 — exit 0 · 3 lines",
+                0,
+                "22/tcp   open  ssh\n3000/tcp open  http\n8080/tcp closed",
+                "",
+            )
+            app._write_tool_block(
+                "⚙ research.read http://juice-shop/ — exit 0 · 4 lines",
+                0,
+                "200 OK · 4 links\n<title>Juice Shop</title>",
+                "",
+            )
+            app._write_entity_line(
+                "◆ reflected XSS in the search box (candidate)",
+                "finding",
+                finding_id,
+                "Enter — details",
+            )
+            for line in JOURNAL[4:]:
+                journal.write(app._styled(line))
             await pilot.press("shift+tab")
             await pilot.pause()
             svg = app.export_screenshot()

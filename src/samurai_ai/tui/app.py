@@ -1,5 +1,6 @@
 import asyncio
 import json
+import pathlib
 import re
 import shutil
 import subprocess
@@ -8,7 +9,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from rich.markdown import Markdown
-from rich.padding import Padding
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
@@ -19,7 +19,6 @@ from textual.widgets import (
     ContentSwitcher,
     Input,
     OptionList,
-    RichLog,
     Static,
     Tab,
     Tabs,
@@ -94,6 +93,12 @@ from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
 from samurai_ai.tui.hunt import REFRESH_SECONDS as HUNT_REFRESH_SECONDS
 from samurai_ai.tui.hunt import HuntController, tally
+from samurai_ai.tui.journal import (
+    BlockJournal,
+    InspectSummaryBlock,
+    UserBlock,
+    entity_span,
+)
 from samurai_ai.tui.keymap import KeyMapController
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
@@ -108,6 +113,7 @@ from samurai_ai.tui.screens import (
     LanguagePromptScreen,
     ModelPickerScreen,
     NewOperationScreen,
+    Section,
     SettingsScreen,
     TrustDirectoryScreen,
 )
@@ -127,7 +133,6 @@ from samurai_ai.tui.themes import ThemeController
 from samurai_ai.tui.widgets import (
     HistoryInput,
     PlusButton,
-    SelectableRichLog,
     ViewTabs,
 )
 
@@ -429,9 +434,12 @@ class SamuraiApp(
         self._stop_requested = False
         self._stop_note_sent = False
         self._process_block = []
-        self._collapsed = []
         self._shell_running = ""
         self._shell_background = False
+        # live status: what the running turn is doing right now
+        self._run_tokens = 0
+        self._turn_started: float | None = None
+        self._current_tool = ""
         self._expandable: list[tuple[str, int | None, str, str]] = []
         self._thinking_timer: Timer | None = None
         self._thinking_depth: int = 0
@@ -509,7 +517,7 @@ class SamuraiApp(
         return Text(text, style=style)
 
     def _write_line(self, text: str) -> None:
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(self._styled(text))
 
     def _write_dim(self, text: str, *, process: bool = True) -> None:
@@ -523,34 +531,34 @@ class SamuraiApp(
         if process and self._chat_busy:
             self._process_block.append(text)
             return
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(Text(text, style=self.paint(self._DIM_STYLE)))
 
     def _close_process_block(self) -> None:
-        """Collapse the turn's grey lines into one line the operator can open."""
+        """Collapse the turn's grey lines into one block the operator can open."""
         if not self._process_block:
             return
         title = self.translator.t("chat.process-block", lines=len(self._process_block))
-        self._collapsed.append((self.translator.t("chat.process-title"), list(self._process_block)))
+        journal = self.query_one("#journal", BlockJournal)
+        journal.add_tool_block(
+            Text(f"⚙ {title}", style=self.paint(self._DIM_STYLE)),
+            list(self._process_block),
+            body_style=self.paint(self._DIM_STYLE),
+            expanded=False,
+        )
         self._process_block.clear()
-        journal = self.query_one("#journal", RichLog)
-        journal.write(Text(f"▸ ⚙ {title}", style=self.paint(self._DIM_STYLE)))
 
     def _brand_text(self) -> Text:
         """The side strip carries the name; the logo lives in the README."""
         return Text("Samurai AI", style=self.paint("bold accent"))
 
     def _write_user_message(self, text: str) -> None:
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(Text())
-        journal.write(
-            Padding(
-                Text(text, style=self.paint("bold $text")), (0, 2), style=self.paint("on panel-alt")
-            )
-        )
+        journal.add_block(UserBlock(text))
 
     def _write_ai_message(self, response) -> None:  # type: ignore[no-untyped-def]
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         header = (
             f"{response.model_id} · {response.latency_ms}ms · "
             f"{response.usage.prompt_tokens}+{response.usage.completion_tokens} tok"
@@ -558,6 +566,7 @@ class SamuraiApp(
         journal.write(Text())
         journal.write(Text(header, style=self.paint(self._DIM_STYLE)))
         journal.write(Markdown(response.text))
+        self._run_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
         self._last_ai_text = response.text
         self._last_ai_code = _first_code_block(response.text)
 
@@ -577,10 +586,10 @@ class SamuraiApp(
         yield Static(id="welcome")
         with Horizontal(id="body"):
             with ContentSwitcher(initial="journal", id="views"):
-                yield SelectableRichLog(id="journal", markup=False, wrap=True, auto_scroll=True)
-                yield SelectableRichLog(id="view-ops", markup=False, wrap=True)
-                yield SelectableRichLog(id="view-bounty", markup=False, wrap=True)
-                yield SelectableRichLog(id="view-hunt", markup=False, wrap=True)
+                yield BlockJournal(id="journal")
+                yield BlockJournal(id="view-ops")
+                yield BlockJournal(id="view-bounty")
+                yield BlockJournal(id="view-hunt")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
         with Horizontal(id="ops-strip"):
@@ -635,6 +644,7 @@ class SamuraiApp(
         # the search counters move slowly; a three-minute beat is plenty and
         # costs one render of a hidden pane at most
         self.set_interval(HUNT_REFRESH_SECONDS, self.refresh_hunt)
+        self.set_interval(1.0, self._status_tick)
         self.query_one("#command-input", Input).focus()
         self._maybe_prompt_trust()
 
@@ -655,7 +665,7 @@ class SamuraiApp(
         )
 
     def _write_welcome(self) -> None:
-        journal = self.query_one("#journal", RichLog)
+        journal = self.query_one("#journal", BlockJournal)
         journal.write(self._banner())
         self._write_dim(self.translator.t("welcome.help-hint"))
 
@@ -671,8 +681,6 @@ class SamuraiApp(
         widget: Any = event.widget
         while widget is not None:
             if getattr(widget, "id", None) == "journal":
-                if self._collapsed:
-                    self._expand_outputs()
                 return
             widget = widget.parent
 
@@ -877,17 +885,20 @@ class SamuraiApp(
         self._auto_title = None
         self._graph_used = False
         self._chat_history.clear()
-        self.query_one("#journal", RichLog).clear()
+        self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
         self._write_dim(self.translator.t("newop.created", name=name, mode=mode))
         self._switch_view("journal")
         self._refresh_chrome()
 
     def _render_view(self, pane: str) -> None:
-        log = self.query_one(f"#{pane}", RichLog)
-        log.clear()
-        for line in self._view_lines(pane):
-            log.write(line if isinstance(line, Text) else self._styled(line))
+        log = self.query_one(f"#{pane}", BlockJournal)
+        log.set_lines(
+            [
+                line if isinstance(line, Text) else self._styled(line)
+                for line in self._view_lines(pane)
+            ]
+        )
 
     def _view_lines(self, pane: str) -> list[str | Text]:
         if pane == "view-ops":
@@ -925,19 +936,25 @@ class SamuraiApp(
             lines.append(Text(self.translator.t("ops.no-tasks"), style=self.paint(self._DIM_STYLE)))
         else:
             for task in plan.tasks:
-                color = self._TASK_COLORS.get(task.status.value, self.paint("$text-faint"))
+                color = self.paint(
+                    "$" + self._TASK_COLORS.get(task.status.value, "text-faint")
+                )
                 lines.append(
                     Text.assemble(
                         ("■ ", color),
-                        (f"{task.id} ", self.paint("bold $text")),
-                        (f"[{task.status.value}] ", color),
+                        entity_span(
+                            task.id, "task", task.id, base_style=self.paint("bold $text")
+                        ),
+                        (f" [{task.status.value}] ", color),
                         (task.title, self.paint("$text-dim")),
                     )
                 )
         if plan is not None and plan.gates:
             lines.append(Text(self.translator.t("ops.gates"), style=self.paint("bold $accent")))
             for gate in plan.gates:
-                color = "success" if gate.status.value == "passed" else "text-faint"
+                color = self.paint(
+                    "$success" if gate.status.value == "passed" else "$text-faint"
+                )
                 lines.append(
                     Text.assemble(
                         ("■ ", color),
@@ -1617,6 +1634,234 @@ class SamuraiApp(
             )
         )
 
+    # -- drill-down ----------------------------------------------------------
+
+    def action_inspect(self, kind: str, ref: str) -> None:
+        """A clicked entity link: an inline summary first, Enter goes deeper."""
+        summary = self._inspect_summary(kind, ref)
+        if summary is None:
+            self._write_dim(self.translator.t("inspect.unknown", kind=kind, ref=ref))
+            return
+        title, lines = summary
+        text = Text(title, style=self.paint("bold accent"))
+        for line in lines:
+            text.append(f"\n  {line}")
+        text.append("\n")
+        text.append_text(
+            entity_span(
+                self.translator.t("inspect.more"), kind, ref, base_style=self.paint("accent")
+            )
+        )
+        # the "more" link jumps straight to the full screen
+
+        self.query_one("#journal", BlockJournal).add_block(
+            InspectSummaryBlock(text, kind, ref)
+        )
+
+    def action_inspect_full(self, kind: str, ref: str) -> None:
+        self._inspect_full(kind, ref)
+
+    def _inspect_summary(self, kind: str, ref: str) -> tuple[str, list[str]] | None:
+        """Two or three lines about the entity, or None when it is unknown."""
+        try:
+            if kind == "run":
+                run = self.execution.get_run(ref)
+                return (
+                    self.translator.t("inspect.run", run=run.id, tool=run.tool_id),
+                    [
+                        self.translator.t(
+                            "inspect.run-line",
+                            status=run.status.value,
+                            code=run.exit_code,
+                            when=run.created_at.strftime("%H:%M:%S"),
+                        ),
+                    ],
+                )
+            if kind == "task":
+                task = self._find_task(ref)
+                if task is None:
+                    return None
+                return (
+                    f"{task.id} · {task.title}",
+                    [
+                        self.translator.t(
+                            "inspect.task-line",
+                            status=task.status.value,
+                            risk=task.risk_class.value,
+                            deps=len(task.depends_on),
+                        )
+                    ],
+                )
+            if kind == "finding":
+                finding = self.kernel.get_finding_by_id(ref)
+                return (
+                    f"{finding.id} · {finding.title}",
+                    [
+                        self.translator.t(
+                            "inspect.finding-line",
+                            status=finding.status.value,
+                            severity=finding.severity.value,
+                        )
+                    ],
+                )
+            if kind == "artifact":
+                artifact = self.kernel.kernel.get_artifact(ref)
+                if artifact is None:
+                    return None
+                return (
+                    f"{artifact.id} · {artifact.kind.value}",
+                    [
+                        self.translator.t(
+                            "inspect.artifact-line",
+                            size=artifact.size_bytes,
+                            summary=artifact.summary or "—",
+                        )
+                    ],
+                )
+            if kind == "agent":
+                agent_run = self.agents.get(ref)
+                if agent_run is None:
+                    return None
+                return (
+                    f"{agent_run.id} · {agent_run.specialization.value}",
+                    [
+                        self.translator.t(
+                            "inspect.agent-line",
+                            status=agent_run.status.value,
+                            task=agent_run.task_id,
+                            depth=agent_run.depth,
+                        )
+                    ],
+                )
+            if kind == "approval":
+                approval = self.kernel.kernel.get_approval(ref)
+                if approval is None:
+                    return None
+                return (
+                    f"{approval.id} · {approval.action}",
+                    [
+                        self.translator.t(
+                            "inspect.approval-line",
+                            status=approval.status.value,
+                            risk=approval.risk_class.value,
+                            by=approval.decided_by or "—",
+                        )
+                    ],
+                )
+        except Exception:  # noqa: BLE001 - a stale id is a note, not a crash
+            return None
+        return None
+
+    def _find_task(self, ref: str) -> Any:
+        """A task by id or exact title in the operation's current plan."""
+        if self.operation is None:
+            return None
+        plan = self.kernel.get_current_plan(self.operation.id)
+        if plan is None:
+            return None
+        for task in plan.tasks:
+            if task.id == ref or task.title == ref:
+                return task
+        return None
+
+    def _inspect_full(self, kind: str, ref: str) -> None:
+        """The full-screen detail behind an inline summary."""
+        if kind == "run":
+            self._show_inspector(ref)
+            return
+        if kind == "task":
+            self._show_task_detail(ref)
+            return
+        if kind == "finding":
+            self._show_finding_detail(ref)
+            return
+        sections = self._inspect_sections(kind, ref)
+        if sections is None:
+            self._write_dim(self.translator.t("inspect.unknown", kind=kind, ref=ref))
+            return
+        title, body = sections
+        self.push_screen(InspectorScreen(self.translator, title, body, {}))
+
+    def _inspect_sections(self, kind: str, ref: str) -> tuple[str, list[Section]] | None:
+        if kind == "artifact":
+            artifact = self.kernel.kernel.get_artifact(ref)
+            if artifact is None:
+                return None
+            meta = [
+                f"kind: {artifact.kind.value}",
+                f"task: {artifact.task_id or '—'}",
+                f"sha256: {artifact.sha256}",
+                f"size: {artifact.size_bytes} B",
+                f"by: {artifact.created_by}",
+            ]
+            # artifact paths are relative to the state dir's artifacts/ root
+            root = self.kernel.kernel.artifact_root
+            full = pathlib.Path(artifact.path)
+            if not full.is_absolute():
+                full = root.parent / full if (root.parent / full).exists() else root / full
+            content = self._artifact_excerpt(str(full))
+            return (
+                f"{artifact.id} — {artifact.summary or artifact.kind.value}",
+                [
+                    (self.translator.t("inspect.meta"), meta),
+                    (self.translator.t("inspect.content"), content),
+                ],
+            )
+        if kind == "agent":
+            run = self.agents.get(ref)
+            if run is None:
+                return None
+            lines = [
+                f"status: {run.status.value}",
+                f"task: {run.task_id}",
+                f"specialization: {run.specialization.value}",
+                f"depth: {run.depth}",
+                f"started: {run.created_at:%Y-%m-%d %H:%M:%S}",
+                (
+                    f"finished: {run.finished_at:%Y-%m-%d %H:%M:%S}"
+                    if run.finished_at
+                    else "finished: —"
+                ),
+            ]
+            return (f"{run.id}", [(self.translator.t("inspect.meta"), lines)])
+        if kind == "approval":
+            approval = self.kernel.kernel.get_approval(ref)
+            if approval is None:
+                return None
+            lines = [
+                f"action: {approval.action}",
+                f"risk: {approval.risk_class.value}",
+                f"status: {approval.status.value}",
+                f"reason: {approval.reason or '—'}",
+                f"requested by: {approval.requested_by}",
+                f"decided by: {approval.decided_by or '—'}",
+            ]
+            return (f"{approval.id}", [(self.translator.t("inspect.meta"), lines)])
+        return None
+
+    _ARTIFACT_EXCERPT_LINES = 200
+
+    def _artifact_excerpt(self, path: str) -> list[str]:
+        """Bounded text of an artifact; unreadable or binary says so."""
+        try:
+            raw = pathlib.Path(path).read_bytes()
+        except OSError as exc:
+            return [self.translator.t("inspect.unreadable", error=exc)]
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return [self.translator.t("inspect.binary", size=len(raw))]
+        lines = text.splitlines()
+        if len(lines) > self._ARTIFACT_EXCERPT_LINES:
+            head = lines[: self._ARTIFACT_EXCERPT_LINES]
+            head.append(
+                self.translator.t(
+                    "inspect.truncated", left=len(lines) - self._ARTIFACT_EXCERPT_LINES
+                )
+            )
+            return head
+        return lines or [self.translator.t("inspect.empty")]
+
     # -- subagent sessions ---------------------------------------------------
     def _cmd_subagent(self, argument: str) -> None:
         self.run_worker(self.spawn_subagent(argument), exclusive=False)
@@ -2066,64 +2311,92 @@ class SamuraiApp(
         for line in self._gate_lines():
             self._write_line(line)
 
-    def _finding_lines(self) -> list[str]:
+    def _finding_lines(self) -> list[Text]:
         if not self.operation:
-            return ["[findings] " + self.translator.t("status.no-operation")]
+            return [self._styled("[findings] " + self.translator.t("status.no-operation"))]
         findings = self.kernel.kernel.list_findings(self.operation.id)
         if not findings:
-            return ["[findings] " + self.translator.t("findings.empty")]
-        lines: list[str] = []
+            return [self._styled("[findings] " + self.translator.t("findings.empty"))]
+        lines: list[Text] = []
         for finding in findings:
             duplicate = f" | duplicate-of={finding.duplicate_of}" if finding.duplicate_of else ""
             lines.append(
-                f"[finding] {finding.id} | {finding.severity.value} | {finding.status.value} | "
-                f"evidence={len(finding.evidence_ids)}{duplicate} | {finding.title}"
+                Text.assemble(
+                    ("[finding] ", self.paint("accent-alt")),
+                    entity_span(finding.id, "finding", finding.id, base_style=self.paint("accent")),
+                    (
+                        f" | {finding.severity.value} | {finding.status.value} | "
+                        f"evidence={len(finding.evidence_ids)}{duplicate} | {finding.title}",
+                        self.paint("$text"),
+                    ),
+                )
             )
         return lines
 
     def _show_findings(self) -> None:
+        journal = self.query_one("#journal", BlockJournal)
         for line in self._finding_lines():
-            self._write_line(line)
+            journal.write(line)
 
-    def _evidence_lines(self) -> list[str]:
+    def _evidence_lines(self) -> list[str | Text]:
         if not self.operation:
             return ["[evidence] " + self.translator.t("status.no-operation")]
         artifacts = self.kernel.kernel.list_artifacts(self.operation.id)
         if not artifacts:
             return ["[evidence] " + self.translator.t("evidence.empty")]
-        lines: list[str] = []
+        lines: list[str | Text] = []
         for artifact in artifacts:
             lines.append(
-                f"[artifact] {artifact.id} | {artifact.kind.value} | "
-                f"requirement={artifact.requirement or '-'} | "
-                f"links={_artifact_links(artifact)} | sha256={artifact.sha256[:12]} | "
-                f"{artifact.summary or artifact.path}"
+                Text.assemble(
+                    ("[artifact] ", self.paint("text-faint")),
+                    entity_span(
+                        artifact.id, "artifact", artifact.id, base_style=self.paint("accent")
+                    ),
+                    (
+                        f" | {artifact.kind.value} | "
+                        f"requirement={artifact.requirement or '-'} | "
+                        f"links={_artifact_links(artifact)} | sha256={artifact.sha256[:12]} | "
+                        f"{artifact.summary or artifact.path}",
+                        self.paint("$text"),
+                    ),
+                )
             )
         return lines
 
     def _show_evidence(self) -> None:
+        journal = self.query_one("#journal", BlockJournal)
         for line in self._evidence_lines():
-            self._write_line(line)
+            journal.write(line)
 
-    def _approval_lines(self) -> list[str]:
+    def _approval_lines(self) -> list[str | Text]:
         if not self.operation:
             return ["[approvals] " + self.translator.t("status.no-operation")]
         approvals = self.kernel.kernel.list_approvals(self.operation.id)
         if not approvals:
             return ["[approvals] " + self.translator.t("approvals.empty")]
-        lines: list[str] = []
+        lines: list[str | Text] = []
         for approval in approvals:
             actor = approval.decided_by or "-"
             lines.append(
-                f"[approval] {approval.id} | {approval.risk_class.value} | "
-                f"{approval.status.value} | auto={str(approval.auto).lower()} | "
-                f"actor={actor} | {approval.action}"
+                Text.assemble(
+                    ("[approval] ", self.paint("warning")),
+                    entity_span(
+                        approval.id, "approval", approval.id, base_style=self.paint("accent")
+                    ),
+                    (
+                        f" | {approval.risk_class.value} | "
+                        f"{approval.status.value} | auto={str(approval.auto).lower()} | "
+                        f"actor={actor} | {approval.action}",
+                        self.paint("$text"),
+                    ),
+                )
             )
         return lines
 
     def _show_approvals(self) -> None:
+        journal = self.query_one("#journal", BlockJournal)
         for line in self._approval_lines():
-            self._write_line(line)
+            journal.write(line)
 
     def _show_snapshots(self) -> None:
         if not self.operation:
@@ -2629,7 +2902,7 @@ class SamuraiApp(
             return
         self.operation = latest
         self._chat_history.clear()
-        self.query_one("#journal", RichLog).clear()
+        self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
         self._restore_chat()
         self._refresh_chrome()
@@ -2667,6 +2940,14 @@ class SamuraiApp(
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
         bar.append(f" | ctx {self._ctx_tokens} tok")
+        bar.append(f" | Σ {self._run_tokens} tok")
+        if self._turn_started is not None:
+            elapsed = int(time.monotonic() - self._turn_started)
+            bar.append(f" | ⏱ {elapsed // 60}:{elapsed % 60:02d}", style=self.paint("$accent"))
+            if self._current_tool:
+                bar.append(
+                    f" | ▶ {self._current_tool[:32]}", style=self.paint("dim $text-dim")
+                )
         bar.append(" | /help")
         self.query_one("#status-bar", Static).update(bar)
         self._refresh_ops_strip()
@@ -2675,6 +2956,11 @@ class SamuraiApp(
         current = str(switcher.current or "journal")
         if current != "journal":
             self._render_view(current)
+
+    def _status_tick(self) -> None:
+        """While a turn runs the bar shows elapsed time and the current tool."""
+        if self._turn_started is not None:
+            self._refresh_chrome()
 
     def _refresh_hunt_tab(self) -> None:
         """The progress tab only exists when the plan has searches to report."""
