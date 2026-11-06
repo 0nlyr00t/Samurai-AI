@@ -75,16 +75,43 @@ def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> i
             )
             return 2
         approval_id = approval.id
-    swarm = swarms.start(
-        args.operation_id,
-        None,
-        route,
-        workers=args.workers,
-        approval_id=approval_id,
-        workspace=args.workspace,
-        skill_names=tuple(args.skills),
-        approval_resolver=(always_approve if args.auto_approve else None),
-    )
-    report = swarms.report(swarm.id)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if swarm.status.value == "completed" else 1
+    retried: set[str] = set()
+    done = 0
+    failed = 0
+    while True:
+        ready = swarms.ready_tasks(args.operation_id)
+        if not ready:
+            # a blocked task earns exactly one fresh attempt; then the plan
+            # is honestly over
+            plan = swarms.kernel.get_current_plan(args.operation_id)
+            retryable = [
+                task
+                for task in (plan.tasks if plan else [])
+                if task.status.value in ("blocked", "in-progress")
+                and task.id not in retried
+            ]
+            if not retryable:
+                break
+            for task in retryable:
+                retried.add(task.id)
+                swarms.kernel.reset_task(args.operation_id, task.id)
+            continue
+        swarm = swarms.start(
+            args.operation_id,
+            [task.id for task in ready],
+            route,
+            workers=args.workers,
+            approval_id=approval_id,
+            workspace=args.workspace,
+            skill_names=tuple(args.skills),
+            approval_resolver=(always_approve if args.auto_approve else None),
+        )
+        report = swarms.report(swarm.id)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        for member in report.get("members", []):
+            if member.get("status") == "completed":
+                done += 1
+            else:
+                failed += 1
+    print(f"tasks done={done} failed={failed}")
+    return 0 if failed == 0 and done else 1
