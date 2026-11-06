@@ -11,3 +11,8 @@ dist/
 .samurai/
 .DS_Store
 build/
+
+# run output kept locally: evidence pages, scan dumps, task specs
+evidence/
+nmap_full.txt
+.thinkrail/
