@@ -292,7 +292,8 @@ def test_auto_approve_runs_a_tool_without_a_pre_granted_approval(
         [
             '{"steps": ["s"]}',
             '{"commands": [{"type": "request_tool_run", "tool_id": "local.echo",'
-            ' "params": {"text": "unattended"}}, {"type": "complete_task", "no_finding": "scripted"}]}',
+            ' "params": {"text": "unattended"}},'
+            ' {"type": "complete_task", "no_finding": "scripted"}]}',
         ]
     )
     assert (
