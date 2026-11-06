@@ -12,6 +12,7 @@ appears, because a direction that produced something is not stuck.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections import Counter, deque
 from enum import StrEnum
@@ -20,6 +21,8 @@ from enum import StrEnum
 THRESHOLD = 3
 #: The window a repeat is counted in; small so an old streak cannot fire.
 WINDOW = 8
+
+_UUID_TOKEN = re.compile(r"\{?[0-9a-f]{8}(?:-[0-9a-f]{4,})+\}?\Z", re.IGNORECASE)
 
 
 class TerminalReason(StrEnum):
@@ -48,11 +51,13 @@ def direction(command: str) -> str | None:
     rest = tokens[1:]
     if binary == "prlctl":
         # a relay wrapper: the interesting command is the one it runs remotely,
-        # and its uuid would otherwise be the same for every call
+        # and its uuid would otherwise be the same for every call — but only a
+        # uuid-shaped token goes, not a remote command that happens to carry
+        # dashes (`bash -c 'nmap -p- …'` is not a uuid)
         rest = [
             token
             for token in rest
-            if token != "exec" and token.strip("'{}").count("-") < 1
+            if token != "exec" and not _UUID_TOKEN.fullmatch(token.strip("'\""))
         ]
     plain = [token for token in rest if not token.startswith("-")]
     if not plain:
@@ -60,6 +65,10 @@ def direction(command: str) -> str | None:
     if binary == "prlctl":
         binary = plain[0].rsplit("/", 1)[-1].lower()
         plain = plain[1:]
+        # `prlctl exec <uuid> id` leaves nothing behind the remote binary —
+        # the direction is that binary alone, not a crash on plain[-1]
+        if not plain:
+            return binary
     # A flag value (`-p 443`) sits among the plain tokens too; a target usually
     # carries a dot, a slash or a colon, so prefer the first such token and only
     # fall back to the last plain one.
