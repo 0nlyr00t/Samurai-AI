@@ -208,3 +208,41 @@ def test_a_relayed_read_falls_back_to_a_plain_fetch() -> None:
     assert "hello world" in payload["text"]
     assert "relayed, no browser" in output.stderr
     assert relay_module is not None
+
+
+def test_the_relay_host_lands_in_the_scope(tmp_path: Path) -> None:
+    from samurai_ai.cli_run import _allow_relay_host
+    from samurai_ai.domain.operations import OperationMode
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.execution import relay as relay_module
+
+    operations = service(tmp_path)
+    operation_id = operations.create(
+        "Relay host", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.1",))
+    ).id
+    original = relay_module.relay_host
+    relay_module.relay_host = lambda _relay: "10.211.55.27"  # type: ignore[assignment]
+    try:
+        _allow_relay_host("relay", operation_id, operations)
+    finally:
+        relay_module.relay_host = original  # type: ignore[assignment]
+    assert "10.211.55.27" in operations.get(operation_id).scope.includes
+
+
+def test_no_address_means_no_scope_change(tmp_path: Path) -> None:
+    from samurai_ai.cli_run import _allow_relay_host
+    from samurai_ai.domain.operations import OperationMode
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.execution import relay as relay_module
+
+    operations = service(tmp_path)
+    operation_id = operations.create(
+        "No host", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.1",))
+    ).id
+    original = relay_module.relay_host
+    relay_module.relay_host = lambda _relay: ""  # type: ignore[assignment]
+    try:
+        _allow_relay_host("relay", operation_id, operations)
+    finally:
+        relay_module.relay_host = original  # type: ignore[assignment]
+    assert operations.get(operation_id).scope.includes == ("10.0.0.1",)
