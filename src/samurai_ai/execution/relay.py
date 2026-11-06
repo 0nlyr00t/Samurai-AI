@@ -132,8 +132,8 @@ def relayed_fetch(
                 "-i",
                 "--max-time",
                 str(max(1, int(timeout))),
-                "--max-filesize",
-                str(max_bytes),
+                # no --max-filesize: a bigger page must be truncated by us,
+                # not failed by curl (exit 63)
                 "-X",
                 method,
                 url,
@@ -169,7 +169,18 @@ def probe_tools(
     """
     from samurai_ai.execution.process import ProcessManager
 
-    script = "; ".join(f"command -v {name} >/dev/null && echo {name}" for name in names)
+    fragments = []
+    for name in names:
+        if name == "httpx":
+            # the python httpx CLI answers `command -v` too, but has no
+            # scanner flags — offer the tool only for the real scanner
+            fragments.append(
+                "command -v httpx >/dev/null"
+                " && httpx -h 2>/dev/null | grep -q -- -silent && echo httpx"
+            )
+        else:
+            fragments.append(f"command -v {name} >/dev/null && echo {name}")
+    script = "; ".join(fragments)
     argv = ["bash", "-lc", relay_command(relay, "bash", ["-c", script])]
     manager = ProcessManager(allowed_executables=frozenset({"bash"}))
     try:

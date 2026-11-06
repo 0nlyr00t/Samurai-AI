@@ -80,7 +80,7 @@ from samurai_ai.storage.agents import AgentRunRepository
 
 _T = TypeVar("_T")
 
-DEFAULT_MAX_STEPS = 8
+DEFAULT_MAX_STEPS = 32
 DEFAULT_MAX_DEPTH = 1
 MAX_CONSECUTIVE_REJECTS = 5
 #: the same command repeated this often in one run earns a model note
