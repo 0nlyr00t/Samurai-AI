@@ -880,6 +880,9 @@ class ChatController:
                 return TerminalReason.COMPLETED
             if response.text.strip():
                 self._remember(Message(role="assistant", content=response.text))
+                # the reasoning between tool calls is the turn's narrative —
+                # hiding it leaves the operator watching mute tool blocks
+                self._write_ai_message(response)
             # every call of the round runs even when stopping: a stop is worth
             # nothing until the results are in and checked
             for call in response.tool_calls:
