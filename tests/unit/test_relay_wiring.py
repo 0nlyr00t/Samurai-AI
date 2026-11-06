@@ -1,6 +1,7 @@
 """The relay flag reaches the operation, and the executor swaps the runner."""
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -281,3 +282,36 @@ def test_preflight_probes_through_the_relay(monkeypatch: Any) -> None:
     report = mod.preflight(["10.0.0.9"], relay="prlctl exec '<uuid>'")
     assert not report.dead
     assert report.probes[0].state == "open"
+
+
+def test_httpx_probe_falls_back_to_curl_under_a_relay(monkeypatch: Any) -> None:
+    """The far side has python-httpx, not the scanner: probe via curl instead."""
+    from samurai_ai.execution import security
+    from samurai_ai.execution.relay import RelayResponse
+
+    page = b"<html><head><title>Airways</title></head><body>hi</body></html>"
+
+    def fake_fetch(relay: str, url: str, **kwargs: Any) -> RelayResponse:
+        if url.startswith("https"):
+            raise security.ToolExecutionError("no TLS here")
+        return RelayResponse(status=200, headers="", body=page)
+
+    monkeypatch.setattr(security, "relayed_fetch", fake_fetch, raising=False)
+    import samurai_ai.execution.security as sec
+
+    monkeypatch.setattr(sec, "relayed_fetch", fake_fetch, raising=False)
+    import samurai_ai.execution.relay as relay_mod
+
+    monkeypatch.setattr(relay_mod, "relayed_fetch", fake_fetch, raising=False)
+
+    tool = sec.HttpxProbeTool()
+    tool.relay = "prlctl exec '<uuid>'"
+    output = tool.invoke(
+        {"targets": ["10.0.0.9"], "timeout_seconds": 10},
+        ScopeContract(includes=("10.0.0.9",)),
+    )
+    assert output.exit_code == 0
+    assert "no ProjectDiscovery httpx" in output.stderr
+    record = json.loads(output.stdout.strip().splitlines()[0])
+    assert record["status_code"] == 200
+    assert record["title"] == "Airways"
