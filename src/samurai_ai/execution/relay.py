@@ -294,7 +294,9 @@ def build_runner(relay: str) -> RelaySandboxRunner:
     from samurai_ai.services.vault import load_master_key
 
     return RelaySandboxRunner(
-        ProcessManager(allowed_executables=frozenset({"bash"})),
+        # a relayed tool answers over ssh/prlctl plus a VPN: the silence
+        # watchdog gets a wider window than a local process
+        ProcessManager(allowed_executables=frozenset({"bash"}), stall_seconds=300),
         sandbox_allowlist_path(),
         lambda: load_master_key(vault_key_path()),
         relay,
