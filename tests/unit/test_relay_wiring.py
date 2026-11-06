@@ -333,3 +333,12 @@ def test_shell_exec_rewrites_a_command_that_starts_with_the_relay() -> None:
     # double quotes around the uuid match too
     rewritten2 = normalize_relayed(relay, 'prlctl exec "<uuid>" id')
     assert rewritten2.startswith(relay) and "id" in rewritten2
+
+
+def test_relay_runner_keeps_its_own_stall_setting() -> None:
+    """prlctl buffers the far side's output: profile stall windows must not kill."""
+    from samurai_ai.execution.relay import build_runner
+
+    runner = build_runner("prlctl exec '<uuid>'")
+    assert runner.honor_profile_stall is False
+    assert runner.manager.stall_seconds == 0
