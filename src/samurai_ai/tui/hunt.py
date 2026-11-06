@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 
 from samurai_ai.domain.kernel import Finding, FindingStatus
+from samurai_ai.tui.journal import entity_span
 
 if TYPE_CHECKING:
     from samurai_ai.domain.kernel import PlanTask
@@ -143,7 +144,10 @@ class HuntController:
                 Text.assemble(
                     (f"{finding.severity.value:<8}", self.paint(f"$risk-{_risk_token(finding)}")),
                     (finding.title, self.paint("$text")),
-                    (f"  {finding.id}", self.paint("dim text-dim")),
+                    ("  ", ""),
+                    entity_span(
+                        finding.id, "finding", finding.id, base_style=self.paint("dim text-dim")
+                    ),
                 )
             )
         lines.append(Text())
@@ -161,9 +165,7 @@ class HuntController:
         if str(switcher.current or "") != "view-hunt":
             return
         log: Any = self.query_one("#view-hunt")
-        log.clear()
-        for line in self._hunt_lines():
-            log.write(line)
+        log.set_lines(self._hunt_lines())
 
 
 def _risk_token(finding: Finding) -> str:

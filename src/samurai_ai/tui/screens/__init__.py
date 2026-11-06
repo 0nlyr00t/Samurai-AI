@@ -5,7 +5,7 @@ from samurai_ai.tui.screens.argument import ArgumentScreen
 from samurai_ai.tui.screens.board import BoardScreen, ItemDetailScreen
 from samurai_ai.tui.screens.custom_endpoint import CustomEndpointScreen
 from samurai_ai.tui.screens.help import HelpScreen
-from samurai_ai.tui.screens.inspector import InspectorScreen
+from samurai_ai.tui.screens.inspector import InspectorScreen, Section
 from samurai_ai.tui.screens.key_capture import KeyCaptureScreen
 from samurai_ai.tui.screens.language import LanguagePromptScreen
 from samurai_ai.tui.screens.model_picker import (
@@ -32,6 +32,7 @@ __all__ = [
     "CustomEndpointScreen",
     "HelpScreen",
     "InspectorScreen",
+    "Section",
     "KeyCaptureScreen",
     "LanguagePromptScreen",
     "ModelPickerScreen",
