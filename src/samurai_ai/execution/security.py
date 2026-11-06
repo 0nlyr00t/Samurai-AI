@@ -867,6 +867,10 @@ class NmapScanTool(_ScopedSandboxTool):
             "-n",
             "--max-rate",
             "300",
+            # a full scan is silent for minutes; the harness kills quiet
+            # processes, so nmap reports progress on a schedule (stderr)
+            "--stats-every",
+            "20s",
             *port_flags,
             "-oX",
             "-",
