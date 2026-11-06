@@ -209,6 +209,10 @@ def _explicit_port(target: str) -> bool:
 
 
 class HttpxProbeTool(_ScopedSandboxTool):
+    #: under a relay the far side usually has python-httpx, not the scanner —
+    #: the probe then goes through relayed curl instead of failing on flags
+    relay_supported = True
+
     profile_id = "sandbox.httpx@v1"
     executable = "httpx"
     max_targets = 50
