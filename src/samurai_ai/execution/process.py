@@ -78,6 +78,9 @@ class ProcessManager:
     ) -> None:
         if circuit_breaker_threshold < 1:
             raise ValueError("circuit breaker threshold must be >= 1")
+        #: an open breaker half-opens after this many seconds: a relayed fetch
+        #: timing out three times is a sick target, not a dead process host
+        self.breaker_cooldown_seconds = 120.0
         self.allowed_executables = allowed_executables
         self.output_limit_bytes = output_limit_bytes
         self.circuit_breaker_threshold = circuit_breaker_threshold
@@ -85,12 +88,14 @@ class ProcessManager:
         self._deadline_at: float | None = None
         self._running: dict[str, _RunningProcess] = {}
         self._consecutive_failures = 0
+        self._breaker_opened_at: float | None = None
 
     def list(self) -> list[ManagedProcess]:
         return [entry.handle for entry in self._running.values()]
 
     def reset_circuit_breaker(self) -> None:
         self._consecutive_failures = 0
+        self._breaker_opened_at = None
 
     def set_deadline(self, seconds: float | None) -> None:
         """A hard brake for every later run; ``None`` removes it.
@@ -186,6 +191,7 @@ class ProcessManager:
             self._record_failure()
         elif result.exit_code == 0:
             self._consecutive_failures = 0
+            self._breaker_opened_at = None
         return result
 
     async def cancel(self, handle_id: str) -> ProcessResult:
@@ -215,10 +221,17 @@ class ProcessManager:
 
     def _validate_argv(self, argv: tuple[str, ...]) -> None:
         if self._consecutive_failures >= self.circuit_breaker_threshold:
-            raise CircuitBreakerOpenError(
-                "process circuit breaker is open after "
-                f"{self._consecutive_failures} consecutive failures"
-            )
+            opened = self._breaker_opened_at
+            if (
+                opened is not None
+                and time.monotonic() - opened > self.breaker_cooldown_seconds
+            ):
+                self.reset_circuit_breaker()
+            else:
+                raise CircuitBreakerOpenError(
+                    "process circuit breaker is open after "
+                    f"{self._consecutive_failures} consecutive failures"
+                )
         if not argv:
             raise ToolValidationError("argv must contain at least the executable")
         executable = Path(argv[0]).name
@@ -307,3 +320,5 @@ class ProcessManager:
 
     def _record_failure(self) -> None:
         self._consecutive_failures += 1
+        if self._consecutive_failures >= self.circuit_breaker_threshold:
+            self._breaker_opened_at = time.monotonic()
