@@ -5071,10 +5071,22 @@ def test_the_stop_note_reaches_the_model_once(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
+            # hold the turn inside the loop so the stop press cannot race the start
+            entered = asyncio.Event()
+            release = asyncio.Event()
+            original = app._chat_loop
+
+            async def gated(*args, **kwargs):  # type: ignore[no-untyped-def]
+                entered.set()
+                await release.wait()
+                return await original(*args, **kwargs)
+
+            app._chat_loop = gated  # type: ignore[method-assign]
             app.query_one("#command-input", Input).value = "проверь вход"
             await pilot.press("enter")
-            await _wait_busy(app, pilot)
+            await entered.wait()
             await pilot.press("ctrl+c")
+            release.set()
             await app.workers.wait_for_complete()
             await pilot.pause()
             second = provider.requests[1]
