@@ -432,7 +432,9 @@ def test_a_task_without_evidence_is_refused_until_forced(tmp_path: Path) -> None
     )
 
     service.register_artifact(operation.id, ArtifactKind.NOTE, "proof", task_id="probe")
-    service.complete_task(operation.id, "probe")
+    with pytest.raises(TaskEvidenceError, match="produced no finding"):
+        service.complete_task(operation.id, "probe")
+    service.complete_task(operation.id, "probe", no_finding="nothing reportable here")
     assert service.get_current_plan(operation.id).task_by_id("probe").status is (  # type: ignore[union-attr]
         TaskStatus.DONE
     )
@@ -448,3 +450,33 @@ def test_force_closes_a_task_that_produced_nothing(tmp_path: Path) -> None:
     assert service.get_current_plan(operation.id).task_by_id("probe").status is (  # type: ignore[union-attr]
         TaskStatus.DONE
     )
+
+
+def test_a_finding_on_the_task_artifacts_closes_it(tmp_path: Path) -> None:
+    """The gate wants a result, and a finding proven by the task's own artifact is it."""
+    service = make_service(tmp_path / "finding.db")
+    operation = make_operation(service)
+    service.create_plan(operation.id, "Gate", [PlanTask(id="probe", title="Probe")], [])
+    service.approve_plan(operation.id)
+    service.start_task(operation.id, "probe")
+    artifact = service.register_artifact(operation.id, ArtifactKind.NOTE, "x", task_id="probe")
+    finding = service.create_finding(operation.id, "IDOR on /user", FindingSeverity.HIGH)
+    service.attach_evidence(finding.id, artifact.id)
+    service.complete_task(operation.id, "probe")
+    assert service.get_current_plan(operation.id).task_by_id("probe").status is (  # type: ignore[union-attr]
+        TaskStatus.DONE
+    )
+
+
+def test_a_finding_without_this_task_artifact_does_not_count(tmp_path: Path) -> None:
+    service = make_service(tmp_path / "foreign.db")
+    operation = make_operation(service)
+    service.create_plan(operation.id, "Gate", [PlanTask(id="probe", title="Probe")], [])
+    service.approve_plan(operation.id)
+    service.start_task(operation.id, "probe")
+    service.register_artifact(operation.id, ArtifactKind.NOTE, "x", task_id="probe")
+    other = service.register_artifact(operation.id, ArtifactKind.NOTE, "y")
+    finding = service.create_finding(operation.id, "Elsewhere", FindingSeverity.LOW)
+    service.attach_evidence(finding.id, other.id)
+    with pytest.raises(TaskEvidenceError, match="produced no finding"):
+        service.complete_task(operation.id, "probe")

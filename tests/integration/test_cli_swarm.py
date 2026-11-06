@@ -19,7 +19,7 @@ EXECUTOR_ANSWER = (
     '{"commands": ['
     '{"type": "request_tool_run", "tool_id": "local.echo", "params": {"text": "cli-swarm"}},'
     '{"type": "note", "key": "shared.swarm", "value": "ok"},'
-    '{"type": "complete_task"}'
+    '{"type": "complete_task", "no_finding": "scripted"}'
     "]}"
 )
 

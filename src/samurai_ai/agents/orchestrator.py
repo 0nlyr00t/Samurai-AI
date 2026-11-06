@@ -987,7 +987,9 @@ class AgentOrchestrator:
                 # re-affirming completion is not a mistake worth a refusal
                 if self._task_done(operation_id, run.task_id):
                     return None
-                self.kernel.complete_task(operation_id, run.task_id)
+                self.kernel.complete_task(
+                    operation_id, run.task_id, no_finding=command.no_finding
+                )
                 self._note_missing_finding(operation_id, run)
             elif isinstance(command, FailCommand):
                 raise AgentError(f"agent requested failure: {command.reason}")
