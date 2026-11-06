@@ -112,7 +112,12 @@ def _preflight(args: argparse.Namespace) -> bool:
     """Ask the cheap question first: does anything answer at all?"""
     from samurai_ai.services.reachability import preflight
 
-    report = preflight(list(args.includes))
+    relay = str(getattr(args, "relay", "") or "").strip()
+    report = (
+        preflight(list(args.includes), relay=relay)
+        if relay
+        else preflight(list(args.includes))
+    )
     for probe in report.silent:
         where = probe.address or probe.target
         print(f"warn: {where} does not answer on {_port_list()}", file=sys.stderr)
