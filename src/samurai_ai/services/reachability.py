@@ -103,8 +103,24 @@ def probe(target: str) -> Probe:
     return Probe(target=target, address=address, state="silent")
 
 
-def preflight(targets: list[str]) -> Preflight:
+def _probe_relayed(target: str, relay: str) -> Probe:
+    """Probe from the far side of the relay — that is where the route lives."""
+    from samurai_ai.execution.relay import relayed_probe
+
+    state = relayed_probe(relay, target, PROBE_PORTS)
+    return Probe(
+        target=target,
+        address=target if is_address(target) else "",
+        state="open" if state == "open" else "silent",
+    )
+
+
+def preflight(targets: list[str], relay: str = "") -> Preflight:
     """Probe every target once; the caller decides what a fully silent run means."""
+    if relay.strip():
+        return Preflight(
+            probes=tuple(_probe_relayed(target, relay) for target in targets)
+        )
     return Preflight(probes=tuple(probe(target) for target in targets))
 
 

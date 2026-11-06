@@ -43,8 +43,16 @@ def validate_relay(relay: str) -> str:
 
 
 def relay_command(relay: str, executable: str, args: list[str]) -> str:
-    """The single shell line a relayed call becomes."""
-    return f"{relay} {shlex.join([executable, *args])}"
+    """The single shell line a relayed call becomes.
+
+    Join-style relays (prlctl exec, ssh) pass argv through a far-side shell
+    that re-parses the joined line: quotes spent on the host side never reach
+    the guest, so `bash -c 'echo hello'` used to arrive as `bash -c echo hello`
+    and run an empty echo. Every argument is therefore quoted twice — once for
+    the host shell, once for the far side.
+    """
+    doubled = [shlex.quote(shlex.quote(arg)) for arg in (executable, *args)]
+    return f"{relay} {' '.join(doubled)}"
 
 
 class RelaySandboxRunner(DockerSandboxRunner):
@@ -194,6 +202,52 @@ def html_to_text(html: str) -> tuple[str, list[str], str]:
     text = _unescape(text)
     text = "\n".join(" ".join(line.split()) for line in text.splitlines())
     return title, links, _BLANKS.sub("\n\n", text).strip()
+
+
+_PROBE_SCRIPT = (
+    "import socket,sys\n"
+    "addr=sys.argv[1]\n"
+    "hit=\"\"\n"
+    "for p in sys.argv[2:]:\n"
+    " s=socket.socket();s.settimeout(2)\n"
+    " try:\n"
+    "  s.connect((addr,int(p)));hit=p;break\n"
+    " except Exception:pass\n"
+    " finally:s.close()\n"
+    "print(\"open \"+hit if hit else \"silent\")"
+)
+
+
+def relayed_probe(
+    relay: str, address: str, ports: tuple[int, ...], *, timeout: float = 30.0
+) -> str:
+    """One connect probe per port, run on the far side of the relay.
+
+    The host has no route to the target — that is the point of the relay — so
+    a local socket answers a question about the wrong network. The probe is a
+    python3 one-shot: every far side that can run tools has it.
+    """
+    from samurai_ai.execution.process import ProcessManager
+
+    argv = [
+        "bash",
+        "-lc",
+        relay_command(
+            relay, "python3", ["-c", _PROBE_SCRIPT, address, *(str(p) for p in ports)]
+        ),
+    ]
+    manager = ProcessManager(allowed_executables=frozenset({"bash"}))
+    try:
+        result = asyncio.run(manager.run(argv, timeout_seconds=timeout))
+    except Exception:  # noqa: BLE001 - a failed probe is a silent answer
+        return "error"
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("open"):
+            return "open"
+        if line == "silent":
+            return "silent"
+    return "error"
 
 
 def relay_host(relay: str, *, timeout: float = 20.0) -> str:
