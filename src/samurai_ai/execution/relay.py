@@ -82,6 +82,11 @@ def normalize_relayed(relay: str, command: str) -> str:
 class RelaySandboxRunner(DockerSandboxRunner):
     """Docker runner that hands the command to a relay prefix instead."""
 
+    #: the profile's stall window answers a local silence; behind a relay the
+    #: output arrives at process end, so the runner's own (disabled) watchdog
+    #: stays and the per-run timeout is the bound
+    honor_profile_stall = False
+
     def __init__(
         self,
         manager: Any,
