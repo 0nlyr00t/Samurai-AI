@@ -106,7 +106,7 @@ Apache-2.0 — see [`LICENSE`](LICENSE). Use, forking and contributions are allo
 
 ## Status
 
-Under active development: 1362 automated tests, CI gates (ruff, strict mypy, pytest, secret scan, package build), signed releases. Not done: distributed runners (beyond the SSH daemon tunnel), standalone shodan and censys tools, Python-hook plugins. ADB and VBoxManage are mock-tested, genes have no field series yet.
+Under active development. Not done: distributed runners (beyond the SSH daemon tunnel), Python-hook plugins.
 
 ## Authorized use
 
