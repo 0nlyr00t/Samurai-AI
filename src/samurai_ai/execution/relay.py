@@ -170,6 +170,12 @@ def relayed_fetch(
         ),
     ]
     result = asyncio.run(manager.run(argv, timeout_seconds=timeout + 5))
+    if method == "HEAD" and (result.exit_code == 28 or result.timed_out):
+        # some stacks hang on HEAD; ask for the first bytes of a GET instead
+        return relayed_fetch(
+            relay, url, method="GET", timeout=timeout, max_bytes=max_bytes,
+            manager=manager,
+        )
     if result.exit_code not in (0, None) or result.timed_out:
         detail = (result.stderr or result.stdout).strip()[:500]
         raise ToolExecutionError(f"relayed fetch failed for {url}: {detail}")

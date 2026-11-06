@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import urllib.parse
 from typing import Any
@@ -103,6 +104,9 @@ def parse_completion(
     message = choices[0].get("message") or {}
     text = message.get("content") or ""
     tool_calls: list[ToolCall] = []
+    if "DSML" in text:
+        text, salvaged = _salvage_dsml(text)
+        tool_calls.extend(salvaged)
     for entry in message.get("tool_calls") or []:
         function = entry.get("function") or {}
         raw_arguments = function.get("arguments") or "{}"
@@ -243,3 +247,42 @@ class OpenAICompatProvider:
         return ProviderUnavailableError(
             f"provider {self.provider.id} is unavailable: {detail}"
         )
+
+
+_DSML_CALLS = re.compile(r"<｜DSML｜\s*calls>(.*?)</｜DSML｜\s*calls>", re.S)
+_DSML_INVOKE = re.compile(
+    r"<｜DSML｜\s*invoke\s+name=\"([^\"]+)\"[^>]*>(.*?)(?:</｜DSML｜\s*invoke>|\Z)",
+    re.S,
+)
+_DSML_PARAM = re.compile(
+    r"<｜DSML｜\s*parameter\s+name=\"([^\"]+)\"[^>]*>(.*?)(?:</｜DSML｜\s*parameter>|\Z)",
+    re.S,
+)
+
+
+def _salvage_dsml(text: str) -> tuple[str, list[ToolCall]]:
+    """Recover tool calls a model wrote as DSML markup into the text.
+
+    Some backends surface DeepSeek-style calls as content instead of native
+    tool_calls; a well-formed invoke is still a call, so parse it out and
+    strip the markup from the visible text.
+    """
+    calls: list[ToolCall] = []
+    for index, match in enumerate(_DSML_INVOKE.finditer(text)):
+        body = match.group(2)
+        arguments = {
+            name: value.strip()
+            for name, value in _DSML_PARAM.findall(body)
+        }
+        calls.append(
+            ToolCall(
+                id=f"dsml-{index}",
+                # keep the name as written: chat handlers use shell_exec & co
+                name=match.group(1),
+                arguments=arguments,
+            )
+        )
+    cleaned = _DSML_CALLS.sub("", text)
+    # a stray open tag without its close leaves nothing useful behind
+    cleaned = cleaned.split("<｜DSML｜", 1)[0]
+    return cleaned.strip(), calls
