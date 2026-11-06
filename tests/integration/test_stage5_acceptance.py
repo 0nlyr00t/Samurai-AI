@@ -291,8 +291,9 @@ def test_parallel_swarm_faster_with_identical_outcomes(
     assert sequential_stats == swarm_stats
     assert swarm_stats["rejected"] == 0
     assert swarm_stats["model_calls"] == 4
-    # 2 model notes + 2 automatic tool-result feedback notes
-    assert swarm_stats["notes"] == 4
+    # 2 model notes + 2 automatic tool-result feedback notes + 2 "closed with no
+    # finding" reminders, one per task (these tests produce no finding)
+    assert swarm_stats["notes"] == 6
 
     # usage accounting is exact on both paths and identical in volume
     sequential_usage = stack.models.usage(sequential_op)
