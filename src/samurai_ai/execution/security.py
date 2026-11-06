@@ -68,6 +68,8 @@ class _ScopedSandboxTool:
     def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
         self._runner = runner
         self._notice: str | None = None
+        #: set by the executor when the operation runs behind a relay
+        self.relay = ""
 
     @property
     def runner(self) -> DockerSandboxRunner:
@@ -1140,6 +1142,9 @@ print(json.dumps({"query": query, "search_url": search_url, "status": status,
 class ResearchReadTool(_ScopedSandboxTool):
     """Render one URL in camoufox and bring back text, links and a citation.
 
+    Behind a relay the browser image is usually absent on the far side, so the
+    tool falls back to a plain fetch there: less faithful, still a read.
+
     The browser executes foreign JavaScript, so it runs in the sandbox and its
     only way out is the scoped proxy. What it read is recorded as a traffic pair
     — a citation that cannot be re-opened is indistinguishable from a guess.
@@ -1196,6 +1201,42 @@ class ResearchReadTool(_ScopedSandboxTool):
             )
         return [url]
 
+    def _read_relayed(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        """No browser on the far side: fetch with curl and strip the markup."""
+        import json as _json
+
+        from samurai_ai.execution.process import ProcessManager
+        from samurai_ai.execution.relay import html_to_text, relayed_fetch
+
+        url = str(params["url"]).strip()
+        decision = scope.evaluate(url)
+        if not decision.allowed:
+            raise ToolScopeError(
+                f"{self.definition.id}: {url} is out of scope: {decision.detail}"
+            )
+        max_chars = int(params.get("max_chars", 4000))
+        response = relayed_fetch(
+            self.relay,
+            url,
+            method="GET",
+            timeout=float(self.definition.timeout_seconds),
+            max_bytes=self.definition.output_limit_bytes,
+            manager=ProcessManager(allowed_executables=frozenset({"bash"})),
+        )
+        title, links, text = html_to_text(response.body.decode("utf-8", "replace"))
+        payload = {
+            "url": url,
+            "status": response.status,
+            "title": title,
+            "text": text[:max_chars],
+            "links": links,
+        }
+        return ToolOutput(
+            stdout=_json.dumps(payload, ensure_ascii=False),
+            stderr=f"HTTP {response.status} {url} (relayed, no browser)",
+            exit_code=0,
+        )
+
     def build_args(self, params: dict[str, Any]) -> list[str]:
         targets = params.get("targets") or [params["url"]]
         max_chars = int(params.get("max_chars", 4000))
@@ -1233,7 +1274,11 @@ class ResearchReadTool(_ScopedSandboxTool):
                 break
         return lines
 
+    relay_supported = True
+
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        if self.relay:
+            return self._read_relayed(params, scope)
         output = super().invoke(params, scope)
         payload = _research_payload(output.stdout)
         if payload is None:
