@@ -342,3 +342,19 @@ def test_relay_runner_keeps_its_own_stall_setting() -> None:
     runner = build_runner("prlctl exec '<uuid>'")
     assert runner.honor_profile_stall is False
     assert runner.manager.stall_seconds == 0
+
+
+def test_dsml_markup_in_the_answer_text_becomes_tool_calls() -> None:
+    """A backend that surfaces DSML as content must not lose the call."""
+    from samurai_ai.agents.openai_compat import _salvage_dsml
+
+    text = (
+        "Смотрю цель.\n\n<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"shell_exec\">\n"
+        "<｜DSML｜ parameter name=\"command\" string=\"true\">id</｜DSML｜ parameter>\n"
+        "</｜DSML｜ invoke>\n</｜DSML｜ calls>"
+    )
+    cleaned, calls = _salvage_dsml(text)
+    assert cleaned == "Смотрю цель."
+    assert len(calls) == 1
+    assert calls[0].name == "shell_exec"
+    assert calls[0].arguments == {"command": "id"}
