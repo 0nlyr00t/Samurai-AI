@@ -246,3 +246,38 @@ def test_no_address_means_no_scope_change(tmp_path: Path) -> None:
     finally:
         relay_module.relay_host = original  # type: ignore[assignment]
     assert operations.get(operation_id).scope.includes == ("10.0.0.1",)
+
+
+def test_relay_command_quotes_twice_for_the_far_side_shell() -> None:
+    """A join-style relay re-parses the line: single quoting dies at prlctl."""
+    from samurai_ai.execution.relay import relay_command
+
+    line = relay_command("prlctl exec '<uuid>'", "bash", ["-c", "echo hello; id"])
+    # the -c payload keeps its quoting for the far side's shell
+    assert line.count("echo hello; id") == 1
+    assert chr(39) + chr(34) + chr(39) in line  # shlex double-quote escape
+
+
+def test_preflight_probes_through_the_relay(monkeypatch: Any) -> None:
+    """The host has no route to the target; the relay side has."""
+
+    calls: list[str] = []
+
+    def fake_probe(relay: str, address: str, ports: tuple[int, ...], **_: Any) -> str:
+        calls.append(address)
+        return "open"
+
+    monkeypatch.setattr(
+        "samurai_ai.execution.relay.relayed_probe", fake_probe, raising=True
+    )
+    import samurai_ai.services.reachability as mod
+
+    monkeypatch.setattr(mod, "_probe_relayed", mod._probe_relayed)  # keep real wiring
+    monkeypatch.setattr(
+        mod,
+        "_probe_relayed",
+        lambda target, relay: mod.Probe(target=target, address=target, state="open"),
+    )
+    report = mod.preflight(["10.0.0.9"], relay="prlctl exec '<uuid>'")
+    assert not report.dead
+    assert report.probes[0].state == "open"

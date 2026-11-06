@@ -1448,6 +1448,7 @@ def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
     settings = stack[2]
     settings.set_locale("en")
     settings.set_value("tui.yolo", "1")
+    settings.set_value("tui.max_tool_rounds", "4")  # the smallest legal ceiling
     vault = stack[5]
     models = stack[-1]
     vault.add("gpt-key", "x")
@@ -1474,9 +1475,9 @@ def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
                 await pilot.press("enter")
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                # 8 tool rounds + 1 closing call without tools: the operator
+                # 4 tool rounds + 1 closing call without tools: the operator
                 # always gets a final answer instead of silence
-                assert provider.calls == 9
+                assert provider.calls == 5
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "final summary after the loop" in text
             await pilot.press("ctrl+c")
