@@ -1059,6 +1059,40 @@ class SamuraiApp(
         follow = journal.toggle_follow()
         self._write_dim(self.translator.t("journal.follow-on" if follow else "journal.follow-off"))
 
+
+    def action_journal_search(self) -> None:
+        """`/` opens the journal search; n/N walk the matches."""
+        field = self.query_one("#command-input", Input)
+        field.value = "/find "
+        field.focus()
+        field.cursor_position = len(field.value)
+
+    def action_journal_next(self) -> None:
+        self._walk_journal(1)
+
+    def action_journal_previous(self) -> None:
+        self._walk_journal(-1)
+
+    def _walk_journal(self, step: int) -> None:
+        term = getattr(self, "_journal_term", "")
+        if not term:
+            return
+        journal = self.query_one("#journal", BlockJournal)
+        matches = journal.search(term)
+        if not matches:
+            self._write_dim(self.translator.t("journal.search-none", term=term))
+            return
+        current = getattr(self, "_journal_match", -1)
+        self._journal_match = (current + step) % len(matches)
+        journal.scroll_to(y=matches[self._journal_match], animate=False)
+        self._write_dim(
+            self.translator.t(
+                "journal.search-hit",
+                index=self._journal_match + 1,
+                total=len(matches),
+            )
+        )
+
     def action_op_next(self) -> None:
         self._cycle_operation(1)
 
@@ -1847,6 +1881,13 @@ class SamuraiApp(
             self._write_line(f"[role] {claim} -> {role.value}")
 
     def _handle_command(self, command: str) -> None:
+        if command.startswith("/find "):
+            term = command[6:].strip()
+            self._journal_term = term
+            self._journal_match = -1
+            if term:
+                self._walk_journal(1)
+            return
         if command.startswith("!"):
             self._shell_mode(command[1:].strip())
             return
