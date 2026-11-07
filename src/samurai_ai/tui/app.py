@@ -34,6 +34,7 @@ from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.constraints import ConstraintKind
 from samurai_ai.domain.execution import SecretRedactor, ToolDefinition, ToolRun
 from samurai_ai.domain.goal import Goal, GoalError
+from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import (
     ApprovalStatus,
     Artifact,
@@ -232,6 +233,10 @@ class SamuraiApp(
         padding: 0 1;
         background: $panel-alt;
         color: $accent;
+    }
+    #side-access, #side-creds {
+        height: auto;
+        padding: 1 1 0 1;
     }
     #ops-strip {
         height: 1;
@@ -602,6 +607,8 @@ class SamuraiApp(
                 yield BlockJournal(id="view-hunt")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
+                yield Static(id="side-access")
+                yield Static(id="side-creds")
         with Horizontal(id="ops-strip"):
             yield Static(id="strip-agents", classes="strip-item")
             yield Static(id="strip-todo", classes="strip-item")
@@ -2938,6 +2945,47 @@ class SamuraiApp(
             text = "~" + text[len(home) :]
         return text
 
+    def _refresh_side_blocks(self) -> None:
+        """Hosts we hold access to, and the names of vaulted secrets."""
+        from samurai_ai.tui.killchain import access_rows
+
+        access = self.query_one("#side-access", Static)
+        creds = self.query_one("#side-creds", Static)
+        if self.operation is None:
+            access.update("")
+            creds.update("")
+            return
+        facts = [
+            str(node.payload.get("summary") or node.text())
+            for node in self.graph.for_operation(self.operation.id)
+            if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
+        ]
+        rows = access_rows(facts)
+        lines = Text()
+        lines.append(self.translator.t("side.access") + "\n", style=self.paint("dim accent"))
+        if not rows:
+            lines.append(
+                self.translator.t("side.access-empty"), style=self.paint("dim text-faint")
+            )
+        for row in rows[:6]:
+            token = {"root": "success", "user": "risk-mid"}.get(row.level, "dim text-faint")
+            lines.append("● ", style=self.paint(token))
+            lines.append(row.host, style=self.paint("text"))
+            lines.append(f" {row.level}\n", style=self.paint(token))
+        access.update(lines)
+
+        names = [meta.name for meta in self.vault.list_metadata(self.operation.id)]
+        secrets = Text()
+        secrets.append(self.translator.t("side.creds") + "\n", style=self.paint("dim accent"))
+        if not names:
+            secrets.append(
+                self.translator.t("side.creds-empty"), style=self.paint("dim text-faint")
+            )
+        for name in names[:6]:
+            secrets.append("· ", style=self.paint("dim"))
+            secrets.append(name + "\n", style=self.paint("text"))
+        creds.update(secrets)
+
     def _killchain(self) -> Any:
         """The stage rail for the current operation; empty when there is none."""
         from samurai_ai.tui.killchain import KillChain, nodes_to_payloads, phase_for
@@ -3071,6 +3119,7 @@ class SamuraiApp(
             ("\n" + self._short_cwd(), self.paint("accent")),
         )
         self.query_one("#side-workspace", Static).update(workspace)
+        self._refresh_side_blocks()
         model = self.models.default_model()
         directory = self._short_cwd()
         if not self._directory_trusted():

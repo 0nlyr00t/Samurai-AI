@@ -66,3 +66,44 @@ def test_the_counter_total_never_reads_zero_with_flags() -> None:
 
 def test_an_empty_mode_is_falsy() -> None:
     assert not KillChain((), "", "", 0, 0)
+
+
+def test_access_rows_take_hosts_from_facts_with_the_strongest_level() -> None:
+    from samurai_ai.tui.killchain import access_rows
+
+    rows = access_rows(
+        [
+            "banner 10.0.0.5 ssh OpenSSH 9.2",
+            "shell as www-data on 10.0.0.5 via forged qr",
+            "root on 10.0.0.5 through suid bash",
+            "10.0.0.9 http 200, app.htb serves nginx",
+        ]
+    )
+    by_host = {row.host: row.level for row in rows}
+    assert by_host["10.0.0.5"] == "root"
+    assert by_host["10.0.0.9"] == "read"
+    assert by_host["app.htb"] == "read"
+
+
+def test_access_rows_ignore_facts_without_hosts() -> None:
+    from samurai_ai.tui.killchain import access_rows
+
+    assert access_rows(["nothing useful here", ""]) == []
+
+
+def test_ctf_counter_reads_flags_and_not_verified_findings() -> None:
+    """The counter follows the mode: flags only exist in CTF."""
+    ctf = phase_for(OperationMode.CTF_HTB, [], flag_count=2, flag_total=2, verified_findings=9)
+    bounty = phase_for(OperationMode.BUG_BOUNTY, [], verified_findings=9)
+    assert (ctf.counter_label, ctf.counter_done) == ("flags", 2)
+    assert (bounty.counter_label, bounty.counter_done) == ("verified", 9)
+
+
+def test_the_marker_table_covers_every_fallback_phase() -> None:
+    """Each chain phase must be reachable by some marker, or the rail stalls."""
+    from samurai_ai.tui.killchain import _CHAINS, _MARKERS
+
+    reachable = {phase for _, candidates in _MARKERS for phase in candidates}
+    for mode, chain in _CHAINS.items():
+        missing = set(chain[1:]) - reachable
+        assert not missing, f"{mode} has unreachable stages: {missing}"
