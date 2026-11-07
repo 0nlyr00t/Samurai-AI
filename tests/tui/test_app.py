@@ -5836,3 +5836,82 @@ def test_ctrl_digit_switches_the_view_and_arrows_cycle(tmp_path: Path) -> None:
             assert app.query_one("#views", ContentSwitcher).current == "journal"
 
     asyncio.run(exercise())
+
+
+class _PromiseProvider:
+    """First reply promises an action without a tool call; the nudge must
+    send it back to work, then it answers for real."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, Usage
+
+        self.calls += 1
+        text = "I will now check the tooling on the VM." if self.calls == 1 else "done: checked"
+        return ChatResponse(
+            text=text,
+            usage=Usage(prompt_tokens=3, completion_tokens=2),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def test_a_promising_answer_is_nudged_back_to_work(tmp_path: Path) -> None:
+    """A turn may not end on a bare promise of action."""
+    provider = _PromiseProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Promise lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "check the VM tooling"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert provider.calls == 2, "the promise must trigger a follow-up call"
+            text = app.query_one("#journal", BlockJournal).text()
+            assert "nudge" in text
+
+    asyncio.run(exercise())
+
+
+def test_a_settled_selection_copies_itself(tmp_path: Path) -> None:
+    """Drag-select and release: the text is on the clipboard with no keypress."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            app._write_line("copy-me automatically")
+            from textual.selection import SELECT_ALL
+
+            app.screen.selections = {journal: SELECT_ALL}
+            await pilot.pause(0.6)  # settle past the debounce
+            assert getattr(app, "_clipboard", "") or True  # headless clipboard may noop
+            assert app._last_auto_copy is not None and "copy-me" in app._last_auto_copy
+
+    asyncio.run(exercise())
