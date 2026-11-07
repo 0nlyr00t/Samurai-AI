@@ -6022,3 +6022,28 @@ def test_the_side_column_lists_access_and_secret_names(tmp_path: Path) -> None:
             assert "n8n-api-key" in creds
 
     asyncio.run(exercise())
+
+
+def test_a_live_selection_keeps_focus_off_the_input(tmp_path: Path) -> None:
+    """A turn ending must not steal focus from a drag or a list."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            app._write_line("pick me")
+            from textual.selection import SELECT_ALL
+
+            app.screen.selections = {journal: SELECT_ALL}
+            app.query_one("#command-input", Input).blur()
+            app.focus_command_input()
+            assert app.focused is not app.query_one("#command-input", Input)
+            # an explicit action still takes it
+            app.focus_command_input(force=True)
+            await pilot.pause()
+            assert app.focused is app.query_one("#command-input", Input)
+
+    asyncio.run(exercise())
