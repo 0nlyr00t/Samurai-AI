@@ -396,6 +396,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{autonomy}"
         ),
         "chat.tool-denied": "denied by operator: {command}",
+        "chat.relay-hint": (
+            "The VM relay for this operation is `{relay}`; write commands against "
+            "the far side and prefix them with the relay verbatim — do not write "
+            "your own wrapper script."
+        ),
         "chat.tool-limit": "tool round limit reached — settling what is already known",
         "chat.ended-rounds": (
             "— turn ended: the round budget is spent; ask it to continue "
@@ -1019,6 +1024,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{autonomy}"
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
+        "chat.relay-hint": (
+            "Релей в VM этой операции: `{relay}`; пиши команды под удалённую "
+            "сторону и ставь релей перед ними дословно — своих обёрток не пиши."
+        ),
         "chat.tool-limit": "лимит раундов команд — подвожу итог без инструментов",
         "chat.ended-rounds": (
             "— ход завершён: бюджет раундов исчерпан, скажи «продолжай» "
