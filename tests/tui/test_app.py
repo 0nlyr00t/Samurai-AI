@@ -6047,3 +6047,79 @@ def test_a_live_selection_keeps_focus_off_the_input(tmp_path: Path) -> None:
             assert app.focused is app.query_one("#command-input", Input)
 
     asyncio.run(exercise())
+
+
+def test_bare_copy_takes_the_last_answer(tmp_path: Path) -> None:
+    """`/copy` must work without typing an argument."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._last_ai_text = "the answer to copy"
+            app.query_one("#command-input", Input).value = "/copy"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert getattr(app, "_clipboard", "") == "the answer to copy"
+
+    asyncio.run(exercise())
+
+
+def test_the_approval_prompt_reveals_and_copies_the_full_command(tmp_path: Path) -> None:
+    """A long governed command must be readable in full before allowing it."""
+    from samurai_ai.tui.screens import AccessPromptScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    action = "shell.exec " + "curl -s https://example.com/" + "a" * 120
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.push_screen(AccessPromptScreen(app.translator, action, "R2"))
+            await pilot.pause()
+            full = app.screen.query_one("#access-full")
+            assert not full.display
+            await pilot.press("v")
+            await pilot.pause()
+            assert full.display
+            assert action in str(app.screen.query_one("#access-full-text", Static).render())
+            await pilot.press("c")
+            await pilot.pause()
+            assert getattr(app, "_clipboard", "") == action
+            await pilot.press("escape")
+            await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_resume_switches_to_a_chosen_earlier_operation(tmp_path: Path) -> None:
+    """`/resume` lists earlier operations and reopens the chosen one."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    first = stack[0].create(
+        "Earlier", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    second = stack[0].create(
+        "Later", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, second.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "/resume"
+            await pilot.press("enter")
+            await pilot.pause()
+            listed = app.screen.query_one("#picker-list", OptionList)
+            ids = [option.id for option in listed.options]
+            assert first.id in ids and second.id not in ids
+            listed.highlighted = ids.index(first.id)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.operation is not None and app.operation.id == first.id
+
+    asyncio.run(exercise())
