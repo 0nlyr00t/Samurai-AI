@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import Any
 
 from samurai_ai.domain.kernel import ApprovalStatus
 from samurai_ai.services.swarm import SwarmService, always_approve
@@ -76,6 +77,7 @@ def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> i
             return 2
         approval_id = approval.id
     retried: set[str] = set()
+    reports: list[dict[str, Any]] = []
     done = 0
     failed = 0
     while True:
@@ -107,11 +109,21 @@ def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> i
             approval_resolver=(always_approve if args.auto_approve else None),
         )
         report = swarms.report(swarm.id)
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        reports.append(report)
         for member in report.get("members", []):
             if member.get("status") == "completed":
                 done += 1
             else:
                 failed += 1
-    print(f"tasks done={done} failed={failed}")
+    # one JSON document: the batch list plus the totals the caller reads
+    last = dict(reports[-1]) if reports else {}
+    last["batches"] = len(reports)
+    last["tasks_done"] = done
+    last["tasks_failed"] = failed
+    # stdout stays a single JSON document; the totals ride inside it
+    print(json.dumps(last, ensure_ascii=False, indent=2))
+    if not reports:
+        # nothing was ever ready and nothing could be retried: a usage error
+        print("error: no ready tasks in the current plan", file=sys.stderr)
+        return 2
     return 0 if failed == 0 and done else 1
