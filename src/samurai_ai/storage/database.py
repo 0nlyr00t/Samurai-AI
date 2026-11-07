@@ -913,6 +913,23 @@ _MIGRATION_31 = """
 DROP TRIGGER IF EXISTS custom_playbooks_no_delete;
 """
 
+
+
+_MIGRATION_32 = """
+-- per-step resume points for an interrupted agent run
+CREATE TABLE IF NOT EXISTS run_checkpoints (
+    run_id      TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL,
+    task_id     TEXT NOT NULL,
+    steps       TEXT NOT NULL,
+    next_index  INTEGER NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS run_checkpoints_operation
+ON run_checkpoints(operation_id);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -945,6 +962,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (29, _MIGRATION_29),
     (30, _MIGRATION_30),
     (31, _MIGRATION_31),
+    (32, _MIGRATION_32),
 )
 
 

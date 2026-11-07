@@ -1002,3 +1002,36 @@ def test_closing_without_a_finding_leaves_a_note(
         if event.event_type == "agent.note"
     ]
     assert any("closed-without-finding" in key for key in notes)
+
+
+def test_an_interrupted_run_resumes_from_its_checkpoint(tmp_path: Path, monkeypatch) -> None:
+    """A run that dies mid-steps resumes at the step it never finished."""
+    from samurai_ai.storage.agents import RunCheckpointRepository
+
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    orchestrator.checkpoints = RunCheckpointRepository(kernel.kernel.database)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    # the run dies on step 2: no answer for the second step's prompt
+    fake.queue(
+        '{"steps": ["first", "second"]}',
+        '{"commands": [{"type": "note", "key": "a", "value": "one"}]}',
+    )
+    try:
+        run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    except Exception:
+        run = orchestrator.get_run(orchestrator.runs.list_runs(operation_id)[-1].id)
+    assert run.status.value != "completed"
+    point = orchestrator.checkpoints.get(run.id)
+    assert point is not None
+    steps, index = point
+    assert steps == ("first", "second")
+    assert index == 1  # step 2 never finished
+
+    # resume picks up at step 2, not from zero
+    fake.queue('{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}')
+    resumed = orchestrator.resume(run.id)
+    assert resumed is not None
+    assert resumed.task_id == "probe"
+    # the model was asked only for the leftover step, not for a fresh plan
+    assert any("second" in r.messages[-1].content for r in fake.requests[-1:])
