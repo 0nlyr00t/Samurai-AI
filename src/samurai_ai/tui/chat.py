@@ -493,6 +493,10 @@ class ChatController:
         )
         prompt = self._append_constraints(prompt)
         prompt = self._append_frontier(prompt)
+        relay = getattr(self.operation, "relay", "") if self.operation else ""
+        if relay:
+            # hand the relay to the model as-is so it never invents a helper
+            prompt += "\n\n" + self.translator.t("chat.relay-hint", relay=relay)
         try:
             digest, _ids = self.memory.digest(self._memory_workspace())
         except Exception:  # noqa: BLE001 - memory must not break a turn
