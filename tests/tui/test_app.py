@@ -5915,3 +5915,38 @@ def test_a_settled_selection_copies_itself(tmp_path: Path) -> None:
             assert app._last_auto_copy is not None and "copy-me" in app._last_auto_copy
 
     asyncio.run(exercise())
+
+
+def test_task_board_saves_a_trace_from_the_icon(tmp_path: Path) -> None:
+    """The 💾 button in the task board writes the task trace and says where."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Trace ui lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="t-1", title="Recon", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.action_open_task_board()
+            await pilot.pause()
+            button = app.screen.query_one("#board-trace-btn", Button)
+            assert button.tooltip, "the icon must explain itself on hover"
+            await pilot.click("#board-trace-btn")
+            await pilot.pause()
+            status = app.screen.query_one("#board-trace-status", Static)
+            assert ".json" in str(status.render())
+            from samurai_ai.services.trace_export import default_traces_dir
+
+            saved = list((default_traces_dir() / operation.id).glob("t-1-*.json"))
+            assert saved, "the trace file must exist"
+            await pilot.press("escape")
+
+    asyncio.run(exercise())

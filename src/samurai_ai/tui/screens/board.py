@@ -12,9 +12,9 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static
+from textual.widgets import Button, OptionList, Static
 from textual.widgets.option_list import Option
 
 from samurai_ai.i18n import Translator
@@ -57,6 +57,24 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
         max-height: 22;
         background: $panel;
     }
+    #board-trace-row {
+        height: 3;
+        padding-top: 1;
+    }
+    #board-trace-btn {
+        width: 5;
+        min-width: 5;
+        height: 3;
+        border: none;
+        background: $panel-alt;
+    }
+    #board-trace-btn:hover {
+        background: $accent-alt;
+    }
+    #board-trace-status {
+        color: $text-dim;
+        padding: 1 0 0 1;
+    }
     """
 
     def __init__(
@@ -69,6 +87,8 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
         action_labels: dict[str, str],
         on_open: Callable[[str], None],
         empty_text: str,
+        on_trace: Callable[[str], str] | None = None,
+        trace_tooltip: str = "",
     ) -> None:
         super().__init__()
         self.translator = translator
@@ -79,6 +99,8 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
         self.action_labels = action_labels
         self.on_open = on_open
         self.empty_text = empty_text
+        self.on_trace = on_trace
+        self.trace_tooltip = trace_tooltip
         self.show_all = False
         self._items: list[str] = []
 
@@ -88,6 +110,12 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
             yield Static(self.heading, id="board-title")
             yield Static(self.hint, id="board-hint")
             yield OptionList(id="board-list")
+            if self.on_trace is not None:
+                with Horizontal(id="board-trace-row"):
+                    button = Button("💾", id="board-trace-btn")
+                    button.tooltip = self.trace_tooltip
+                    yield button
+                    yield Static("", id="board-trace-status")
 
     def on_mount(self) -> None:
         self._reload()
@@ -143,12 +171,32 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
             self.action_filter()
             event.stop()
             return
+        if key == "w" and self.on_trace is not None:
+            self._save_trace()
+            event.stop()
+            return
         action = self.actions.get(key)
         item_id = self.selected()
         if action is not None and item_id is not None:
             action(item_id)
             self._reload()
             event.stop()
+
+    def _save_trace(self) -> None:
+        if self.on_trace is None:
+            return
+        item_id = self.selected()
+        if item_id is None:
+            return
+        status = self.query_one("#board-trace-status", Static)
+        try:
+            status.update("💾 → " + self.on_trace(item_id))
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            status.update(f"💾 ✗ {exc}")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "board-trace-btn":
+            self._save_trace()
 
     def action_filter(self) -> None:
         self.show_all = not self.show_all
