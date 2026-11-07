@@ -401,6 +401,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "(raise the ceiling in /settings) —"
         ),
         "chat.ended-model-error": "— turn ended: the model errored —",
+        "chat.promise-nudge": "[nudge] it promised an action instead of making the call",
+        "chat.promise-note": (
+            "You described an action instead of performing it. Do it now: "
+            "make the actual tool call, do not narrate intentions."
+        ),
         "chat.settle-prompt": (
             "[wrap-up] rounds are spent. Record what this turn established with "
             "record_fact (and close_intent), and say nothing else yet; a closing "
@@ -991,6 +996,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "(потолок — в /settings) —"
         ),
         "chat.ended-model-error": "— ход завершён: ошибка модели —",
+        "chat.promise-nudge": "[пинок] модель пообещала действие вместо вызова",
+        "chat.promise-note": (
+            "Ты описал действие вместо того, чтобы его выполнить. Сделай это сейчас: "
+            "реальный вызов инструмента, без описания намерений."
+        ),
         "chat.tool-exit": "код выхода {code}",
         "inspect.unknown": "{kind} {ref} уже нет — показать нечего",
         "inspect.more": "Enter — подробнее",

@@ -396,6 +396,8 @@ class SamuraiApp(
         self._ctx_tokens: int = 0
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
+        self._selection_copy_timer: Timer | None = None
+        self._last_auto_copy: str | None = None
         self._chat_history: list[Message] = []
         self._progress = Stagnation()
         self._graph_used = False
@@ -604,6 +606,9 @@ class SamuraiApp(
 
     def on_mount(self) -> None:
         self._apply_mouse()
+        # a finished drag copies itself — the operator should never think
+        # about *how* to copy; like Claude Code, selection IS the copy
+        self.watch(self.screen, "selections", self._on_screen_selections, init=False)
         # the model may ask a question at any point of a run
         if getattr(self.orchestrator, "question_notice", None) is None:
             self.orchestrator.question_notice = self.question_notice_from_thread
@@ -731,6 +736,21 @@ class SamuraiApp(
                 value = self._history_draft
         command_input.value = value
         command_input.cursor_position = len(value)
+
+    def _on_screen_selections(self) -> None:
+        """Selection changes during the drag; copy once it settles."""
+        timer = self._selection_copy_timer
+        if timer is not None:
+            timer.stop()
+        self._selection_copy_timer = self.set_timer(0.35, self._copy_settled_selection)
+
+    def _copy_settled_selection(self) -> None:
+        self._selection_copy_timer = None
+        text = self._selected_text()
+        if not text or text == self._last_auto_copy:
+            return
+        self._last_auto_copy = text
+        self.copy_to_clipboard(text)
 
     def _selected_text(self) -> str | None:
         """What is selected, the focused input's selection included.
