@@ -40,7 +40,6 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
-from samurai_ai.storage.memory import MemorySearchRepository
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.planning import PlanningService
@@ -57,7 +56,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.goals import GoalRepository
 from samurai_ai.storage.kernel import KernelRepository
-from samurai_ai.storage.memory import MemoryRepository
+from samurai_ai.storage.memory import MemoryRepository, MemorySearchRepository
 from samurai_ai.storage.models import CustomModelRepository, ModelEndpointRepository
 from samurai_ai.storage.operations import OperationRepository
 from samurai_ai.storage.planning import PlanningRepository
