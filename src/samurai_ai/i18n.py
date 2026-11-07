@@ -182,6 +182,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.action.op-previous": "Previous operation",
         "keys.action.op-close": "Close this operation tab",
         "keys.action.follow": "Follow the journal tail",
+        "keys.action.search": "Search the journal",
+        "keys.action.search-next": "Next match",
+        "keys.action.search-prev": "Previous match",
         "help.keys": "/keys             Rebind the global keys",
         "theme.title": "Theme",
         "theme.hint": "Enter applies · Esc closes",
@@ -415,6 +418,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.retry-hint": "the last question never reached an answer — Ctrl+R resends it as-is",
         "journal.follow-on": "follow the tail: on",
         "journal.follow-off": "follow the tail: off (you read up)",
+        "journal.search-none": "no matches for {term}",
+        "journal.search-hit": "match {index}/{total}",
         "chat.promise-nudge": "[nudge] it promised an action instead of making the call",
         "chat.promise-note": (
             "You described an action instead of performing it. Do it now: "
@@ -810,6 +815,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.action.op-previous": "Предыдущая операция",
         "keys.action.op-close": "Закрыть вкладку операции",
         "keys.action.follow": "Следовать за хвостом журнала",
+        "keys.action.search": "Поиск по журналу",
+        "keys.action.search-next": "Следующее совпадение",
+        "keys.action.search-prev": "Предыдущее совпадение",
         "help.keys": "/keys             Перебиндить глобальные клавиши",
         "theme.title": "Тема",
         "theme.hint": "Enter применяет · Esc закрывает",
@@ -1050,6 +1058,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.retry-hint": "последний вопрос не дошёл — Ctrl+R отправит его заново как есть",
         "journal.follow-on": "слежение за хвостом: вкл",
         "journal.follow-off": "слежение за хвостом: выкл (вы читаете назад)",
+        "journal.search-none": "совпадений для {term} нет",
+        "journal.search-hit": "совпадение {index}/{total}",
         "chat.promise-nudge": "[пинок] модель пообещала действие вместо вызова",
         "chat.promise-note": (
             "Ты описал действие вместо того, чтобы его выполнить. Сделай это сейчас: "
