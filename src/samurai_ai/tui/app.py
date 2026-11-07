@@ -616,6 +616,7 @@ class SamuraiApp(
             yield PlusButton("+", id="new-tab")
             yield Static(id="topbar-space")
             yield Static(id="brand")
+        yield Static(id="attack-map")
         yield Horizontal(id="operations-strip")
         yield Static(id="killchain")
         yield Static(id="welcome")
@@ -3325,6 +3326,26 @@ class SamuraiApp(
         return phase.replace("-", " ")
 
 
+    def _refresh_attack_map(self) -> None:
+        """The access graph, when there is more than one host to name."""
+        from samurai_ai.tui.killchain import access_rows, attack_map
+
+        panel = self.query_one("#attack-map", Static)
+        if self.operation is None:
+            panel.display = False
+            return
+        facts = [
+            str(node.payload.get("summary") or node.text())
+            for node in self.graph.for_operation(self.operation.id)
+            if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
+        ]
+        rows = access_rows(facts)
+        if len(rows) < 2:
+            panel.display = False
+            return
+        panel.display = True
+        panel.update("\n".join(attack_map(rows)))
+
     def _refresh_operations_strip(self) -> None:
         """One row of open operations; the current one is marked."""
         strip = self.query_one("#operations-strip", Horizontal)
@@ -3450,6 +3471,7 @@ class SamuraiApp(
 
     def _refresh_chrome(self) -> None:
         self._refresh_hint_bar()
+        self._refresh_attack_map()
         self._refresh_operations_strip()
         self._refresh_killchain()
         self._refresh_welcome()
