@@ -955,6 +955,43 @@ class SamuraiApp(
     def action_new_operation(self) -> None:
         self._show_new_operation()
 
+    def _show_resume(self) -> None:
+        """Pick an earlier operation and carry on where it stopped."""
+        from samurai_ai.tui.screens import PickerScreen
+
+        current = self.operation.id if self.operation else ""
+        operations = [op for op in self.service.list_all() if op.id != current]
+        picks = [
+            (op.id, f"{op.id}  {op.name}", f"{op.mode.value} · {op.status.value}")
+            for op in operations[:20]
+        ]
+        self.push_screen(
+            PickerScreen(self.translator, "resume.title", "resume.hint", "resume.empty", picks),
+            self._on_resume,
+        )
+
+    def _on_resume(self, operation_id: str | None) -> None:
+        if operation_id is None:
+            self.focus_command_input(force=True)
+            return
+        try:
+            operation = self.service.get(operation_id)
+        except OperationNotFoundError:
+            self._write_line("[error] " + self.translator.t("status.no-operation"))
+            return
+        self.operation = operation
+        self._auto_title = None
+        self._graph_used = False
+        self._chat_history.clear()
+        self._last_ai_text = None
+        self._last_ai_code = None
+        self.query_one("#journal", BlockJournal).clear()
+        self._write_welcome()
+        self._restore_chat()
+        self._write_dim(self.translator.t("resume.done", name=operation.name), process=False)
+        self._switch_view("journal")
+        self._refresh_chrome()
+
     def _show_new_operation(self) -> None:
         self.push_screen(NewOperationScreen(self.translator), self._on_new_operation)
 

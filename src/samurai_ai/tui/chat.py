@@ -1591,8 +1591,9 @@ class ChatController:
         if journal.expand_oldest() is None:
             self._write_dim(self.translator.t("chat.expand-empty"))
 
-    def _copy_last(self, what: str) -> None:
-        text = self._last_ai_code if what == "code" else self._last_ai_text
+    def _copy_last(self, what: str = "text") -> None:
+        """`/copy` takes the last answer; `/copy code` only its code block."""
+        text = self._last_ai_code if what.strip() == "code" else self._last_ai_text
         if not text:
             key = "copy.code-empty" if what == "code" else "copy.empty"
             self._write_dim(self.translator.t(key))
