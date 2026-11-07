@@ -596,6 +596,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             VmControlTool(),
             VmDiskTool(),
             ExploitAnalyzeTool(),
+            PatchDiffTool(),
             ExploitBuildTool(),
             ExploitRunTool(),
             *_manifest_tools(),
@@ -616,3 +617,45 @@ __all__ = [
     "ToolRegistry",
     "default_registry",
 ]
+
+
+class PatchDiffTool:
+    """Read a unified diff (plus an optional advisory) into a 1-day hypothesis."""
+
+    def __init__(self) -> None:
+        self._definition = ToolDefinition(
+            id="exploit.patch-diff",
+            version=1,
+            kind=ToolKind.LOCAL,
+            description=(
+                "Analyze a patch diff and an advisory into a vulnerability "
+                "hypothesis: changed files, touched functions, added guards."
+            ),
+            risk_class=RiskClass.R1,
+            read_only=True,
+            network=NetworkAccess.NONE,
+            timeout_seconds=30,
+            output_limit_bytes=16384,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "diff": {"type": "string", "minLength": 1, "maxLength": 200000},
+                    "advisory": {"type": "string", "maxLength": 20000},
+                },
+                "required": ["diff"],
+                "additionalProperties": False,
+            },
+            capabilities=("exploit", "analysis"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        from samurai_ai.analysis.patchdiff import analyze_patch, report
+
+        diff_text = str(params["diff"])
+        advisory = str(params.get("advisory", ""))
+        analysis = analyze_patch(diff_text, advisory)
+        return ToolOutput(stdout=report(analysis), stderr="", exit_code=0)
