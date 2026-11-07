@@ -1,6 +1,7 @@
 """Reusable widgets: selection-aware journal log, tabs, history input."""
 
 from rich.segment import Segment
+from rich.text import Text
 from textual import events
 from textual.binding import Binding
 from textual.events import Mount
@@ -69,6 +70,39 @@ class StripItem(Static):
         opener = getattr(self.app, "_strip_open", None)
         if opener is not None:
             opener(self.target)
+
+
+class OperationTab(Static):
+    """One open operation in the strip: click focuses it, right-click closes."""
+
+    def __init__(
+        self,
+        operation_id: str,
+        label: str,
+        *,
+        busy: bool = False,
+        current: bool = False,
+    ) -> None:
+        super().__init__()
+        self.operation_id = operation_id
+        self.busy = busy
+        self.current = current
+        self.update(self.render_label(label))
+
+    def render_label(self, label: str) -> Text:
+        mark = "●" if self.current else ("▶" if self.busy else "○")
+        text = Text(f" {mark} {label} ")
+        return text
+
+    def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
+        if getattr(event, "button", 1) == 3:
+            closer = getattr(self.app, "_close_operation_by_id", None)
+            if closer is not None:
+                closer(self.operation_id)
+            return
+        opener = getattr(self.app, "_open_operation", None)
+        if opener is not None:
+            opener(self.operation_id)
 
 
 class PlusButton(Static):
