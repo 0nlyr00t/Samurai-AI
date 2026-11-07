@@ -635,9 +635,18 @@ class DockerSandboxRunner:
                 "docker is not available; sandbox.exec requires a running Docker daemon"
             )
         if not await self.image_present(profile.image):
+            hint = ""
+            if "ghcr.io/" in profile.image:
+                # the belt images are still private: an anonymous pull is denied,
+                # and "not present locally" alone sends the operator round in circles
+                hint = (
+                    " — the GHCR belt packages are private, so run "
+                    "`docker login ghcr.io` once with a token that has read:packages"
+                )
             raise SandboxError(
                 f"sandbox image is not present locally: {profile.image}; "
                 "pull it manually as a trusted operator action (auto-pull is disabled)"
+                + hint
             )
         return notice
 
