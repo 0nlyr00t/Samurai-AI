@@ -133,6 +133,7 @@ from samurai_ai.tui.theme import (
 from samurai_ai.tui.themes import ThemeController
 from samurai_ai.tui.widgets import (
     HistoryInput,
+    OperationTab,
     PlusButton,
     ViewTabs,
 )
@@ -405,6 +406,9 @@ class SamuraiApp(
         self._last_ai_text: str | None = None
         self._last_ai_code: str | None = None
         self._last_user_text: str = ""
+        self._open_tabs: list[str] = []
+        self._tab_states: dict[str, dict[str, Any]] = {}
+        self._proposed_plan: tuple[str, list[str]] | None = None
         self._ctx_tokens: int = 0
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
@@ -600,6 +604,7 @@ class SamuraiApp(
             yield PlusButton("+", id="new-tab")
             yield Static(id="topbar-space")
             yield Static(id="brand")
+        yield Horizontal(id="operations-strip")
         yield Static(id="killchain")
         yield Static(id="welcome")
         with Horizontal(id="body"):
@@ -943,6 +948,38 @@ class SamuraiApp(
             return
         self._switch_view(pane)
 
+
+    def _store_tab_state(self) -> None:
+        """Remember the visible operation's view state before switching."""
+        if self.operation is None:
+            return
+        self._tab_states[self.operation.id] = {
+            "auto_title": self._auto_title,
+            "chat_history": list(self._chat_history),
+            "last_ai_text": self._last_ai_text,
+            "last_ai_code": self._last_ai_code,
+            "last_user_text": self._last_user_text,
+            "turn_todo": list(self._turn_todo),
+            "proposed_plan": self._proposed_plan,
+            "killchain_phase": self._killchain_phase,
+        }
+
+    def _restore_tab_state(self) -> None:
+        if self.operation is None:
+            return
+        state = self._tab_states.get(self.operation.id)
+        if state is None:
+            return
+        self._auto_title = state["auto_title"]
+        self._chat_history = state["chat_history"]
+        self._last_ai_text = state["last_ai_text"]
+        self._last_ai_code = state["last_ai_code"]
+        self._last_user_text = state["last_user_text"]
+        self._turn_todo = state["turn_todo"]
+        self._proposed_plan = state["proposed_plan"]
+        self._killchain_phase = state["killchain_phase"]
+        self._restore_chat()
+
     def _switch_view(self, pane: str) -> None:
         tab = self._TAB_BY_VIEW.get(pane)
         if tab is not None and self.query_one("#view-tabs", Tabs).active != tab:
@@ -991,6 +1028,72 @@ class SamuraiApp(
             return
         self._proposed_plan = None
         self._write_dim(self.translator.t("plan.discarded"))
+        self._refresh_chrome()
+
+
+    def action_op_next(self) -> None:
+        self._cycle_operation(1)
+
+    def action_op_previous(self) -> None:
+        self._cycle_operation(-1)
+
+    def _cycle_operation(self, step: int) -> None:
+        if len(self._open_tabs) < 2:
+            return
+        current = self.operation.id if self.operation else ""
+        index = self._open_tabs.index(current) if current in self._open_tabs else 0
+        self._open_operation(self._open_tabs[(index + step) % len(self._open_tabs)])
+
+    def _open_operation(self, operation_id: str) -> None:
+        """Switch the visible tab to an open operation without losing state."""
+        if self.operation is not None and self.operation.id == operation_id:
+            return
+        try:
+            operation = self.service.get(operation_id)
+        except OperationNotFoundError:
+            self._open_tabs = [op for op in self._open_tabs if op != operation_id]
+            self._refresh_operations_strip()
+            return
+        self._store_tab_state()
+        self.operation = operation
+        self._auto_title = None
+        self._graph_used = False
+        self._last_ai_text = None
+        self._last_ai_code = None
+        self._last_user_text = ""
+        self._turn_todo = []
+        self._killchain_phase = ""
+        self._chat_history.clear()
+        self.query_one("#journal", BlockJournal).clear()
+        self._write_welcome()
+        self._restore_chat()
+        self._restore_tab_state()
+        self._write_dim(self.translator.t("resume.done", name=operation.name), process=False)
+        self._switch_view("journal")
+        self._refresh_chrome()
+
+    def _close_operation(self) -> None:
+        """Close the current tab; the operation itself stays in the store."""
+        if self.operation is None:
+            return
+        self._store_tab_state()
+        closed = self.operation.id
+        self._open_tabs = [op for op in self._open_tabs if op != closed]
+        if self._open_tabs:
+            self._open_operation(self._open_tabs[-1])
+            return
+        self.operation = None
+        self._auto_title = None
+        self._graph_used = False
+        self._chat_history.clear()
+        self._last_ai_text = None
+        self._last_ai_code = None
+        self._last_user_text = ""
+        self._turn_todo = []
+        self._killchain_phase = ""
+        self.query_one("#journal", BlockJournal).clear()
+        self._write_welcome()
+        self._switch_view("journal")
         self._refresh_chrome()
 
     def _show_resume(self) -> None:
@@ -3123,6 +3226,46 @@ class SamuraiApp(
         """Stage names stay English in every locale — they are terms of art."""
         return phase.replace("-", " ")
 
+
+    def _refresh_operations_strip(self) -> None:
+        """One row of open operations; the current one is marked."""
+        strip = self.query_one("#operations-strip", Horizontal)
+        if not self._open_tabs:
+            strip.display = False
+            return
+        strip.display = True
+        strip.remove_children()
+        current_id = self.operation.id if self.operation else ""
+        for op_id in self._open_tabs:
+            try:
+                operation = self.service.get(op_id)
+            except OperationNotFoundError:
+                continue
+            label = operation.name or op_id
+            busy = op_id != current_id and any(
+                run.status is AgentRunStatus.RUNNING
+                for run in self.agents.list_runs(op_id)
+            )
+            tab = OperationTab(
+                op_id,
+                label,
+                busy=busy,
+                current=op_id == current_id,
+            )
+            tab.add_class("operation-tab")
+            if op_id == current_id:
+                tab.add_class("operation-tab-current")
+            strip.mount(tab)
+
+    def _close_operation_by_id(self, operation_id: str) -> None:
+        """Right-click on the strip closes that tab; the operation stays."""
+        if self.operation is not None and self.operation.id == operation_id:
+            self._close_operation()
+            return
+        self._open_tabs = [op for op in self._open_tabs if op != operation_id]
+        self._tab_states.pop(operation_id, None)
+        self._refresh_operations_strip()
+
     def _refresh_killchain(self) -> None:
         widget = self.query_one("#killchain", Static)
         chain = self._killchain()
@@ -3197,6 +3340,7 @@ class SamuraiApp(
         self._refresh_chrome()
 
     def _refresh_chrome(self) -> None:
+        self._refresh_operations_strip()
         self._refresh_killchain()
         self._refresh_welcome()
         self.query_one("#brand", Static).update(self._brand_text())
