@@ -5950,3 +5950,55 @@ def test_task_board_saves_a_trace_from_the_icon(tmp_path: Path) -> None:
             await pilot.press("escape")
 
     asyncio.run(exercise())
+
+
+def test_the_stage_rail_follows_the_plan_and_names_the_mode_counter(tmp_path: Path) -> None:
+    """The rail is drawn from the plan's gates; a gate move is announced."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Rail lab", OperationMode.RED_TEAM, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="t-1", title="Recon", risk_class=RiskClass.R1)],
+        [
+            StageGate(id="access", name="Access", required_artifacts=("recon-notes",)),
+            StageGate(id="impact", name="Impact", required_artifacts=("impact-proof",)),
+        ],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            rail = app.query_one("#killchain", Static)
+            assert rail.display, "a plan with gates must show the rail"
+            text = str(rail.render())
+            assert "access" in text and "gates 0/2" in text
+            # a different stage than the remembered one is announced in the journal
+            app._killchain_phase = "impact"
+            app._refresh_killchain()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "stage moved" in journal and "impact" in journal
+
+    asyncio.run(exercise())
+
+
+def test_a_plain_operation_without_gates_falls_back_to_its_mode_chain(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Mode rail", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            text = str(app.query_one("#killchain", Static).render())
+            assert "recon" in text and "verified" in text
+
+    asyncio.run(exercise())
