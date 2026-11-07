@@ -6221,3 +6221,26 @@ def test_a_plan_proposal_is_visible_and_apply_creates_the_plan(tmp_path: Path) -
             await pilot.press("escape")
 
     asyncio.run(exercise())
+
+
+def test_the_status_bar_shows_spend_once_a_model_has_a_price(tmp_path: Path) -> None:
+    """A priced model's cost belongs in the bar; a free one adds nothing."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Cost lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    settings = stack[2]
+    settings.set_value("model.default", "openai/gpt-4o@v1")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert "$" not in str(app.query_one("#status-bar", Static).render())
+            app._add_cost("openai/gpt-4o@v1", 1_000_000, 0)
+            app._refresh_chrome()
+            await pilot.pause()
+            assert "$2.5000" in str(app.query_one("#status-bar", Static).render())
+
+    asyncio.run(exercise())
