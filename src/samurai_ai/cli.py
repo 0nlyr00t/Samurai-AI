@@ -118,7 +118,7 @@ from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.access import AccessRepository
 from samurai_ai.storage.access_policy import OperationPolicyRepository
-from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.agents import AgentRunRepository, RunCheckpointRepository
 from samurai_ai.storage.ctf import CtfConflictError, CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
@@ -911,6 +911,7 @@ def _make_services(
         execution,
         operations,
         AgentRunRepository(database),
+        checkpoints=RunCheckpointRepository(database),
         memory=memory_service,
         skills=skill_service,
         genes=GeneService(GeneStore(genes_path())),
