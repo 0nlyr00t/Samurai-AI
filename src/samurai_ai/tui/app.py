@@ -956,6 +956,41 @@ class SamuraiApp(
     def action_new_operation(self) -> None:
         self._show_new_operation()
 
+    def _apply_proposed_plan(self) -> None:
+        """Turn the model's proposal into the operation's plan and approve it."""
+        from samurai_ai.domain.kernel import PlanTask, RiskClass
+
+        if self.operation is None:
+            self._write_line("[error] " + self.translator.t("status.no-operation"))
+            return
+        proposal = getattr(self, "_proposed_plan", None)
+        if not proposal:
+            self._write_dim(self.translator.t("plan.no-proposal"))
+            return
+        title, titles = proposal
+        tasks = [
+            PlanTask(id=f"t{index}", title=text, risk_class=RiskClass.R1)
+            for index, text in enumerate(titles, start=1)
+        ]
+        current = self.kernel.get_current_plan(self.operation.id)
+        if current is None:
+            self.kernel.create_plan(self.operation.id, title, tasks, [])
+        else:
+            self.kernel.revise_plan(self.operation.id, title, tasks, current.gates)
+        self.kernel.approve_plan(self.operation.id)
+        self._proposed_plan = None
+        self._write_dim(self.translator.t("plan.applied", title=title, count=len(tasks)))
+        self._refresh_chrome()
+        self._show_task_board()
+
+    def _discard_proposed_plan(self) -> None:
+        if not getattr(self, "_proposed_plan", None):
+            self._write_dim(self.translator.t("plan.no-proposal"))
+            return
+        self._proposed_plan = None
+        self._write_dim(self.translator.t("plan.discarded"))
+        self._refresh_chrome()
+
     def _show_resume(self) -> None:
         """Pick an earlier operation and carry on where it stopped."""
         from samurai_ai.tui.screens import PickerScreen
