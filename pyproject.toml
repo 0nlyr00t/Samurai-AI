@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "samurai-ai"
-version = "0.5.2"
+version = "0.5.3"
 description = "A governed TUI harness for authorized security operations"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
