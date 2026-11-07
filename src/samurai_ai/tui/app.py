@@ -665,7 +665,7 @@ class SamuraiApp(
         # costs one render of a hidden pane at most
         self.set_interval(HUNT_REFRESH_SECONDS, self.refresh_hunt)
         self.set_interval(1.0, self._status_tick)
-        self.query_one("#command-input", Input).focus()
+        self.focus_command_input(force=True)
         self._maybe_prompt_trust()
 
     def _retitle_tabs(self) -> None:
@@ -751,6 +751,20 @@ class SamuraiApp(
                 value = self._history_draft
         command_input.value = value
         command_input.cursor_position = len(value)
+
+    def focus_command_input(self, *, force: bool = False) -> None:
+        """Return focus to the command input unless the operator is busy.
+
+        A turn finishing or a background refresh must not take focus away while
+        the operator drags a selection or scrolls a list — that is the bug half
+        the terminal agents get filed for. Explicit actions pass ``force``.
+        """
+        if not force:
+            if self.screen.selections:
+                return
+            if isinstance(self.focused, (OptionList, Tabs)):
+                return
+        self.query_one("#command-input", Input).focus()
 
     def _on_screen_selections(self) -> None:
         """Selection changes during the drag; copy once it settles."""
@@ -891,7 +905,7 @@ class SamuraiApp(
     def action_toggle_journal(self) -> None:
         views = self.query_one("#views", ContentSwitcher)
         views.display = not views.display
-        self.query_one("#command-input", Input).focus()
+        self.focus_command_input(force=True)
 
     def copy_to_clipboard(self, text: str) -> None:
         super().copy_to_clipboard(text)
@@ -933,7 +947,7 @@ class SamuraiApp(
         self.query_one("#views", ContentSwitcher).current = pane
         if pane != "journal":
             self._render_view(pane)
-        self.query_one("#command-input", Input).focus()
+        self.focus_command_input(force=True)
 
     def _cmd_new_operation(self) -> None:
         self._show_new_operation()
@@ -946,7 +960,7 @@ class SamuraiApp(
 
     def _on_new_operation(self, choice: tuple[str, str, str] | None) -> None:
         if choice is None:
-            self.query_one("#command-input", Input).focus()
+            self.focus_command_input(force=True)
             return
         name, mode, scope = choice
         includes = tuple(rule.strip() for rule in scope.split(",") if rule.strip()) or (
@@ -1450,7 +1464,7 @@ class SamuraiApp(
             self._dir_trusted = False
             self._write_line("[deny] " + self.translator.t("trust.denied", path=cwd))
         self._refresh_chrome()
-        self.query_one("#command-input", Input).focus()
+        self.focus_command_input(force=True)
 
     def _toggle_yolo(self) -> None:
         target = (

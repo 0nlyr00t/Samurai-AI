@@ -781,7 +781,11 @@ class ChatController:
             self._shell_background = False
             self._thinking_stop()
             self._refresh_chrome()
-            self.query_one("#command-input", Input).focus()
+            focus = getattr(self, "focus_command_input", None)
+            if focus is not None:
+                focus()
+            else:  # pragma: no cover - the mixin may be used standalone
+                self.query_one("#command-input", Input).focus()
 
     def request_stop(self) -> None:
         """Stop once the results are in and the hypotheses have been checked.
