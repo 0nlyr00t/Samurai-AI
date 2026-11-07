@@ -6536,3 +6536,28 @@ def test_follow_mode_pauses_autoscroll_while_reading_up(tmp_path: Path) -> None:
             assert journal.follow
 
     asyncio.run(exercise())
+
+
+def test_the_side_panel_lists_running_swarm_members(tmp_path: Path) -> None:
+    """The swarm panel shows every running member with its current tool."""
+    from samurai_ai.domain.agents import AgentRun, AgentRunStatus
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Swarm lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    run = AgentRun(
+        operation_id=operation.id, task_id="recon", instruction="scan",
+        specialization="recon", depth=0, status=AgentRunStatus.RUNNING,
+    )
+    stack[7].runs.add(run)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            panel = str(app.query_one("#side-swarm", Static).render())
+            assert "recon" in panel
+
+    asyncio.run(exercise())
