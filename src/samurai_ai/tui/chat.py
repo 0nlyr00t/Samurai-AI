@@ -1099,6 +1099,26 @@ class ChatController:
             return self._CHAT_MAX_TOOL_ROUNDS
         return min(max(value, self._TOOL_ROUNDS_MIN), self._TOOL_ROUNDS_MAX)
 
+    def _normalize_prlctl(self, command: str) -> str:
+        """`prlctl exec <uuid> <cmd>` typed by hand loses its quoting on the
+        far side; rebuild it through the relay helper so it arrives intact."""
+        from samurai_ai.execution.relay import relay_command
+
+        try:
+            tokens = __import__("shlex").split(command)
+        except ValueError:
+            return command
+        if len(tokens) < 3 or tokens[0] != "prlctl" or tokens[1] != "exec":
+            return command
+        # prlctl exec <uuid> <tail...>: hand the whole tail to bash -lc
+        tail = tokens[2:]
+        if tail and tail[0] == "--":
+            tail = tail[1:]
+        if not tail:
+            return command
+        relay = f"prlctl exec {tokens[2]}"
+        return relay_command(relay, tail[0], tail[1:])
+
     def _chat_tool_read_only(self, name: str) -> bool:
         tool_id = self._CHAT_TOOL_IDS.get(name)
         return tool_id is not None and self._tool_is_read_only(tool_id)
@@ -1580,6 +1600,10 @@ class ChatController:
     async def _run_shell_tool(self, call: ToolCall) -> Message:
         tool_id = self._CHAT_TOOL_IDS.get(call.name)
         command = str(call.arguments.get("command", "")).strip()
+        # The model still writes `prlctl exec <uuid> -- bash -c '...'` by hand
+        # and loses to the re-split; rebuild the tail like the relay does.
+        if tool_id == "shell.exec":
+            command = self._normalize_prlctl(command)
         if tool_id is None or not command:
             return Message(
                 role="user",
