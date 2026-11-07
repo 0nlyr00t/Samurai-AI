@@ -259,6 +259,13 @@ class ChatController:
                         "type": "string",
                         "enum": ["general", "recon", "testing", "analysis"],
                     },
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "Plan task id this subagent works on; "
+                            "omit to guess from the instruction"
+                        ),
+                    },
                 },
                 "required": ["instruction"],
                 "additionalProperties": False,
@@ -1198,7 +1205,10 @@ class ChatController:
             specialization = AgentSpecialization(raw)
         except ValueError:
             specialization = AgentSpecialization.GENERAL
-        run_id = await self.spawn_subagent(instruction, specialization=specialization)
+        task = str(call.arguments.get("task", "") or "").strip() or None
+        run_id = await self.spawn_subagent(
+            instruction, specialization=specialization, task_id=task
+        )
         if run_id is None:
             return Message(
                 role="user",
