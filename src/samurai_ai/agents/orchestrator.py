@@ -76,7 +76,7 @@ from samurai_ai.services.questions import (
     OperatorQuestionService,
 )
 from samurai_ai.services.skills import SkillService
-from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.agents import AgentRunRepository, RunCheckpointRepository
 
 _T = TypeVar("_T")
 
@@ -248,6 +248,7 @@ class AgentOrchestrator:
         execution: ToolExecutionService,
         operations: OperationService,
         runs: AgentRunRepository,
+        checkpoints: RunCheckpointRepository | None = None,
         redactor: SecretRedactor | None = None,
         memory: CampaignMemoryService | None = None,
         skills: SkillService | None = None,
@@ -260,6 +261,7 @@ class AgentOrchestrator:
         self.execution = execution
         self.operations = operations
         self.runs = runs
+        self.checkpoints = checkpoints
         self.redactor = redactor or SecretRedactor()
         self.memory = memory
         self.skills = skills
@@ -425,6 +427,44 @@ class AgentOrchestrator:
             )
         return self.get_run(run.id)
 
+    def resume(self, run_id: str) -> AgentRun | None:
+        """Pick an interrupted run up from its last checkpoint.
+
+        The same steps list, the index the run died on; the model sees the
+        blackboard as it is now, so a warm restart can still choose a different
+        branch — that is the point.
+        """
+        run = self.get_run(run_id)
+        if run.status is not AgentRunStatus.RUNNING:
+            return None
+        checkpoint = self.checkpoints.get(run_id) if self.checkpoints else None
+        if checkpoint is None:
+            return None
+        steps, next_index = checkpoint
+        if next_index >= len(steps):
+            return None
+        # resume does not re-plan: the stored steps, cut at the checkpoint
+        leftover = steps[next_index:]
+        extra_context, _, _ = self._resolve_context(run.workspace, list(run.skills))
+        self._execute_steps(
+            run.operation_id,
+            run,
+            leftover,
+            None,
+            extra_context,
+        )
+        if run.status is AgentRunStatus.RUNNING:
+            run.finish(AgentRunStatus.COMPLETED)
+            self.runs.finish(run)
+            self._append(
+                run.operation_id,
+                "agent.run.finish",
+                {"run_id": run.id, "status": run.status.value, "steps": len(steps)},
+            )
+        if self.checkpoints is not None:
+            self.checkpoints.drop(run.id)
+        return self.get_run(run.id)
+
     def _resolve_context(
         self, workspace: str | None, skill_names: Sequence[str]
     ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -536,6 +576,9 @@ class AgentOrchestrator:
                 run, deadline_at
             ):
                 return
+            if self.checkpoints is not None:
+                # the point the run resumes from if it dies on this step
+                self.checkpoints.save(run.id, operation_id, run.task_id, steps, index)
             if repeat_notes:
                 extra_context = _repeat_block(repeat_notes) + extra_context
             commands = self._execute_step_prompt(
