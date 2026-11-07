@@ -187,11 +187,13 @@ class ProcessManager:
             truncated=entry.truncated,
             stalled=entry.stalled,
         )
-        if timed_out or (result.exit_code not in (0, None)):
+        # The breaker guards the *process host*, not the exit code: `grep` with
+        # no match or `test -f` on a missing file are ordinary 1s, and three of
+        # them in a row used to freeze every later run for the cooldown.
+        if timed_out or result.stalled:
             self._record_failure()
-        elif result.exit_code == 0:
-            self._consecutive_failures = 0
-            self._breaker_opened_at = None
+        else:
+            self._clear_failures()
         return result
 
     async def cancel(self, handle_id: str) -> ProcessResult:
@@ -317,6 +319,10 @@ class ProcessManager:
             except (ProcessLookupError, PermissionError):
                 pass
             await process.wait()
+
+    def _clear_failures(self) -> None:
+        self._consecutive_failures = 0
+        self._breaker_opened_at = None
 
     def _record_failure(self) -> None:
         self._consecutive_failures += 1
