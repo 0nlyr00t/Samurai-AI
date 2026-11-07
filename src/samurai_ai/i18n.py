@@ -390,6 +390,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.tool-denied": "denied by operator: {command}",
         "chat.tool-limit": "tool round limit reached — settling what is already known",
+        "chat.ended-rounds": (
+            "— turn ended: the round budget is spent; ask it to continue "
+            "(raise the ceiling in /settings) —"
+        ),
+        "chat.ended-model-error": "— turn ended: the model errored —",
         "chat.settle-prompt": (
             "[wrap-up] rounds are spent. Record what this turn established with "
             "record_fact (and close_intent), and say nothing else yet; a closing "
@@ -969,6 +974,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
         "chat.tool-limit": "лимит раундов команд — подвожу итог без инструментов",
+        "chat.ended-rounds": (
+            "— ход завершён: бюджет раундов исчерпан, скажи «продолжай» "
+            "(потолок — в /settings) —"
+        ),
+        "chat.ended-model-error": "— ход завершён: ошибка модели —",
         "chat.tool-exit": "код выхода {code}",
         "inspect.unknown": "{kind} {ref} уже нет — показать нечего",
         "inspect.more": "Enter — подробнее",

@@ -92,7 +92,7 @@ from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
 from samurai_ai.tui.hunt import REFRESH_SECONDS as HUNT_REFRESH_SECONDS
-from samurai_ai.tui.hunt import HuntController, tally
+from samurai_ai.tui.hunt import HuntController
 from samurai_ai.tui.journal import (
     BlockJournal,
     InspectSummaryBlock,
@@ -733,7 +733,17 @@ class SamuraiApp(
         command_input.cursor_position = len(value)
 
     def _selected_text(self) -> str | None:
-        """What is selected in the active screen, if anything."""
+        """What is selected, the focused input's selection included.
+
+        Text selected inside the command input is not a screen selection, so
+        without this Ctrl+C there armed the quit instead of copying.
+        """
+        focused = self.focused
+        if isinstance(focused, Input):
+            selection = getattr(focused, "selection", None)
+            if selection is not None and selection.start != selection.end:
+                start, end = sorted((selection.start, selection.end))
+                return focused.value[start:end]
         screen = self.screen
         getter = getattr(screen, "get_selected_text", None)
         text = getter() if callable(getter) else None
@@ -2963,12 +2973,10 @@ class SamuraiApp(
             self._refresh_chrome()
 
     def _refresh_hunt_tab(self) -> None:
-        """The progress tab only exists when the plan has searches to report."""
+        """The progress tab exists for every operation: findings and hypotheses
+        live there even when no brute-force/fuzz task is in the plan."""
         tab = self.query_one("#tab-hunt", Tab)
-        relevant = bool(tally(self._hunt_tasks())) if self.operation else False
-        tab.display = relevant
-        if not relevant and self.query_one("#views", ContentSwitcher).current == "view-hunt":
-            self._switch_view("journal")
+        tab.display = self.operation is not None
 
     def _refresh_goal_strip(self, item: Static) -> None:
         goal = self._current_goal()

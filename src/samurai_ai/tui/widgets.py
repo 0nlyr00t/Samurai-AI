@@ -58,6 +58,19 @@ class SelectableRichLog(RichLog, can_focus=False):
         return strip
 
 
+class StripItem(Static):
+    """A status-strip cell that opens what it summarises on click."""
+
+    def __init__(self, target: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.target = target
+
+    def on_click(self) -> None:
+        opener = getattr(self.app, "_strip_open", None)
+        if opener is not None:
+            opener(self.target)
+
+
 class PlusButton(Static):
     """Clickable '+' in the topbar — opens the new-operation dialog."""
 

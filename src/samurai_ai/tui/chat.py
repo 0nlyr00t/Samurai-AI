@@ -503,6 +503,11 @@ class ChatController:
 
     def _end_turn(self, reason: TerminalReason) -> None:
         self._last_turn_reason = reason
+        if reason in (TerminalReason.ROUNDS, TerminalReason.MODEL_ERROR):
+            # without a visible note the end of a turn reads as a freeze
+            self._write_dim(
+                self.translator.t(f"chat.ended-{reason.value}"), process=False
+            )
         if self.operation is None:
             return
         self.service.repository.append_event(

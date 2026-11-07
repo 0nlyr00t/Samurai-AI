@@ -5497,7 +5497,8 @@ def test_a_new_finding_reaches_the_tab_without_a_refresh_beat(tmp_path: Path) ->
     asyncio.run(exercise())
 
 
-def test_the_tab_hides_when_the_plan_has_no_searches(tmp_path: Path) -> None:
+def test_the_progress_tab_stays_for_findings_without_searches(tmp_path: Path) -> None:
+    """No hunt tasks no longer hides the tab: findings and hypotheses live there."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     operation = stack[0].create(
@@ -5514,7 +5515,7 @@ def test_the_tab_hides_when_the_plan_has_no_searches(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            assert not app.query_one("#tab-hunt").display
+            assert app.query_one("#tab-hunt").display
             await pilot.press("escape")
 
     asyncio.run(exercise())
@@ -5753,5 +5754,60 @@ def test_the_hunt_tab_lists_hypotheses(tmp_path: Path) -> None:
             # the exhausted hypothesis shows its mark; the reason is kept only
             # for blocked/deleted by the graph store
             assert "✗" in text
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_c_copies_the_inputs_own_selection(tmp_path: Path) -> None:
+    """Text selected inside the command input copies instead of arming quit."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            field = app.query_one("#command-input", Input)
+            field.value = "echo copy-me"
+            field.selection = (5, 12)  # "copy-me"
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+            assert getattr(app, "_clipboard", "") == "copy-me"
+            assert app.is_running, "copying from the input must not quit"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+            await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_a_turn_that_ends_on_the_round_limit_says_so_visibly(tmp_path: Path) -> None:
+    """A silent end reads as a freeze; the reason belongs in the journal."""
+    provider = _EndlessToolProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("tui.yolo", "1")
+    settings.set_value("tui.max_tool_rounds", "4")
+    vault = stack[5]
+    models = stack[-1]
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Loop lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "keep running true"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            text = app.query_one("#journal", BlockJournal).text()
+            assert "turn ended" in text and "round budget" in text
 
     asyncio.run(exercise())
