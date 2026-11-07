@@ -156,6 +156,7 @@ class ChatController:
         _DIM_STYLE: str
         _last_ai_text: str | None
         _turn_todo: list[tuple[str, str]]
+        _proposed_plan: tuple[str, list[str]] | None
         _last_ai_code: str | None
         _thinking_timer: Any
         _thinking_depth: int
@@ -421,6 +422,29 @@ class ChatController:
                 "additionalProperties": False,
             },
         ),
+        ToolSpec(
+            name="propose_plan",
+            description=(
+                "Propose the plan instead of running it. Allowed in plan mode. The "
+                "operator sees the proposal and accepts or drops it; nothing runs "
+                "until then."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "tasks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 12,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                    },
+                    "notes": {"type": "string", "maxLength": 600},
+                },
+                "required": ["title", "tasks"],
+                "additionalProperties": False,
+            },
+        ),
     )
     #: Chat tool name → registry tool id, for the ones that are real adapters.
     _CHAT_TOOL_IDS = {"shell_exec": "shell.exec"}
@@ -436,6 +460,7 @@ class ChatController:
         "propose_finding": "_run_propose_finding_tool",
         "record_traffic": "_run_record_traffic_tool",
         "update_todo": "_run_update_todo_tool",
+        "propose_plan": "_run_propose_plan_tool",
     }
 
     #: Braille spinner, the way quiet harnesses show work in progress.
@@ -1197,6 +1222,36 @@ class ChatController:
             return Message(role="user", content=f"[tool close_intent] {exc}")
         self._write_dim(self.translator.t("graph.intent-closed", intent=intent.id, state=outcome))
         return Message(role="user", content=f"[tool close_intent] {intent.id} is {outcome}")
+
+
+    async def _run_propose_plan_tool(self, call: ToolCall) -> Message:
+        """Show the proposal; the operator decides whether it becomes the plan."""
+        title = str(call.arguments.get("title", "")).strip()
+        raw_tasks = call.arguments.get("tasks")
+        if not title or not isinstance(raw_tasks, list):
+            return Message(
+                role="user", content="[tool propose_plan] title and tasks are required"
+            )
+        tasks = [str(item).strip() for item in raw_tasks if str(item).strip()][:12]
+        if not tasks:
+            return Message(role="user", content="[tool propose_plan] no tasks given")
+        self._proposed_plan = (title, tasks)
+        block = Text()
+        block.append("≡ " + title, style=self.paint("bold $accent"))
+        for index, task in enumerate(tasks, start=1):
+            block.append(f"\n  {index}. {task}", style=self.paint("$text"))
+        notes = str(call.arguments.get("notes", "") or "").strip()
+        if notes:
+            block.append("\n" + notes, style=self.paint("dim"))
+        block.append("\n" + self.translator.t("plan.proposal-hint"), style=self.paint("success"))
+        self.query_one("#journal").write(block)
+        refresh = getattr(self, "_refresh_ops_strip", None)
+        if refresh is not None:
+            refresh()
+        return Message(
+            role="user",
+            content=f"[tool propose_plan] shown to the operator: {len(tasks)} tasks",
+        )
 
     async def _run_update_todo_tool(self, call: ToolCall) -> Message:
         """The model owns this checklist; the operator only reads it."""
