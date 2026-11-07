@@ -166,19 +166,39 @@ class AccessRow:
 
 
 def access_rows(facts: Iterable[str]) -> list[AccessRow]:
-    """Hosts named by confirmed facts, with the strongest level each reached."""
+    """Hosts named by confirmed facts, with the strongest level each reached.
+
+    A fact naming two hosts gets classified per host: the level markers count
+    only in the fragment about that host (up to the next host name), so
+    "root on A; shell on B" does not paint both as root.
+    """
     found: dict[str, AccessRow] = {}
     order = {"read": 0, "user": 1, "root": 2}
     for text in facts:
-        hosts = _HOST_RE.findall(text)
-        if not hosts:
+        matches = list(_HOST_RE.finditer(text))
+        if not matches:
             continue
-        lowered = text.lower()
-        level = next(
-            (name for name, markers in _LEVEL_RE if any(m in lowered for m in markers)), "read"
-        )
-        for host in hosts:
+        for index, match in enumerate(matches):
+            host = match.group(0)
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            fragment = text[max(0, match.start() - 24):end].lower()
+            level = next(
+                (name for name, markers in _LEVEL_RE
+                 if any(m in fragment for m in markers)),
+                "read",
+            )
             previous = found.get(host)
             if previous is None or order[level] > order[previous.level]:
                 found[host] = AccessRow(host, level, text[:80])
     return list(found.values())
+
+
+def attack_map(rows: Iterable[AccessRow]) -> list[str]:
+    """An ASCII map of the access graph: host → level → finding → pivot."""
+    lines: list[str] = []
+    for row in rows:
+        icon = {"root": "☠", "user": "●", "read": "○"}.get(row.level, "○")
+        lines.append(f"{icon} {row.host}")
+        if row.note:
+            lines.append(f"   └─ {row.level} · {row.note}")
+    return lines

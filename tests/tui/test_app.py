@@ -6680,3 +6680,38 @@ def test_the_status_bar_shows_a_context_gauge(tmp_path: Path) -> None:
             assert "50k/128k" in bar
 
     asyncio.run(exercise())
+
+
+def test_the_attack_map_shows_once_two_hosts_have_access(tmp_path: Path) -> None:
+    """Two hosts in confirmed facts → the map appears with levels."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Map lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            assert not app.query_one("#attack-map", Static).display
+            from samurai_ai.domain.graph import NodeKind, NodeState
+            from samurai_ai.domain.operations import OperationEvent
+
+            graph = app.graph
+            origin = graph.origin(operation.id, "t-1", "origin")
+            intent = graph.open_intent(operation.id, "t-1", "find a shell", origin.id)
+            graph.start_intent(intent.id)
+            graph.record_fact(
+                intent.id,
+                "root on 10.0.0.5 via suid; shell as www-data on 10.0.0.9",
+                artifact_ids=(),
+            )
+            app._refresh_attack_map()
+            await pilot.pause()
+            panel = app.query_one("#attack-map", Static)
+            assert panel.display
+            text = str(panel.render())
+            assert "☠ 10.0.0.5" in text and "● 10.0.0.9" in text
+
+    asyncio.run(exercise())
