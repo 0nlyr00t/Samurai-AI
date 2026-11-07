@@ -6318,3 +6318,23 @@ def test_a_failed_turn_retries_the_call_and_then_offers_a_resend(tmp_path: Path)
         asyncio.run(exercise())
     finally:
         ChatController._MODEL_RETRY_DELAY = original
+
+
+def test_the_system_prompt_names_the_relay_when_one_is_set(tmp_path: Path) -> None:
+    """A relayed operation must tell the model the relay, not let it guess."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Relayed", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[0].set_relay(operation.id, "prlctl exec {1381d6d4-31a6-4aee-ab87-4193b12e98ae}")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            prompt = app._chat_system_prompt()
+            assert "prlctl exec {1381d6d4-31a6-4aee-ab87-4193b12e98ae}" in prompt
+            assert "wrapper" in prompt
+
+    asyncio.run(exercise())
