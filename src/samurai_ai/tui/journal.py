@@ -95,6 +95,31 @@ class ToolHeader(Static, can_focus=True):
             block.toggle()
 
 
+class LiveAnswerBlock(StreamBlock):
+    """The model's answer as it streams: text lands token by token."""
+
+    def append_token(self, token: str) -> None:
+        parent = getattr(self, "parent", None)
+        if parent is not None and not parent.follow:
+            # the operator is reading up — buffer, do not yank the view
+            self._parts.append(Text(token))
+            return
+        if self._parts:
+            current = self._parts[-1]
+            self._parts[-1] = Text(str(current) + token)
+        else:
+            self._parts = [Text(token)]
+        self.update(Text("").join(self._parts))
+
+    def flush_tokens(self) -> None:
+        """Show whatever was buffered while follow was off."""
+        self.update(Text("").join(self._parts))
+
+    def plain_text(self) -> str:
+        """The streamed text so far (for the final message and /copy)."""
+        return "".join(str(part) for part in self._parts)
+
+
 class ToolBlock(Vertical):
     """A tool run: header line with a status icon plus a collapsible body.
 
@@ -321,4 +346,22 @@ class BlockJournal(VerticalScroll, can_focus=False):
 
     def _mount(self, widget: Any) -> None:
         self.mount(widget)
+        if self.follow:
+            self.call_after_refresh(self.scroll_end, animate=False)
+
+    @property
+    def follow(self) -> bool:
+        """Whether the journal still follows the tail (autoscroll)."""
+        return getattr(self, "_follow", True)
+
+    def toggle_follow(self) -> bool:
+        """Flip follow mode; returns the new state."""
+        self._follow = not self.follow
+        if self._follow:
+            self.call_after_refresh(self.scroll_end, animate=False)
+        return self._follow
+
+    def follow_end(self) -> None:
+        """Jump to the tail and turn follow back on."""
+        self._follow = True
         self.call_after_refresh(self.scroll_end, animate=False)
