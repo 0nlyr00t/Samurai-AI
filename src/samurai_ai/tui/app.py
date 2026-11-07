@@ -276,6 +276,12 @@ class SamuraiApp(
         border: solid $accent-alt;
         background: $panel;
     }
+    #hint-bar {
+        height: 1;
+        padding: 0 1;
+        background: $panel-alt;
+        color: $text-dim;
+    }
     #status-bar {
         height: 1;
         padding: 0 1;
@@ -632,6 +638,7 @@ class SamuraiApp(
         yield Static(id="thinking")
         yield OptionList(id="command-suggestions")
         yield HistoryInput(placeholder=self.translator.t("input.placeholder"), id="command-input")
+        yield Static(id="hint-bar")
         yield Static(id="status-bar")
 
     def on_mount(self) -> None:
@@ -3430,7 +3437,19 @@ class SamuraiApp(
         self._restore_chat()
         self._refresh_chrome()
 
+    def _refresh_hint_bar(self) -> None:
+        """The keys that matter right now, from the live keymap."""
+        bar = self.query_one("#hint-bar", Static)
+        parts = []
+        for action in ("retry_turn", "toggle_follow", "op_next", "op_close"):
+            key = self.keymap.get(action) or ""
+            if key:
+                label_key = "keys.action." + action.replace("_", "-")
+                parts.append(f"{key} {self.translator.t(label_key)}")
+        bar.update(" · ".join(parts))
+
     def _refresh_chrome(self) -> None:
+        self._refresh_hint_bar()
         self._refresh_operations_strip()
         self._refresh_killchain()
         self._refresh_welcome()
@@ -3467,6 +3486,14 @@ class SamuraiApp(
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
         bar.append(f" | ctx {self._ctx_tokens} tok")
+        limit = self._context_limit()
+        if limit:
+            ratio = self._ctx_tokens / limit
+            token = "success" if ratio < 0.6 else ("risk-mid" if ratio < 0.85 else "danger")
+            bar.append(
+                f" {self._ctx_tokens // 1000}k/{limit // 1000}k",
+                style=self.paint(token),
+            )
         bar.append(f" | Σ {self._run_tokens} tok")
         if getattr(self, "_run_cost", 0.0):
             bar.append(f" | ${self._run_cost:.4f}")
@@ -3532,6 +3559,17 @@ class SamuraiApp(
         if not runs:
             return ""
         return str(self.translator.t("strip.agent-now", tool=runs[-1].tool_id))
+
+    def _context_limit(self) -> int:
+        """The active model's context window, or 0 when unknown."""
+        model_id = self.models.default_model()
+        if not model_id:
+            return 0
+        try:
+            model, _ = self.models.resolve_model(model_id)
+        except Exception:  # noqa: BLE001 - an unknown model has no gauge
+            return 0
+        return model.context_limit
 
     def _refresh_ops_strip(self) -> None:
         agents_item = self.query_one("#strip-agents", Static)
