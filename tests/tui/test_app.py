@@ -6461,7 +6461,7 @@ def test_right_click_on_a_tab_closes_it(tmp_path: Path) -> None:
 
 def test_the_answer_streams_into_a_live_block(tmp_path: Path) -> None:
     """Tokens land in the journal as they arrive, not at the end."""
-    from samurai_ai.agents.provider import ChatResponse, Message, Usage
+    from samurai_ai.agents.provider import ChatResponse, Usage
 
     class _StreamProvider:
         def __init__(self) -> None:
@@ -6695,8 +6695,6 @@ def test_the_attack_map_shows_once_two_hosts_have_access(tmp_path: Path) -> None
         async with app.run_test(size=(120, 34)) as pilot:
             await pilot.pause()
             assert not app.query_one("#attack-map", Static).display
-            from samurai_ai.domain.graph import NodeKind, NodeState
-            from samurai_ai.domain.operations import OperationEvent
 
             graph = app.graph
             origin = graph.origin(operation.id, "t-1", "origin")

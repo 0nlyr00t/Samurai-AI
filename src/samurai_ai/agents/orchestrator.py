@@ -81,7 +81,8 @@ from samurai_ai.storage.agents import AgentRunRepository
 _T = TypeVar("_T")
 
 DEFAULT_MAX_STEPS = 32
-DEFAULT_MAX_DEPTH = 1
+DEFAULT_MAX_DEPTH = 2
+#: the second level is a helper, not a runaway: a third of the parent's budget
 MAX_CONSECUTIVE_REJECTS = 5
 #: the same command repeated this often in one run earns a model note
 REPEAT_THRESHOLD = 3
@@ -288,6 +289,7 @@ class AgentOrchestrator:
         max_wall_seconds: float | None = DEFAULT_MAX_WALL_SECONDS,
         parent_run_id: str | None = None,
         max_depth: int = DEFAULT_MAX_DEPTH,
+        depth_budget_divisor: int = 3,
         approval_id: str | None = None,
         created_by: str = "operator",
         stop_event: threading.Event | None = None,
