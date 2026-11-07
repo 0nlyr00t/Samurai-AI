@@ -6631,3 +6631,33 @@ def test_the_strip_marks_the_turn_checklist_apart_from_the_plan(tmp_path: Path) 
             assert "strip-checklist" not in item.classes
 
     asyncio.run(exercise())
+
+
+def test_the_approval_prompt_offers_a_batch_approve(tmp_path: Path) -> None:
+    """A prompt with a pending batch shows the hint and A answers them all."""
+    from samurai_ai.tui.screens import AccessPromptScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.push_screen(
+                AccessPromptScreen(
+                    app.translator,
+                    "shell.exec curl http://10.0.0.5/",
+                    "r2",
+                    batch_items=[("curl http://10.0.0.5/", "r2"), ("nmap 10.0.0.5", "r2")],
+                )
+            )
+            await pilot.pause()
+            hint = app.screen.query_one("#access-batch", Static)
+            assert "2" in str(hint.render())
+            await pilot.press("a")
+            await pilot.pause()
+            # the prompt dismissed as approved
+            assert app.screen.__class__.__name__ != "AccessPromptScreen"
+
+    asyncio.run(exercise())
