@@ -216,7 +216,7 @@ class SamuraiApp(
         background: $surface;
     }
     #side {
-        width: 18;
+        width: 30;
         height: 100%;
         border: solid $border;
         background: $panel;
@@ -793,6 +793,33 @@ class SamuraiApp(
             self._write_dim(self.translator.t("sessions.stopping", run="-"))
             stopped = True
         return stopped
+
+    def action_view_journal(self) -> None:
+        self._switch_view("journal")
+
+    def action_view_ops(self) -> None:
+        self._switch_view("view-ops")
+
+    def action_view_bounty(self) -> None:
+        self._switch_view("view-bounty")
+
+    def action_view_tasks(self) -> None:
+        self._switch_view("view-hunt")
+
+    def action_view_next(self) -> None:
+        self._cycle_view(1)
+
+    def action_view_previous(self) -> None:
+        self._cycle_view(-1)
+
+    def _cycle_view(self, step: int) -> None:
+        panes = [pane for pane, tab in (
+            ("journal", "tab-chat"), ("view-ops", "tab-ops"),
+            ("view-bounty", "tab-bounty"), ("view-hunt", "tab-hunt"),
+        ) if pane == "journal" or self.query_one(f"#{tab}", Tab).display]
+        current = self.query_one("#views", ContentSwitcher).current or "journal"
+        index = panes.index(current) if current in panes else 0
+        self._switch_view(panes[(index + step) % len(panes)])
 
     def action_toggle_plan(self) -> None:
         self.run_worker(self._toggle_plan(), exclusive=False)
