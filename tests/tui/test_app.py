@@ -6561,3 +6561,73 @@ def test_the_side_panel_lists_running_swarm_members(tmp_path: Path) -> None:
             assert "recon" in panel
 
     asyncio.run(exercise())
+
+
+def test_a_rich_plan_proposal_keeps_dependencies_and_risk(tmp_path: Path) -> None:
+    """propose_plan with objects survives into a real plan with depends_on."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Rich plan", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            from samurai_ai.agents.provider import ToolCall
+
+            call = ToolCall(
+                id="c1",
+                name="propose_plan",
+                arguments={
+                    "title": "Chain",
+                    "tasks": [
+                        {"title": "scan", "risk_class": "R1"},
+                        {"title": "exploit", "risk_class": "r3", "depends_on": ["t1"]},
+                    ],
+                },
+            )
+            await app._run_propose_plan_tool(call)
+            app._apply_proposed_plan()
+            await pilot.pause()
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None and len(plan.tasks) == 2
+            second = plan.tasks[1]
+            assert second.depends_on == ("t1",)
+            assert second.risk_class.value == "r3"
+
+    asyncio.run(exercise())
+
+
+def test_the_strip_marks_the_turn_checklist_apart_from_the_plan(tmp_path: Path) -> None:
+    """`steps 2/4 ↯` is the model's checklist; `todo 3/6` is the plan."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Strip", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="t-1", title="scan", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._turn_todo = [("a", "done"), ("b", "in_progress")]
+            app._refresh_ops_strip()
+            await pilot.pause()
+            item = app.query_one("#strip-todo", Static)
+            assert "steps 1/2" in str(item.render())
+            assert "strip-checklist" in item.classes
+            app._turn_todo = []
+            app._refresh_ops_strip()
+            await pilot.pause()
+            assert "todo 0/1" in str(item.render())
+            assert "strip-checklist" not in item.classes
+
+    asyncio.run(exercise())

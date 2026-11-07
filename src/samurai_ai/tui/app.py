@@ -413,7 +413,7 @@ class SamuraiApp(
         self._last_user_text: str = ""
         self._open_tabs: list[str] = []
         self._tab_states: dict[str, dict[str, Any]] = {}
-        self._proposed_plan: tuple[str, list[str]] | None = None
+        self._proposed_plan: tuple[str, list[dict[str, object]]] | None = None
         self._ctx_tokens: int = 0
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
@@ -1014,11 +1014,25 @@ class SamuraiApp(
         if not proposal:
             self._write_dim(self.translator.t("plan.no-proposal"))
             return
-        title, titles = proposal
-        tasks = [
-            PlanTask(id=f"t{index}", title=text, risk_class=RiskClass.R1)
-            for index, text in enumerate(titles, start=1)
-        ]
+        title, entries = proposal
+        tasks = []
+        for index, entry in enumerate(entries, start=1):
+            risk = RiskClass.R1
+            if entry.get("risk_class"):
+                try:
+                    risk = RiskClass(str(entry["risk_class"]).lower())
+                except ValueError:
+                    pass
+            tasks.append(
+                PlanTask(
+                    id=f"t{index}",
+                    title=str(entry["title"]),
+                    risk_class=risk,
+                    depends_on=tuple(
+                        str(dep) for dep in entry.get("depends_on", []) if str(dep)
+                    ),
+                )
+            )
         current = self.kernel.get_current_plan(self.operation.id)
         if current is None:
             self.kernel.create_plan(self.operation.id, title, tasks, [])
@@ -3530,6 +3544,7 @@ class SamuraiApp(
                     style=self.paint("$accent"),
                 )
             )
+            todo_item.add_class("strip-checklist")
             todo_item.tooltip = "\n".join(f"{s} | {title}" for title, s in checklist)
             todo_item.display = True
         plan = self.kernel.get_current_plan(operation_id)
@@ -3546,6 +3561,7 @@ class SamuraiApp(
                     style=self.paint("$accent"),
                 )
             )
+            todo_item.remove_class("strip-checklist")
             todo_item.tooltip = "\n".join(
                 f"{task.id} | {task.status.value} | {task.title}" for task in tasks
             )
