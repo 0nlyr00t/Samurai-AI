@@ -75,6 +75,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     _spec("/reconcile", GROUP_OPERATION, "_show_reconcile", operation=True),
     _spec("/snapshots", GROUP_OPERATION, "_show_snapshots", operation=True),
+    _spec("/resume", GROUP_OPERATION, "_show_resume"),
     _spec("/exit", GROUP_OPERATION, "_cmd_exit"),
     _spec("/help", GROUP_OPERATION, "_show_help"),
     # kernel
@@ -138,7 +139,8 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/settings", GROUP_VIEW, "_show_settings"),
     _spec("/mouse", GROUP_VIEW, "_toggle_mouse"),
     _spec("/trust", GROUP_VIEW, "_prompt_trust"),
-    _spec("/copy", GROUP_VIEW, "_copy_last", argument=True, prompt_key="palette.prompt.copy"),
+    # takes an optional word ("code") but must not open a prompt for it
+    _spec("/copy", GROUP_VIEW, "_copy_last", argument=True),
     _spec("/expand", GROUP_VIEW, "_expand_outputs"),
     _spec(
         "/goal",
