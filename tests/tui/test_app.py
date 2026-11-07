@@ -6244,3 +6244,25 @@ def test_the_status_bar_shows_spend_once_a_model_has_a_price(tmp_path: Path) -> 
             assert "$2.5000" in str(app.query_one("#status-bar", Static).render())
 
     asyncio.run(exercise())
+
+
+def test_stage_names_stay_english_in_a_russian_locale(tmp_path: Path) -> None:
+    """recon / persistence / privesc / loot are terms of art, not prose."""
+    from samurai_ai.tui.killchain import phase_for
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("ru")
+    operation = stack[0].create(
+        "Стадии", OperationMode.CTF_HTB, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            rail = str(app.query_one("#killchain", Static).render())
+            for phase in phase_for(OperationMode.CTF_HTB, []).phases:
+                assert phase in rail, f"{phase} must stay English: {rail}"
+            assert "флаги" in rail  # the counter is prose and is translated
+
+    asyncio.run(exercise())
