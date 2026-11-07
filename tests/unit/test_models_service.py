@@ -213,3 +213,24 @@ def test_recall_finds_the_relevant_entry_not_everything(tmp_path: Path) -> None:
     hits = memory.recall("template")
     assert [h.title for h in hits] == ["SSTI in ticket notes"]
     assert memory.recall("nonexistent-xyzzy") == []
+
+
+def test_patch_diff_reads_a_cve_style_patch(tmp_path: Path) -> None:
+    """A bounds-guard patch reads as a bounds-guard bug."""
+    from samurai_ai.analysis.patchdiff import analyze_patch, report
+
+    diff = """diff --git a/src/parse.c b/src/parse.c
+--- a/src/parse.c
++++ b/src/parse.c
+@@ -100,7 +100,10 @@ int parse_header(char *buf)
+-    memcpy(dst, src, n);
++    if (n > sizeof(dst))
++        return -1;
++    memcpy(dst, src, n);
+"""
+    analysis = analyze_patch(diff, advisory="remote code execution via overflow")
+    assert "src/parse.c" in analysis.files
+    assert "bounds" in analysis.guards
+    assert "RCE" in analysis.hypothesis or "rce" in analysis.hypothesis
+    text = report(analysis)
+    assert "src/parse.c" in text and "bounds" in text
