@@ -48,15 +48,28 @@ class AccessPromptScreen(ModalScreen[bool]):
     }
     """
 
-    def __init__(self, translator: Translator, action: str, risk: str) -> None:
+    def __init__(
+        self,
+        translator: Translator,
+        action: str,
+        risk: str,
+        *,
+        batch_items: list[tuple[str, str]] | None = None,
+    ) -> None:
         super().__init__()
         self.translator = translator
         self.action = action
         self.risk = risk
+        self.batch_items = batch_items or []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="access-dialog"):
             yield Static(self.translator.t("access.prompt-title"), id="access-title")
+            if self.batch_items:
+                yield Static(
+                    self.translator.t("access.batch-hint", count=len(self.batch_items)),
+                    id="access-batch",
+                )
             yield Static(f"{self.action}  |  risk={self.risk}", id="access-action")
             yield OptionList(
                 Option(self.translator.t("access.allow"), id="a-allow"),
@@ -86,6 +99,11 @@ class AccessPromptScreen(ModalScreen[bool]):
             self.query_one("#access-full-text", Static).update(self.action)
 
     def on_key(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key == "a" and self.batch_items:
+            # approve the whole batch: same risk, same call shape
+            event.stop()
+            self.dismiss(True)
+            return
         if event.key == "v":
             event.stop()
             self.reveal(not self.query_one("#access-full", VerticalScroll).display)
