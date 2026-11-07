@@ -6661,3 +6661,22 @@ def test_the_approval_prompt_offers_a_batch_approve(tmp_path: Path) -> None:
             assert app.screen.__class__.__name__ != "AccessPromptScreen"
 
     asyncio.run(exercise())
+
+
+def test_the_status_bar_shows_a_context_gauge(tmp_path: Path) -> None:
+    """ctx N tok alone is a number; Nk/Mk is a gauge."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "openai/gpt-4o@v1")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._ctx_tokens = 50_000
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "50k/128k" in bar
+
+    asyncio.run(exercise())
