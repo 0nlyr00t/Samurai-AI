@@ -1482,7 +1482,7 @@ def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
                 await pilot.pause()
                 # 4 tool rounds + 1 closing call without tools: the operator
                 # always gets a final answer instead of silence
-                assert provider.calls == 5
+                assert provider.calls == 4 * 6 + 1  # 4 rounds x 6 stretches + closing
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "final summary after the loop" in text
             await pilot.press("ctrl+c")
@@ -5708,21 +5708,21 @@ def test_the_status_bar_shows_the_live_turn(tmp_path: Path) -> None:
 
 
 def test_the_rounds_ceiling_is_a_setting_with_a_higher_default(tmp_path: Path) -> None:
-    """8 rounds ended real turns mid-work; 32 by default, bounded, overridable."""
+    """8 rounds ended real turns mid-work; 200 by default, bounded, overridable."""
     stack = _minimal_stack(tmp_path)
     app = SamuraiApp.__new__(SamuraiApp)  # settings only, no event loop needed
     app.__dict__["settings"] = stack[2]
     from samurai_ai.tui.chat import ChatController
 
-    assert ChatController._max_tool_rounds(app) == 32
+    assert ChatController._max_tool_rounds(app) == 200
     stack[2].set_value("tui.max_tool_rounds", "16")
     assert ChatController._max_tool_rounds(app) == 16
     stack[2].set_value("tui.max_tool_rounds", "1")
     assert ChatController._max_tool_rounds(app) == 4  # bounded below
     stack[2].set_value("tui.max_tool_rounds", "9999")
-    assert ChatController._max_tool_rounds(app) == 200  # and above
+    assert ChatController._max_tool_rounds(app) == 600  # and above
     stack[2].set_value("tui.max_tool_rounds", "banana")
-    assert ChatController._max_tool_rounds(app) == 32  # junk falls back
+    assert ChatController._max_tool_rounds(app) == 200  # junk falls back
 
 
 def test_the_hunt_tab_lists_hypotheses(tmp_path: Path) -> None:
@@ -6757,5 +6757,119 @@ def test_a_turn_recalls_matching_memory_into_the_context(tmp_path: Path) -> None
             system = [m for m in _Echo.requests[0].messages if m.role == "system"]
             assert any("SSTI in ticket notes" in m.content for m in system)
             assert not any("Unrelated" in m.content for m in system)
+
+    asyncio.run(exercise())
+
+
+def test_a_spent_round_budget_continues_instead_of_stopping(tmp_path: Path) -> None:
+    """The cap is a checkpoint: the turn settles, then keeps working."""
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _Restless:
+        calls: list = []
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self):
+            return ["m"]
+
+        async def complete(self, request):
+            _Restless.calls.append(request)
+            # three tool rounds, then an answer
+            if len(_Restless.calls) <= 5:
+                return ChatResponse(
+                    text="",
+                    tool_calls=(
+                        ToolCall(id=f"c{len(_Restless.calls)}", name="shell_exec",
+                                 arguments={"command": f"echo tick{len(_Restless.calls)}"}),
+                    ),
+                    usage=Usage(prompt_tokens=1, completion_tokens=1),
+                    model_id=request.model_id, provider_id="gpt", latency_ms=1,
+                )
+            return ChatResponse(
+                text="done", usage=Usage(prompt_tokens=1, completion_tokens=1),
+                model_id=request.model_id, provider_id="gpt", latency_ms=1,
+            )
+
+    provider = _Restless()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "gpt/m@v1")
+    stack[2].set_value("tui.max_tool_rounds", "4")  # floor is 4
+    stack[2].set_value("tui.yolo", "1")  # no approval screens in the loop
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "keep going"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "round budget spent" in journal
+            assert "continue 1/5" in journal
+            assert "done" in journal
+
+    asyncio.run(exercise())
+
+
+def test_a_found_secret_lands_in_the_sidebar(tmp_path: Path) -> None:
+    """remember_secret writes to the operation vault and the panel shows it."""
+    from samurai_ai.agents.provider import ToolCall
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Secret lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            await app._run_remember_secret_tool(
+                ToolCall(id="c1", name="remember_secret",
+                         arguments={"name": "kpark-password", "value": "s3cr3t"})
+            )
+            await pilot.pause()
+            creds = str(app.query_one("#side-creds", Static).render())
+            assert "kpark-password" in creds
+
+    asyncio.run(exercise())
+
+
+def test_a_touched_host_shows_in_the_access_panel(tmp_path: Path) -> None:
+    """A successful command against a host is access at read level at least."""
+    from samurai_ai.domain.execution import ToolRun, ToolRunStatus
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Touch lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    run = ToolRun(
+        operation_id=operation.id, tool_id="shell.exec", tool_version=1,
+        status=ToolRunStatus.COMPLETED, exit_code=0,
+        parameters={"command": "curl -s http://10.0.0.7/login"},
+    )
+    from samurai_ai.domain.operations import OperationEvent
+
+    stack[4].runs.add_run(
+        run,
+        OperationEvent(operation_id=operation.id, event_type="tool.run.completed",
+                       payload={"run_id": run.id}),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            access = str(app.query_one("#side-access", Static).render())
+            assert "10.0.0.7" in access
 
     asyncio.run(exercise())

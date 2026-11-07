@@ -161,6 +161,7 @@ class ChatController:
         _proposed_plan: tuple[str, list[dict[str, object]]] | None
         _last_user_text: str
         _live_answer: Any
+        def _refresh_side_blocks(self) -> None: ...
         _last_ai_code: str | None
         _thinking_timer: Any
         _thinking_depth: int
@@ -209,9 +210,10 @@ class ChatController:
 
     # --- AI chat ---------------------------------------------------------
 
-    _CHAT_MAX_TOOL_ROUNDS = 32  # default; the setting tui.max_tool_rounds wins
+    _CHAT_MAX_TOOL_ROUNDS = 200  # default; the setting tui.max_tool_rounds wins
+    _AUTO_CONTINUES = 5
     _TOOL_ROUNDS_MIN = 4
-    _TOOL_ROUNDS_MAX = 200
+    _TOOL_ROUNDS_MAX = 600
     _CHAT_HISTORY_LIMIT = 40
     _TOOL_OUTPUT_FEEDBACK_LIMIT = 4000
     _MODEL_RETRY_ATTEMPTS = 5
@@ -405,6 +407,23 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="remember_secret",
+            description=(
+                "Store a credential found during the work (password, token, key, "
+                "hash) in the operation vault so later calls can use it and the "
+                "side panel shows it. Name it lower-case, e.g. kpark-ssh-password."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "value": {"type": "string", "minLength": 1, "maxLength": 8192},
+                },
+                "required": ["name", "value"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="update_todo",
             description=(
                 "Replace the turn's checklist. Send the whole list every time — it "
@@ -498,6 +517,7 @@ class ChatController:
         "propose_finding": "_run_propose_finding_tool",
         "record_traffic": "_run_record_traffic_tool",
         "update_todo": "_run_update_todo_tool",
+        "remember_secret": "_run_remember_secret_tool",
         "propose_plan": "_run_propose_plan_tool",
     }
 
@@ -1032,10 +1052,35 @@ class ChatController:
         if recall:
             self._remember(Message(role="system", content=recall))
         rounds_left = self._max_tool_rounds()
+        stretches_used = 0
         promise_nudges = 0
         self._remember(Message(role="user", content=text))
         self._begin_live_answer()
-        for _round in range(rounds_left):
+        while True:
+            if rounds_left <= 0:
+                # The budget for this stretch is spent. Kimi/OpenCode keep a step
+                # cap as a safety net, not the normal exit: a run ends when the
+                # model stops calling tools. So settle what is known, then refill.
+                self._write_dim(self.translator.t("chat.tool-limit"))
+                await self._settle(operation_id, model_id, reasoning)
+                if self._stop_requested:
+                    return TerminalReason.CANCELLED
+                if stretches_used >= self._AUTO_CONTINUES:
+                    break
+                stretches_used += 1
+                self._write_dim(
+                    self.translator.t(
+                        "chat.auto-continue",
+                        index=stretches_used,
+                        total=self._AUTO_CONTINUES,
+                    )
+                )
+                self._remember(
+                    Message(role="user", content=self.translator.t("chat.continue-note"))
+                )
+                rounds_left = self._max_tool_rounds()
+                continue
+            rounds_left -= 1
             self._drain_steering()
             self._count_goal_step()
             try:
@@ -1121,11 +1166,7 @@ class ChatController:
             if self._finding_count() > findings_before:
                 findings_before = self._finding_count()
                 self._progress.finding_seen()
-        # The tool rounds are exhausted. Before anything else, a settlement pass:
-        # the model may only record and close, so what it already found is written
-        # down instead of dying with the turn. Then one closing answer without tools.
-        self._write_dim(self.translator.t("chat.tool-limit"))
-        await self._settle(operation_id, model_id, reasoning)
+        # every stretch is spent without the model concluding: one closing answer
         try:
             final = await self._request_chat_completion(operation_id, model_id, reasoning, ())
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
@@ -1140,6 +1181,7 @@ class ChatController:
         if final.text.strip():
             self._write_ai_message(final)
         return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.ROUNDS
+
 
     async def _settle(self, operation_id: str, model_id: str, reasoning: str | None) -> None:
         """One write-only round: persist what the turn found, without new exploration."""
@@ -1446,6 +1488,28 @@ class ChatController:
         return Message(
             role="user",
             content=f"[tool propose_plan] shown to the operator: {len(tasks)} tasks",
+        )
+
+
+    async def _run_remember_secret_tool(self, call: ToolCall) -> Message:
+        """A found credential goes into the vault and shows up in the sidebar."""
+        name = str(call.arguments.get("name", "")).strip().lower()
+        value = str(call.arguments.get("value", ""))
+        if not name or not value:
+            return Message(role="user", content="[tool remember_secret] name and value required")
+        if self.operation is None:
+            return Message(role="user", content="[tool remember_secret] no operation open")
+        try:
+            self.vault.add(name, value, self.operation.id, created_by="agent")
+        except Exception as exc:  # noqa: BLE001 - fed back to the model
+            return Message(role="user", content=f"[tool remember_secret] {exc}")
+        refresh = getattr(self, "_refresh_side_blocks", None)
+        if refresh is not None:
+            refresh()
+        self._write_dim(self.translator.t("side.secret-saved", name=name), process=False)
+        return Message(
+            role="user",
+            content=f"[tool remember_secret] stored as {{{{{name}}}}} (operation vault)",
         )
 
     async def _run_update_todo_tool(self, call: ToolCall) -> Message:
