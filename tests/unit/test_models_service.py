@@ -139,3 +139,30 @@ def test_swarm_merge_folds_duplicate_findings(tmp_path: Path) -> None:
     assert report["merged"] == 1
     assert any(dup == b.id and keeper == a.id for dup, keeper in report["duplicates"])
     assert repo.get_finding(b.id).duplicate_of == a.id
+
+
+def test_replay_scrubs_to_a_prefix() -> None:
+    """The replay shows what the run had done up to the tick."""
+    from datetime import UTC, datetime
+
+    from samurai_ai.domain.operations import OperationEvent
+    from samurai_ai.tui.replay import replay_lines
+
+    events = [
+        OperationEvent(
+            operation_id="op_1",
+            event_type="tool.run.started",
+            payload={"run_id": "r1"},
+            created_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+        ),
+        OperationEvent(
+            operation_id="op_1",
+            event_type="tool.run.completed",
+            payload={"run_id": "r1"},
+            created_at=datetime(2026, 1, 1, 12, 1, tzinfo=UTC),
+        ),
+    ]
+    all_lines = replay_lines(events)
+    assert len(all_lines) == 2
+    assert len(replay_lines(events, upto=1)) == 1
+    assert "tool.run.started" in all_lines[0]

@@ -1166,6 +1166,21 @@ class SamuraiApp(
         self._switch_view("journal")
         self._refresh_chrome()
 
+    def _show_replay(self) -> None:
+        """Scrub the operation's event journal in a side panel."""
+        if self.operation is None:
+            self._write_line("[replay] " + self.translator.t("status.no-operation"))
+            return
+        from samurai_ai.tui.replay import replay_lines
+
+        events = self.service.events(self.operation.id)
+        lines = replay_lines(events)
+        journal = self.query_one("#journal", BlockJournal)
+        journal.write(Text())
+        journal.write(Text("── replay ──", style=self.paint("dim accent")))
+        for line in lines[-40:]:
+            journal.write(Text(line, style=self.paint("dim text-dim")))
+
     def _show_resume(self) -> None:
         """Pick an earlier operation and carry on where it stopped."""
         from samurai_ai.tui.screens import PickerScreen

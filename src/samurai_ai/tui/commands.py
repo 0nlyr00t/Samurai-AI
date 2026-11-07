@@ -76,6 +76,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/reconcile", GROUP_OPERATION, "_show_reconcile", operation=True),
     _spec("/snapshots", GROUP_OPERATION, "_show_snapshots", operation=True),
     _spec("/resume", GROUP_OPERATION, "_show_resume"),
+    _spec("/replay", GROUP_OPERATION, "_show_replay", operation=True),
     _spec("/exit", GROUP_OPERATION, "_cmd_exit"),
     _spec("/help", GROUP_OPERATION, "_show_help"),
     # kernel
