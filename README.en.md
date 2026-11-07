@@ -111,3 +111,4 @@ Under active development. Not done: distributed runners (beyond the SSH daemon t
 ## Authorized use
 
 Authorized security research only: CTF/HTB, bug bounty within program rules, red team with explicit permission from the system owners. Stay inside the agreed scope.
+- attack stage rail, access/secret blocks, model-owned turn checklist
