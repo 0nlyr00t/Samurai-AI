@@ -5811,3 +5811,28 @@ def test_a_turn_that_ends_on_the_round_limit_says_so_visibly(tmp_path: Path) -> 
             assert "turn ended" in text and "round budget" in text
 
     asyncio.run(exercise())
+
+
+def test_ctrl_digit_switches_the_view_and_arrows_cycle(tmp_path: Path) -> None:
+    """Tabs must be reachable without the mouse: ctrl+1..4 and ctrl+left/right."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Tabs lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+2")
+            await pilot.pause()
+            assert app.query_one("#views", ContentSwitcher).current == "view-ops"
+            await pilot.press("ctrl+right")
+            await pilot.pause()
+            assert app.query_one("#views", ContentSwitcher).current == "view-bounty"
+            await pilot.press("ctrl+1")
+            await pilot.pause()
+            assert app.query_one("#views", ContentSwitcher).current == "journal"
+
+    asyncio.run(exercise())
