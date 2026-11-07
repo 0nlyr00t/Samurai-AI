@@ -106,6 +106,7 @@ class SessionController:
         instruction: str,
         *,
         specialization: AgentSpecialization = AgentSpecialization.GENERAL,
+        task_id: str | None = None,
     ) -> str | None:
         """Start a subagent session; returns the created run id, or None."""
         operation = self.operation
@@ -121,7 +122,8 @@ class SessionController:
             self._write_line("[subagent] " + self.translator.t("subagent.busy", run=active.run_id))
             return None
         try:
-            task_id = self._task_for_instruction(operation.id, instruction)
+            if task_id is None:
+                task_id = self._task_for_instruction(operation.id, instruction)
         except (AgentPlanError, AgentError) as exc:
             self._write_line(f"[subagent] {exc}")
             return None
