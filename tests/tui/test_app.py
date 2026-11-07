@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from rich.text import Text
+from textual.containers import Horizontal
 from textual.widgets import Button, ContentSwitcher, Input, OptionList, Static, Tab, Tabs
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
@@ -6336,5 +6337,123 @@ def test_the_system_prompt_names_the_relay_when_one_is_set(tmp_path: Path) -> No
             prompt = app._chat_system_prompt()
             assert "prlctl exec {1381d6d4-31a6-4aee-ab87-4193b12e98ae}" in prompt
             assert "wrapper" in prompt
+
+    asyncio.run(exercise())
+
+
+def test_operations_live_in_a_strip_and_switch_without_losing_state(tmp_path: Path) -> None:
+    """Two open operations switch by Ctrl+Tab; each keeps its own chat."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    first = stack[0].create(
+        "First op", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.a.example.com",))
+    )
+    second = stack[0].create(
+        "Second op", OperationMode.CTF_HTB, ScopeContract(includes=("*.b.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, first.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._proposed_plan = None
+            app._chat_history.append(Message(role="user", content="note in first"))
+            app._open_tabs = [first.id, second.id]
+            app._refresh_operations_strip()
+            await pilot.pause()
+            strip = app.query_one("#operations-strip", Horizontal)
+            labels = [str(child.render()) for child in strip.children]
+            assert any("First op" in label for label in labels)
+            assert any("Second op" in label for label in labels)
+            # switch away and back: the note must still be there
+            app.action_op_next()
+            await pilot.pause()
+            assert app.operation is not None and app.operation.id == second.id
+            app.action_op_previous()
+            await pilot.pause()
+            assert app.operation is not None and app.operation.id == first.id
+            assert any(m.content == "note in first" for m in app._chat_history)
+
+    asyncio.run(exercise())
+
+
+def test_closing_a_tab_leaves_the_operation_alive(tmp_path: Path) -> None:
+    """Ctrl+W closes the tab; the operation stays in the store."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Closable", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._open_tabs = [operation.id]
+            app._refresh_operations_strip()
+            app._close_operation()
+            await pilot.pause()
+            assert app.operation is None
+            assert stack[0].get(operation.id).name == "Closable"
+
+    asyncio.run(exercise())
+
+
+def test_a_busy_tab_carries_a_work_badge(tmp_path: Path) -> None:
+    """The operation with running subagents gets a ▶ badge, not just a dot."""
+    from samurai_ai.domain.agents import AgentRun, AgentRunStatus
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    first = stack[0].create(
+        "Quiet", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.a.example.com",))
+    )
+    busy_op = stack[0].create(
+        "Busy", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.b.example.com",))
+    )
+    run = AgentRun(
+        operation_id=busy_op.id, task_id="t-1", instruction="scan", specialization="recon",
+        depth=0, status=AgentRunStatus.RUNNING,
+    )
+    stack[7].runs.add(run)  # the AgentOrchestrator's own repository
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, first.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._open_tabs = [first.id, busy_op.id]
+            app._refresh_operations_strip()
+            await pilot.pause()
+            strip = app.query_one("#operations-strip", Horizontal)
+            labels = [str(child.render()) for child in strip.children]
+            assert any("▶ Busy" in label for label in labels), labels
+
+    asyncio.run(exercise())
+
+
+def test_right_click_on_a_tab_closes_it(tmp_path: Path) -> None:
+    """Right-click on the strip closes that tab; the operation stays."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    first = stack[0].create(
+        "Left", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.a.example.com",))
+    )
+    second = stack[0].create(
+        "Right", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.b.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, first.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._open_tabs = [first.id, second.id]
+            app._refresh_operations_strip()
+            await pilot.pause()
+            strip = app.query_one("#operations-strip", Horizontal)
+            tab = next(child for child in strip.children if child.operation_id == second.id)
+            tab.on_click(type("E", (), {"button": 3})())
+            await pilot.pause()
+            assert second.id not in app._open_tabs
+            assert stack[0].get(second.id).name == "Right"
 
     asyncio.run(exercise())
