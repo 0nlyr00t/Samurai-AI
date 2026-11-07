@@ -6266,3 +6266,55 @@ def test_stage_names_stay_english_in_a_russian_locale(tmp_path: Path) -> None:
             assert "флаги" in rail  # the counter is prose and is translated
 
     asyncio.run(exercise())
+
+
+def test_a_failed_turn_retries_the_call_and_then_offers_a_resend(tmp_path: Path) -> None:
+    """A sick gateway: 5 visible attempts, then the model error with a retry hint."""
+    from samurai_ai.domain.models import ProviderUnavailableError
+
+    class _SickProvider:
+        calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            _SickProvider.calls += 1
+            raise ProviderUnavailableError("read timed out")
+
+    provider = _SickProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+    settings.set_value("model.default", "gpt/m@v1")
+
+    # no sleeping between retries in the test
+    from samurai_ai.tui.chat import ChatController
+
+    original = ChatController._MODEL_RETRY_DELAY
+    ChatController._MODEL_RETRY_DELAY = 0.0
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "hello"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert journal.count("model unavailable") == 5, journal
+            assert "Ctrl+R" in journal
+            assert app._last_user_text == "hello"
+            assert provider.calls >= 6  # first call + 5 retries
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        ChatController._MODEL_RETRY_DELAY = original

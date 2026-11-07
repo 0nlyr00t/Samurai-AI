@@ -459,7 +459,21 @@ class ModelService:
             raise ToolStateError(f"approval {approval_id} was rejected")
         return stored
 
+    def request_timeout(self) -> float:
+        """Seconds one model call may take; the operator's setting, bounded.
+
+        Slow gateways answer in tens of seconds, and 60 used to end real runs.
+        """
+        reader = getattr(self.settings, "get_setting", None)
+        raw = reader("model.timeout_seconds") if reader is not None else None
+        try:
+            value = float(raw) if raw else 180.0
+        except ValueError:
+            return 180.0
+        return min(max(value, 10.0), 600.0)
+
     def _build_provider(self, provider: ProviderDefinition) -> ProviderImpl:
+        timeout = self.request_timeout()
         if self.provider_factory is not None:
             return self.provider_factory(provider)
         if provider.api_family is ApiFamily.OLLAMA:
@@ -475,10 +489,10 @@ class ModelService:
                     auth=True,
                 ) from exc
         if provider.api_family is ApiFamily.ANTHROPIC:
-            return AnthropicProvider(provider, api_key)
+            return AnthropicProvider(provider, api_key, timeout=timeout)
         if provider.api_family is ApiFamily.GEMINI:
-            return GeminiProvider(provider, api_key)
-        return OpenAICompatProvider(provider, api_key)
+            return GeminiProvider(provider, api_key, timeout=timeout)
+        return OpenAICompatProvider(provider, api_key, timeout=timeout)
 
     def _secret_exists(self, secret_name: str) -> bool:
         try:
