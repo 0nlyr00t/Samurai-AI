@@ -6457,3 +6457,82 @@ def test_right_click_on_a_tab_closes_it(tmp_path: Path) -> None:
             assert stack[0].get(second.id).name == "Right"
 
     asyncio.run(exercise())
+
+
+def test_the_answer_streams_into_a_live_block(tmp_path: Path) -> None:
+    """Tokens land in the journal as they arrive, not at the end."""
+    from samurai_ai.agents.provider import ChatResponse, Message, Usage
+
+    class _StreamProvider:
+        def __init__(self) -> None:
+            self.chunks: list[str] = []
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete_stream(self, request, on_token):  # type: ignore[no-untyped-def]
+            for piece in ["Hel", "lo", " world"]:
+                self.chunks.append(piece)
+                on_token(piece)
+            return ChatResponse(
+                text="Hello world",
+                usage=Usage(prompt_tokens=1, completion_tokens=3),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=5,
+            )
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            return ChatResponse(
+                text="Hello world",
+                usage=Usage(prompt_tokens=1, completion_tokens=3),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=5,
+            )
+
+    provider = _StreamProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+    stack[2].set_value("model.default", "gpt/m@v1")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "say hi"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert provider.chunks == ["Hel", "lo", " world"]
+            text = app.query_one("#journal", BlockJournal).text()
+            assert "Hello world" in text
+
+    asyncio.run(exercise())
+
+
+def test_follow_mode_pauses_autoscroll_while_reading_up(tmp_path: Path) -> None:
+    """Ctrl+T stops the tail from yanking the view; new tokens buffer."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            assert journal.follow
+            app.action_toggle_follow()
+            await pilot.pause()
+            assert not journal.follow
+            app.action_toggle_follow()
+            await pilot.pause()
+            assert journal.follow
+
+    asyncio.run(exercise())

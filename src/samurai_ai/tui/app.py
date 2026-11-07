@@ -4,6 +4,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -415,6 +416,7 @@ class SamuraiApp(
         self._selection_copy_timer: Timer | None = None
         self._last_auto_copy: str | None = None
         self._killchain_phase: str = ""
+        self._live_answer = None
         self._turn_todo: list[tuple[str, str]] = []
         self._chat_history: list[Message] = []
         self._progress = Stagnation()
@@ -628,6 +630,7 @@ class SamuraiApp(
         yield Static(id="status-bar")
 
     def on_mount(self) -> None:
+        self._thread_id = threading.get_ident()
         self._apply_mouse()
         # a finished drag copies itself — the operator should never think
         # about *how* to copy; like Claude Code, selection IS the copy
@@ -1030,6 +1033,12 @@ class SamuraiApp(
         self._write_dim(self.translator.t("plan.discarded"))
         self._refresh_chrome()
 
+
+    def action_toggle_follow(self) -> None:
+        """Ctrl+T: tail-follow on or off — read back without losing the stream."""
+        journal = self.query_one("#journal", BlockJournal)
+        follow = journal.toggle_follow()
+        self._write_dim(self.translator.t("journal.follow-on" if follow else "journal.follow-off"))
 
     def action_op_next(self) -> None:
         self._cycle_operation(1)
