@@ -803,6 +803,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "board.group.hints": "подсказки",
         "board.group.facts": "факты",
         "board.group.findings": "находки",
+        "board.trace-tooltip": (
+            "Сохранить трейс подсвеченной задачи (запуски, артефакты, находки) "
+            "в JSON — или клавиша W"
+        ),
+        "board.trace-saved": "[трейс] сохранён → {path}",
         "board.no-plan": "плана в операции нет",
         "board.no-findings": "находок пока нет",
         "board.no-artifacts": "в операции нет артефактов для прицепки",

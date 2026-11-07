@@ -40,6 +40,7 @@ class BoardController:
         kernel: Any
         execution: Any
         orchestrator: Any
+        service: Any
         traffic: Any
         translator: Any
 
@@ -92,7 +93,18 @@ class BoardController:
     def _show_task_board(self) -> None:
         if not self._require_operation():
             return
+        from samurai_ai.services.trace_export import export_task_trace
         from samurai_ai.tui.screens import BoardScreen
+
+        def trace(task_id: str) -> str:
+            assert self.operation is not None
+            path = export_task_trace(
+                self.service, self.kernel, self.execution, self.operation.id, task_id
+            )
+            self._write_dim(
+                self.translator.t("board.trace-saved", path=str(path)), process=False
+            )
+            return str(path)
 
         actions: dict[str, Any] = {
             "s": self._task_start,
@@ -117,6 +129,8 @@ class BoardController:
                 labels,
                 self._show_task_detail,
                 self.translator.t("board.no-plan"),
+                on_trace=trace,
+                trace_tooltip=self.translator.t("board.trace-tooltip"),
             )
         )
 
