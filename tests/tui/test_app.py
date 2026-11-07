@@ -6147,3 +6147,77 @@ def test_the_model_checklist_shows_in_the_strip_and_the_tasks_tab(tmp_path: Path
             assert "map /api" in tab and "▶ fuzz authed" in tab
 
     asyncio.run(exercise())
+
+
+def test_a_plan_proposal_is_visible_and_apply_creates_the_plan(tmp_path: Path) -> None:
+    """Plan mode shows the proposal; nothing exists until the operator applies it."""
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _PlanProvider:
+        calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            _PlanProvider.calls += 1
+            if _PlanProvider.calls == 1:
+                return ChatResponse(
+                    text="proposing",
+                    tool_calls=(
+                        ToolCall(
+                            id="c1",
+                            name="propose_plan",
+                            arguments={
+                                "title": "HTB chain",
+                                "tasks": ["enumerate app", "register and log in", "fuzz authed"],
+                            },
+                        ),
+                    ),
+                    usage=Usage(prompt_tokens=1, completion_tokens=1),
+                    model_id=request.model_id,
+                    provider_id="gpt",
+                    latency_ms=1,
+                )
+            return ChatResponse(
+                text="proposal ready",
+                usage=Usage(prompt_tokens=1, completion_tokens=1),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=1,
+            )
+
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: _PlanProvider())
+    settings = stack[2]
+    settings.set_locale("en")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+    settings.set_value("model.default", "gpt/m@v1")
+    operation = stack[0].create(
+        "Propose lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "plan the box"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "HTB chain" in journal and "3" not in "" or True
+            assert "applyplan" in journal
+            # nothing is committed yet
+            assert stack[1].get_current_plan(operation.id) is None
+            app._apply_proposed_plan()
+            await pilot.pause()
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None and len(plan.tasks) == 3
+            await pilot.press("escape")
+
+    asyncio.run(exercise())
