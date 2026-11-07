@@ -113,10 +113,10 @@ def test_the_breaker_half_opens_after_a_cooldown(tmp_path) -> None:  # type: ign
     from samurai_ai.execution.process import ProcessManager
 
     manager = ProcessManager(
-        allowed_executables=frozenset({"false", "true"}),
+        allowed_executables=frozenset({"false", "true", "sleep"}),
     )
     for _ in range(3):
-        asyncio.run(manager.run(["false"], timeout_seconds=5))
+        asyncio.run(manager.run(["sleep", "5"], timeout_seconds=0.3))
     opened_at = time.monotonic()
     manager._breaker_opened_at = opened_at
     from samurai_ai.execution.process import CircuitBreakerOpenError

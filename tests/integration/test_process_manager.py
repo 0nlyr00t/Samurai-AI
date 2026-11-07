@@ -98,14 +98,17 @@ def test_executable_allowlist_is_enforced() -> None:
     asyncio.run(exercise())
 
 
-def test_circuit_breaker_opens_after_consecutive_failures() -> None:
+SLOW = "import time; time.sleep(5)"
+
+
+def test_circuit_breaker_opens_after_consecutive_timeouts() -> None:
+    """The breaker guards the process host: timeouts open it, exit codes do not."""
+
     async def exercise() -> None:
         manager = python_manager(circuit_breaker_threshold=2)
         for _ in range(2):
-            result = await manager.run(
-                [sys.executable, "-c", "import sys; sys.exit(1)"]
-            )
-            assert result.exit_code == 1
+            result = await manager.run([sys.executable, "-c", SLOW], timeout_seconds=0.4)
+            assert result.timed_out
         with pytest.raises(CircuitBreakerOpenError):
             await manager.run(["echo", "blocked"])
         manager.reset_circuit_breaker()
@@ -118,10 +121,24 @@ def test_circuit_breaker_opens_after_consecutive_failures() -> None:
 def test_circuit_breaker_resets_on_success() -> None:
     async def exercise() -> None:
         manager = python_manager(circuit_breaker_threshold=2)
-        await manager.run([sys.executable, "-c", "import sys; sys.exit(1)"])
+        await manager.run([sys.executable, "-c", SLOW], timeout_seconds=0.4)
         await manager.run(["echo", "fine"])
-        await manager.run([sys.executable, "-c", "import sys; sys.exit(1)"])
+        await manager.run([sys.executable, "-c", SLOW], timeout_seconds=0.4)
         result = await manager.run(["echo", "still-open"])
         assert result.exit_code == 0
+
+    asyncio.run(exercise())
+
+
+def test_a_plain_nonzero_exit_does_not_open_the_breaker() -> None:
+    """A grep miss is exit 1 on a healthy host — it must not freeze the run."""
+
+    async def exercise() -> None:
+        manager = python_manager(circuit_breaker_threshold=2)
+        for _ in range(5):
+            result = await manager.run([sys.executable, "-c", "import sys; sys.exit(1)"])
+            assert result.exit_code == 1
+        blocked = await manager.run(["echo", "still-running"])
+        assert blocked.exit_code == 0
 
     asyncio.run(exercise())
