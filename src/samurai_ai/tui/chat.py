@@ -38,7 +38,7 @@ from samurai_ai.domain.kernel import (
     TaskStatus,
 )
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
-from samurai_ai.domain.models import ModelCapability
+from samurai_ai.domain.models import ModelCapability, ProviderUnavailableError
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import classify_command, decide
 from samurai_ai.domain.scope import ScopeContract
@@ -158,6 +158,7 @@ class ChatController:
         _last_ai_text: str | None
         _turn_todo: list[tuple[str, str]]
         _proposed_plan: tuple[str, list[str]] | None
+        _last_user_text: str
         _last_ai_code: str | None
         _thinking_timer: Any
         _thinking_depth: int
@@ -210,6 +211,8 @@ class ChatController:
     _TOOL_ROUNDS_MAX = 200
     _CHAT_HISTORY_LIMIT = 40
     _TOOL_OUTPUT_FEEDBACK_LIMIT = 4000
+    _MODEL_RETRY_ATTEMPTS = 5
+    _MODEL_RETRY_DELAY = 3.0
 
     _CHAT_TOOL_SPECS: tuple[ToolSpec, ...] = (
         ToolSpec(
@@ -579,8 +582,27 @@ class ChatController:
             )
         )
 
+
+    def _write_retry_offer(self) -> None:
+        """Offer to resend the failed turn without retyping it."""
+        text = Text()
+        text.append("[retry] ", style=self.paint("bold risk-mid"))
+        text.append(self.translator.t("chat.retry-hint"), style=self.paint("text"))
+        journal = self.query_one("#journal")
+        journal.write(text)
+
+    def action_retry_turn(self) -> None:
+        """Ctrl+R or the hint's key: resend the last user message unchanged."""
+        text = self._last_user_text
+        if not text or getattr(self, "_chat_busy", False):
+            return
+        self._start_chat(text)
+
     def _end_turn(self, reason: TerminalReason) -> None:
         self._last_turn_reason = reason
+        if reason is TerminalReason.MODEL_ERROR and self._last_user_text:
+            # a dead gateway must not cost the operator their question
+            self._write_retry_offer()
         if reason in (TerminalReason.ROUNDS, TerminalReason.MODEL_ERROR):
             # without a visible note the end of a turn reads as a freeze
             self._write_dim(self.translator.t(f"chat.ended-{reason.value}"), process=False)
@@ -926,6 +948,7 @@ class ChatController:
         if not self._chat_history:
             # rebuilt every launch, never persisted
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
+        self._last_user_text = text
         rounds_left = self._max_tool_rounds()
         promise_nudges = 0
         self._remember(Message(role="user", content=text))
@@ -936,6 +959,35 @@ class ChatController:
                 response = await self._request_chat_completion(
                     operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
                 )
+            except ProviderUnavailableError as exc:
+                # a slow or sick gateway is the common case; the operator sees
+                # the attempt counter instead of a turn that silently dies
+                if exc.auth or self._stop_requested:
+                    self._write_line(f"[error] {exc}")
+                    return TerminalReason.MODEL_ERROR
+                for attempt in range(1, self._MODEL_RETRY_ATTEMPTS + 1):
+                    self._write_dim(
+                        self.translator.t(
+                            "chat.model-retry",
+                            attempt=attempt,
+                            total=self._MODEL_RETRY_ATTEMPTS,
+                        )
+                    )
+                    await asyncio.sleep(self._MODEL_RETRY_DELAY)
+                    try:
+                        response = await self._request_chat_completion(
+                            operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
+                        )
+                        break
+                    except ProviderUnavailableError as retry_exc:
+                        if retry_exc.auth or self._stop_requested:
+                            self._write_line(f"[error] {retry_exc}")
+                            return TerminalReason.MODEL_ERROR
+                        if attempt == self._MODEL_RETRY_ATTEMPTS:
+                            self._write_line(f"[error] {retry_exc}")
+                            return TerminalReason.MODEL_ERROR
+                else:
+                    continue
             except Exception as exc:  # noqa: BLE001 - surfaced to the operator
                 self._write_line(f"[error] {exc}")
                 return TerminalReason.MODEL_ERROR

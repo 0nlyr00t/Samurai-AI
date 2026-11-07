@@ -107,3 +107,4 @@ def test_the_marker_table_covers_every_fallback_phase() -> None:
     for mode, chain in _CHAINS.items():
         missing = set(chain[1:]) - reachable
         assert not missing, f"{mode} has unreachable stages: {missing}"
+
