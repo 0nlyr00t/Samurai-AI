@@ -326,6 +326,14 @@ class BlockJournal(VerticalScroll, can_focus=False):
         block.replace_lines(lines)
         self._mount(block)
 
+    def search(self, term: str) -> list[int]:
+        """Line numbers (0-based) where the term shows up, for / and n/N."""
+        if not term:
+            return []
+        lines = self.text().splitlines()
+        lowered = term.lower()
+        return [index for index, line in enumerate(lines) if lowered in line.lower()]
+
     def expand_oldest(self) -> ToolBlock | None:
         """Open the oldest collapsed block; the operator walks down the reply."""
         for block in self.tool_blocks:
