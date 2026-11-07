@@ -264,6 +264,7 @@ class ModelService:
         fallbacks: tuple[str, ...] = (),
         router: ModelRouter | None = None,
         extra_payload: dict[str, Any] | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> ChatResponse:
         return self.chat(
             operation_id,
@@ -291,6 +292,7 @@ class ModelService:
         fallbacks: tuple[str, ...] = (),
         router: ModelRouter | None = None,
         extra_payload: dict[str, Any] | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> ChatResponse:
         operation = self.operations.get(operation_id)
         model, provider = self._resolve_model(model_id)
@@ -326,6 +328,7 @@ class ModelService:
                     temperature=request.temperature,
                     reasoning_effort=request.reasoning_effort,
                 ),
+                on_token=on_token,
             )
 
         def on_fallback(from_model: str, to_model: str, reason: str) -> None:
@@ -395,9 +398,16 @@ class ModelService:
         return False
 
     async def _complete(
-        self, provider: ProviderDefinition, request: ChatRequest
+        self,
+        provider: ProviderDefinition,
+        request: ChatRequest,
+        on_token: Callable[[str], None] | None = None,
     ) -> ChatResponse:
         impl = self._build_provider(provider)
+        stream = getattr(impl, "complete_stream", None)
+        if on_token is not None and stream is not None:
+            response: ChatResponse = await stream(request, on_token)
+            return response
         return await impl.complete(request)
 
     def _resolve_model(

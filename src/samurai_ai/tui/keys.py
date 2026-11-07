@@ -48,6 +48,7 @@ ACTIONS: tuple[Action, ...] = (
     Action("op_next", "ctrl+tab", "keys.action.op-next", priority=True),
     Action("op_previous", "ctrl+shift+tab", "keys.action.op-previous", priority=True),
     Action("op_close", "ctrl+w", "keys.action.op-close", priority=True),
+    Action("toggle_follow", "ctrl+t", "keys.action.follow", priority=True),
     Action("view_journal", "ctrl+1", "keys.action.view-journal", priority=True),
     Action("view_ops", "ctrl+2", "keys.action.view-ops", priority=True),
     Action("view_bounty", "ctrl+3", "keys.action.view-bounty", priority=True),

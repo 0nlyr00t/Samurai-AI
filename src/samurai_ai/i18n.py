@@ -181,6 +181,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.action.op-next": "Next operation",
         "keys.action.op-previous": "Previous operation",
         "keys.action.op-close": "Close this operation tab",
+        "keys.action.follow": "Follow the journal tail",
         "help.keys": "/keys             Rebind the global keys",
         "theme.title": "Theme",
         "theme.hint": "Enter applies · Esc closes",
@@ -412,6 +413,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.ended-model-error": "— turn ended: the model errored —",
         "chat.model-retry": "[retry] model unavailable — attempt {attempt}/{total}",
         "chat.retry-hint": "the last question never reached an answer — Ctrl+R resends it as-is",
+        "journal.follow-on": "follow the tail: on",
+        "journal.follow-off": "follow the tail: off (you read up)",
         "chat.promise-nudge": "[nudge] it promised an action instead of making the call",
         "chat.promise-note": (
             "You described an action instead of performing it. Do it now: "
@@ -804,6 +807,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "keys.action.op-next": "Следующая операция",
         "keys.action.op-previous": "Предыдущая операция",
         "keys.action.op-close": "Закрыть вкладку операции",
+        "keys.action.follow": "Следовать за хвостом журнала",
         "help.keys": "/keys             Перебиндить глобальные клавиши",
         "theme.title": "Тема",
         "theme.hint": "Enter применяет · Esc закрывает",
@@ -1042,6 +1046,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.ended-model-error": "— ход завершён: ошибка модели —",
         "chat.model-retry": "[повтор] модель недоступна — попытка {attempt}/{total}",
         "chat.retry-hint": "последний вопрос не дошёл — Ctrl+R отправит его заново как есть",
+        "journal.follow-on": "слежение за хвостом: вкл",
+        "journal.follow-off": "слежение за хвостом: выкл (вы читаете назад)",
         "chat.promise-nudge": "[пинок] модель пообещала действие вместо вызова",
         "chat.promise-note": (
             "Ты описал действие вместо того, чтобы его выполнить. Сделай это сейчас: "

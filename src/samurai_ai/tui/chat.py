@@ -11,6 +11,7 @@ import base64
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -159,6 +160,7 @@ class ChatController:
         _turn_todo: list[tuple[str, str]]
         _proposed_plan: tuple[str, list[str]] | None
         _last_user_text: str
+        _live_answer: Any
         _last_ai_code: str | None
         _thinking_timer: Any
         _thinking_depth: int
@@ -181,6 +183,7 @@ class ChatController:
         def _refresh_chrome(self) -> None: ...
         def copy_to_clipboard(self, text: str) -> None: ...
         def query_one(self, *args: Any, **kwargs: Any) -> Any: ...
+        def call_from_thread(self, callback: Any, *args: Any) -> Any: ...
         def set_interval(self, *args: Any, **kwargs: Any) -> Any: ...
         def _directory_trusted(self) -> bool: ...
         def _tool_is_read_only(self, tool_id: str) -> bool: ...
@@ -587,6 +590,33 @@ class ChatController:
         )
 
 
+    def _stream_token(self, token: str) -> None:
+        """One token of the model's answer into the live block, thread-safe."""
+        block = self._live_answer
+        if block is None:
+            return
+        # on a worker thread (real run) we hop to the app thread; on the test
+        # harness the pilot runs inline and a hop would deadlock
+        if getattr(self, "_thread_id", None) == threading.get_ident():
+            block.append_token(token)
+        else:
+            self.call_from_thread(block.append_token, token)
+
+    def _begin_live_answer(self) -> None:
+        """Open the streaming block; the final message replaces it."""
+        from samurai_ai.tui.journal import LiveAnswerBlock
+
+        journal = self.query_one("#journal", BlockJournal)
+        block = LiveAnswerBlock()
+        if getattr(self, "_thread_id", None) == threading.get_ident():
+            journal.add_block(block)
+        else:
+            self.call_from_thread(journal.add_block, block)
+        self._live_answer = block
+
+    def _end_live_answer(self) -> None:
+        self._live_answer = None
+
     def _write_retry_offer(self) -> None:
         """Offer to resend the failed turn without retyping it."""
         text = Text()
@@ -901,6 +931,7 @@ class ChatController:
                     tools=tools,
                     reasoning_effort=reasoning,
                     approval_id=approval_id,
+                    on_token=self._stream_token,
                 )
             except ApprovalRequiredError as exc:
                 approval = self.kernel.kernel.get_approval(exc.approval_id)
@@ -956,6 +987,7 @@ class ChatController:
         rounds_left = self._max_tool_rounds()
         promise_nudges = 0
         self._remember(Message(role="user", content=text))
+        self._begin_live_answer()
         for _round in range(rounds_left):
             self._drain_steering()
             self._count_goal_step()
@@ -1003,6 +1035,7 @@ class ChatController:
                 self._remember(Message(role="assistant", content=response.text))
                 self._trim_chat_history()
                 if response.text.strip():
+                    self._end_live_answer()
                     self._write_ai_message(response)
                 else:
                     self._write_dim(self.translator.t("chat.empty-reply"))
@@ -1027,6 +1060,7 @@ class ChatController:
                 self._remember(Message(role="assistant", content=response.text))
                 # the reasoning between tool calls is the turn's narrative —
                 # hiding it leaves the operator watching mute tool blocks
+                self._end_live_answer()
                 self._write_ai_message(response)
             # every call of the round runs even when stopping: a stop is worth
             # nothing until the results are in and checked
