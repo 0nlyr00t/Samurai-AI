@@ -240,6 +240,10 @@ class SamuraiApp(
         height: auto;
         padding: 1 1 0 1;
     }
+    #side-swarm {
+        height: auto;
+        padding: 1 1 0 1;
+    }
     #ops-strip {
         height: 1;
         padding: 0 1;
@@ -617,6 +621,7 @@ class SamuraiApp(
                 yield BlockJournal(id="view-hunt")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
+                yield Static(id="side-swarm")
                 yield Static(id="side-access")
                 yield Static(id="side-creds")
         with Horizontal(id="ops-strip"):
@@ -3146,6 +3151,28 @@ class SamuraiApp(
             text = "~" + text[len(home) :]
         return text
 
+    def _refresh_swarm_panel(self) -> None:
+        """Every running member of the current swarm: task, tool, last note."""
+        panel = self.query_one("#side-swarm", Static)
+        if self.operation is None:
+            panel.update("")
+            return
+        runs = self.agents.list_runs(self.operation.id)
+        active = [run for run in runs if run.status is AgentRunStatus.RUNNING]
+        if not active:
+            panel.update("")
+            return
+        lines = Text()
+        lines.append(self.translator.t("side.swarm") + "\n", style=self.paint("dim accent"))
+        for run in active[:6]:
+            lines.append("▶ ", style=self.paint("risk-mid"))
+            lines.append(f"{run.task_id or run.id[:10]}", style=self.paint("text"))
+            tool = self._agent_now_text(run.task_id or "")
+            if tool:
+                lines.append(f"  {tool.strip()}", style=self.paint("dim text-faint"))
+            lines.append("\n")
+        panel.update(lines)
+
     def _refresh_side_blocks(self) -> None:
         """Hosts we hold access to, and the names of vaulted secrets."""
         from samurai_ai.tui.killchain import access_rows
@@ -3359,6 +3386,7 @@ class SamuraiApp(
             ("\n" + self._short_cwd(), self.paint("accent")),
         )
         self.query_one("#side-workspace", Static).update(workspace)
+        self._refresh_swarm_panel()
         self._refresh_side_blocks()
         model = self.models.default_model()
         directory = self._short_cwd()
