@@ -3266,7 +3266,14 @@ class SamuraiApp(
             for node in self.graph.for_operation(self.operation.id)
             if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
         ]
-        rows = access_rows(facts)
+        # hosts the agent actually touched count too: a hit is access at read
+        # level even before a fact is recorded, otherwise the block never moves
+        touched = [
+            str(run.parameters.get("command", ""))
+            for run in self.execution.list_runs(self.operation.id)
+            if run.exit_code == 0
+        ]
+        rows = access_rows([*facts, *touched[-40:]])
         lines = Text()
         lines.append(self.translator.t("side.access") + "\n", style=self.paint("dim accent"))
         if not rows:
