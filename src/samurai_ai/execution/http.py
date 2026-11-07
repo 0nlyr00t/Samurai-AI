@@ -20,12 +20,22 @@ import http.client
 import socket
 import ssl
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from email.message import Message
 
 from samurai_ai.domain.execution import ToolExecutionError, ToolScopeError, ToolValidationError
 from samurai_ai.domain.scope import ScopeContract, ScopeDecisionReason
+
+
+class ProviderStreamError(ToolExecutionError):
+    """A streamed response that came back as an error status."""
+
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self.body = body
+        super().__init__(f"streamed request answered HTTP {status}")
+
 
 MAX_REDIRECTS = 3
 _ALLOWED_METHODS = frozenset({"GET", "HEAD", "POST"})
@@ -237,6 +247,62 @@ class HttpEgressBroker:
                 body=payload,
                 truncated=truncated,
             )
+        except (OSError, http.client.HTTPException) as exc:
+            raise ToolExecutionError(f"http request failed for {url}: {exc}") from exc
+        finally:
+            connection.close()
+
+    def fetch_stream(
+        self,
+        url: str,
+        *,
+        method: str = "POST",
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 60.0,
+    ) -> Iterator[bytes]:
+        """Yield the response body line by line (SSE-sized), scope still checked.
+
+        Same pin and validation as ``fetch``; the body is not buffered, so a
+        streaming answer shows up token by token instead of at the end.
+        """
+        verb = method.upper()
+        if verb != "POST":
+            raise ToolValidationError("streaming is only allowed with POST")
+        if body is None:
+            raise ToolValidationError("a streaming POST requires a body")
+        self._validate_url(url)
+        parts = urllib.parse.urlsplit(url)
+        hostname = parts.hostname or ""
+        port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+        addresses = self.resolve_and_check(hostname)
+        path = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
+        if parts.scheme.lower() == "https":
+            connection: http.client.HTTPConnection = _PinnedHTTPSConnection(
+                hostname, port, addresses, timeout, verify_tls=self.verify_tls
+            )
+        else:
+            connection = _PinnedHTTPConnection(hostname, port, addresses, timeout)
+        host_header = hostname if parts.port is None else f"{hostname}:{parts.port}"
+        request_headers = {
+            "Host": host_header,
+            "User-Agent": "samurai-ai/0.1 (managed-tool-execution)",
+            "Accept": "text/event-stream",
+            "Connection": "close",
+        }
+        for name, value in (headers or {}).items():
+            request_headers[name] = value
+        try:
+            connection.request(verb, path, body=body, headers=request_headers)
+            response = connection.getresponse()
+            if response.status >= 400:
+                body_out, _truncated = self._read_bounded(response, 1 << 20)
+                raise ProviderStreamError(response.status, body_out)
+            while True:
+                chunk = response.readline()
+                if not chunk:
+                    break
+                yield chunk
         except (OSError, http.client.HTTPException) as exc:
             raise ToolExecutionError(f"http request failed for {url}: {exc}") from exc
         finally:

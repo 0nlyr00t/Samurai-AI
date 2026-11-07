@@ -15,6 +15,7 @@ import json
 import re
 import time
 import urllib.parse
+from collections.abc import Callable
 from typing import Any
 
 from samurai_ai.agents.provider import (
@@ -32,7 +33,7 @@ from samurai_ai.domain.models import (
     parse_model_id,
 )
 from samurai_ai.domain.scope import ScopeContract
-from samurai_ai.execution.http import HttpEgressBroker
+from samurai_ai.execution.http import HttpEgressBroker, ProviderStreamError
 
 DEFAULT_TIMEOUT = 180.0
 _MAX_ERROR_SNIPPET = 200
@@ -135,6 +136,17 @@ def parse_completion(
     )
 
 
+def _json_dict(raw: object) -> dict[str, Any]:
+    """Parse a streamed tool-call argument string into a dict, never raising."""
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 class OpenAICompatProvider:
     def __init__(
         self,
@@ -176,6 +188,93 @@ class OpenAICompatProvider:
         )
         latency_ms = int((time.monotonic() - started) * 1000)
         return parse_completion(request.model_id, self.provider.id, response, latency_ms)
+
+    async def complete_stream(
+        self, request: ChatRequest, on_token: Callable[[str], None]
+    ) -> ChatResponse:
+        """The same call with SSE streaming; text arrives through on_token.
+
+        Falls back to a plain call when the provider does not stream — the
+        answer is identical, just delivered at the end instead of live.
+        """
+        _, model_name = parse_model_id(request.model_id)
+        payload = build_completion_payload(model_name, request)
+        payload["stream"] = True
+        started = time.monotonic()
+        try:
+            text_parts, tool_map, usage = await asyncio.to_thread(
+                self._read_stream, payload, on_token
+            )
+        except ProviderStreamError:
+            raise
+        except Exception:
+            # a gateway without SSE must not break the turn: answer plainly
+            return await self.complete(request)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        calls = tuple(
+            ToolCall(
+                id=str(entry.get("id") or f"call-{index}"),
+                name=str(entry.get("function", {}).get("name", "")),
+                arguments=_json_dict(entry.get("function", {}).get("arguments")),
+            )
+            for index, (_, entry) in enumerate(sorted(tool_map.items()))
+        )
+        return ChatResponse(
+            text="".join(text_parts),
+            tool_calls=calls,
+            usage=usage,
+            model_id=request.model_id,
+            provider_id=self.provider.id,
+            latency_ms=latency_ms,
+        )
+
+    def _read_stream(
+        self, payload: dict[str, Any], on_token: Callable[[str], None]
+    ) -> tuple[list[str], dict[int, dict[str, Any]], Usage]:
+        """Drain the SSE stream into text parts and tool calls."""
+        text_parts: list[str] = []
+        tool_map: dict[int, dict[str, Any]] = {}
+        prompt_tokens = completion_tokens = 0
+        for raw in self.broker.fetch_stream(
+            f"{self.provider.base_url}/chat/completions",
+            body=json.dumps(payload).encode("utf-8"),
+            headers=self._headers(),
+            timeout=self.timeout,
+        ):
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            usage_payload = chunk.get("usage") or {}
+            prompt_tokens = usage_payload.get("prompt_tokens", prompt_tokens)
+            completion_tokens = usage_payload.get("completion_tokens", completion_tokens)
+            for choice in chunk.get("choices") or []:
+                delta = choice.get("delta") or {}
+                piece = delta.get("content")
+                if piece:
+                    text_parts.append(piece)
+                    on_token(piece)
+                for call in delta.get("tool_calls") or []:
+                    index = int(call.get("index", 0))
+                    entry = tool_map.setdefault(
+                        index, {"id": call.get("id", ""), "function": {"name": "", "arguments": ""}}
+                    )
+                    if call.get("id"):
+                        entry["id"] = call["id"]
+                    function = call.get("function") or {}
+                    if function.get("name"):
+                        entry["function"]["name"] = function["name"]
+                    if function.get("arguments"):
+                        entry["function"]["arguments"] += function["arguments"]
+        return text_parts, tool_map, Usage(
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+        )
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json", **self.provider.default_headers}
