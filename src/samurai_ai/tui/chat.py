@@ -150,6 +150,7 @@ class ChatController:
         _turn_started: float | None
         _current_tool: str
         _run_tokens: int
+        _run_cost: float
         _shell_background: bool
         _ctx_tokens: int
         _process_block: list[str]
@@ -941,6 +942,7 @@ class ChatController:
             if response is None:
                 return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
             self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
+            self._add_cost(model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
             if not response.tool_calls:
                 self._remember(Message(role="assistant", content=response.text))
                 self._trim_chat_history()
@@ -995,6 +997,7 @@ class ChatController:
         if final is None:
             return TerminalReason.DENIED
         self._ctx_tokens += final.usage.prompt_tokens + final.usage.completion_tokens
+        self._add_cost(model_id, final.usage.prompt_tokens, final.usage.completion_tokens)
         self._remember(Message(role="assistant", content=final.text))
         self._trim_chat_history()
         if final.text.strip():
@@ -1022,6 +1025,14 @@ class ChatController:
             self._remember(await self._run_chat_tool(call))
         if response.text.strip():
             self._remember(Message(role="assistant", content=response.text))
+
+    def _add_cost(self, model_id: str, prompt_tokens: int, completion_tokens: int) -> None:
+        """Accumulate the run's spend; free models simply add nothing."""
+        try:
+            model, _provider = self.models.resolve_model(model_id)
+        except Exception:  # noqa: BLE001 - an unpriced model is not an error
+            return
+        self._run_cost += model.estimate_cost(prompt_tokens, completion_tokens)
 
     def _max_tool_rounds(self) -> int:
         """Tool rounds per turn: the operator's setting, bounded, default 32.

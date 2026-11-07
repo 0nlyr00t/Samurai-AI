@@ -453,6 +453,7 @@ class SamuraiApp(
         self._shell_background = False
         # live status: what the running turn is doing right now
         self._run_tokens = 0
+        self._run_cost = 0.0
         self._turn_started: float | None = None
         self._current_tool = ""
         self._expandable: list[tuple[str, int | None, str, str]] = []
@@ -3232,6 +3233,8 @@ class SamuraiApp(
             bar.append(f" | model={model} reasoning={reasoning}")
         bar.append(f" | ctx {self._ctx_tokens} tok")
         bar.append(f" | Σ {self._run_tokens} tok")
+        if getattr(self, "_run_cost", 0.0):
+            bar.append(f" | ${self._run_cost:.4f}")
         if self._turn_started is not None:
             elapsed = int(time.monotonic() - self._turn_started)
             bar.append(f" | ⏱ {elapsed // 60}:{elapsed % 60:02d}", style=self.paint("$accent"))
