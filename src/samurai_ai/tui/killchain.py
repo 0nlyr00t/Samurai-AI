@@ -9,6 +9,7 @@ without flags still reads as a campaign instead of an empty rail.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
@@ -50,6 +51,7 @@ _MARKERS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("initial access", "первичный доступ", "phish", "vpn"), ("initial-access",)),
     (("enum", "enumerat", "перечисл", "surface", "поверхность"), ("surface", "recon")),
     (("recon", "разведк", "scan", "nmap", "discovery"), ("recon",)),
+    (("report", "отчёт", "otchet", "debrief", "export"), ("report",)),
 )
 
 _IMPACT_PHASE = {
@@ -140,3 +142,43 @@ def nodes_to_payloads(nodes: Iterable[object]) -> list[dict[str, object]]:
         if getattr(node, "kind", None) is NodeKind.FACT
         and getattr(node, "state", None) is NodeState.CONFIRMED
     ]
+
+
+#: Anything that looks like a host worth naming in the side block.
+_HOST_RE = re.compile(
+    r"\b(?:\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9][a-z0-9.-]*\.(?:htb|local|lan|internal|com|net|io|org))\b",
+    re.IGNORECASE,
+)
+
+#: What level of access a fact reports, strongest last.
+_LEVEL_RE = (
+    ("root", ("root", "uid=0", "system", "domain admin", "administrator")),
+    ("user", ("user", "uid=", "shell", "ssh", "www-data", "session")),
+    ("read", ("read", "listing", "banner", "enum")),
+)
+
+
+@dataclass(frozen=True)
+class AccessRow:
+    host: str
+    level: str
+    note: str
+
+
+def access_rows(facts: Iterable[str]) -> list[AccessRow]:
+    """Hosts named by confirmed facts, with the strongest level each reached."""
+    found: dict[str, AccessRow] = {}
+    order = {"read": 0, "user": 1, "root": 2}
+    for text in facts:
+        hosts = _HOST_RE.findall(text)
+        if not hosts:
+            continue
+        lowered = text.lower()
+        level = next(
+            (name for name, markers in _LEVEL_RE if any(m in lowered for m in markers)), "read"
+        )
+        for host in hosts:
+            previous = found.get(host)
+            if previous is None or order[level] > order[previous.level]:
+                found[host] = AccessRow(host, level, text[:80])
+    return list(found.values())

@@ -6002,3 +6002,23 @@ def test_a_plain_operation_without_gates_falls_back_to_its_mode_chain(tmp_path: 
             assert "recon" in text and "verified" in text
 
     asyncio.run(exercise())
+
+
+def test_the_side_column_lists_access_and_secret_names(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Side lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[5].add("n8n-api-key", "x", operation.id)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            access = str(app.query_one("#side-access", Static).render())
+            creds = str(app.query_one("#side-creds", Static).render())
+            assert "no confirmed access" in access
+            assert "n8n-api-key" in creds
+
+    asyncio.run(exercise())
