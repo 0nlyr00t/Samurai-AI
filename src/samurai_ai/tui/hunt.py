@@ -118,6 +118,12 @@ class HuntController:
         lines: list[str | Text] = [
             Text(self.translator.t("hunt.title-stats"), style=self.paint("bold $accent"))
         ]
+        for title, status in getattr(self, "_turn_todo", []):
+            mark = {"done": "✓", "in_progress": "▶"}.get(status, "·")
+            token = {"done": "success", "in_progress": "risk-mid"}.get(status, "dim text-faint")
+            lines.append(Text(f"{mark} {title}", style=self.paint(token)))
+        if getattr(self, "_turn_todo", []):
+            lines.append(Text())
         counts = tally(self._hunt_tasks())
         if not counts:
             lines.append(
