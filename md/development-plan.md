@@ -403,3 +403,12 @@ circuit breaker полуоткрывается после остывания, HE
 `/resume` и цена в статусе (FR-104). Концепт B целиком (сессии-beacons)
 и C (evidence-first отчёт) отложены: B требует сессий как объектов домена,
 C — отдельного режима отчёта.
+
+### Открытая нитка: визибилити GHCR
+
+Пакеты белтов `ghcr.io/0nlyr00t/samurai-{ops,remote}` остаются приватными.
+Перевод в public не проходит: `PATCH /user/packages/container/<pkg>` и
+`PUT /user/packages/container/<pkg>/visibility` дают 404 и с OAuth-токеном gh
+(scope `write:packages` есть), и с `GITHUB_TOKEN` внутри workflow — нужен
+классический PAT со `delete:packages` либо ручное переключение в настройках
+пакета. Пока в подсказке preflight пишем `docker login ghcr.io`.
