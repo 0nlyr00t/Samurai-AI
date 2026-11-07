@@ -101,3 +101,41 @@ def test_streaming_falls_back_to_a_plain_call_without_sse(tmp_path: Path) -> Non
         lambda _t: None,
     ))
     assert response.text == "plain"
+
+
+def test_swarm_merge_folds_duplicate_findings(tmp_path: Path) -> None:
+    """Two members finding the same bug end up as one row with the most evidence."""
+    from samurai_ai.cli import _make_services
+    from samurai_ai.domain.kernel import PlanTask, RiskClass
+    from samurai_ai.domain.operations import OperationMode, ScopeContract
+
+    services = _make_services(tmp_path / "t.db")
+    operations, kernel, swarms = services[0], services[1], services[14]
+    operation = operations.create(
+        "Merge lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    kernel.create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="t-1", title="Scan", risk_class=RiskClass.R1)],
+        [],
+    )
+    swarm = swarms.start(operation.id, ["t-1"], ["fake/agent@v1"])
+    # two findings with the same title: the first has evidence, the second not
+    first = kernel.record_finding(
+        operation.id, "SQL injection in /login", "error-based", evidence_ids=("art_1",)
+    ) if hasattr(kernel, "record_finding") else None
+    # findings live in the kernel repo; write directly if no service wrapper
+    from samurai_ai.domain.kernel import Finding
+    from samurai_ai.domain.operations import OperationEvent
+
+    repo = kernel.kernel
+    a = Finding(operation_id=operation.id, title="SQL injection in /login", evidence_ids=("a1", "a2"))
+    b = Finding(operation_id=operation.id, title="sql injection in /login", evidence_ids=())
+    repo.add_finding(a, OperationEvent(operation_id=operation.id, event_type="finding.proposed", payload={"finding_id": a.id}))
+    repo.add_finding(b, OperationEvent(operation_id=operation.id, event_type="finding.proposed", payload={"finding_id": b.id}))
+
+    report = swarms.merge_findings(swarm.id)
+    assert report["merged"] == 1
+    assert any(dup == b.id and keeper == a.id for dup, keeper in report["duplicates"])
+    assert repo.get_finding(b.id).duplicate_of == a.id
