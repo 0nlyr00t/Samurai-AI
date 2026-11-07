@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.swarm import AgentSpecialization
@@ -116,3 +117,48 @@ class AgentRunRepository:
                 datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None
             ),
         )
+
+
+class RunCheckpointRepository:
+    """One resume point per run: the steps and the next index."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def save(self, run_id: str, operation_id: str, task_id: str,
+             steps: Sequence[str], next_index: int) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO run_checkpoints
+                (run_id, operation_id, task_id, steps, next_index, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    steps = excluded.steps,
+                    next_index = excluded.next_index,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    run_id,
+                    operation_id,
+                    task_id,
+                    json.dumps(list(steps)),
+                    next_index,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+
+    def get(self, run_id: str) -> tuple[tuple[str, ...], int] | None:
+        """The steps and where to resume, or None when there is no checkpoint."""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT steps, next_index FROM run_checkpoints WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return tuple(json.loads(row["steps"])), int(row["next_index"])
+
+    def drop(self, run_id: str) -> None:
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM run_checkpoints WHERE run_id = ?", (run_id,))
