@@ -205,6 +205,12 @@ class SamuraiApp(
     #body {
         height: 1fr;
     }
+    #killchain {
+        height: 1;
+        padding: 0 1;
+        background: $panel-alt;
+        display: none;
+    }
     #views {
         width: 1fr;
         height: 100%;
@@ -398,6 +404,7 @@ class SamuraiApp(
         self._tab_activations_seen: int = 0
         self._selection_copy_timer: Timer | None = None
         self._last_auto_copy: str | None = None
+        self._killchain_phase: str = ""
         self._chat_history: list[Message] = []
         self._progress = Stagnation()
         self._graph_used = False
@@ -585,6 +592,7 @@ class SamuraiApp(
             yield PlusButton("+", id="new-tab")
             yield Static(id="topbar-space")
             yield Static(id="brand")
+        yield Static(id="killchain")
         yield Static(id="welcome")
         with Horizontal(id="body"):
             with ContentSwitcher(initial="journal", id="views"):
@@ -2930,6 +2938,95 @@ class SamuraiApp(
             text = "~" + text[len(home) :]
         return text
 
+    def _killchain(self) -> Any:
+        """The stage rail for the current operation; empty when there is none."""
+        from samurai_ai.tui.killchain import KillChain, nodes_to_payloads, phase_for
+
+        if self.operation is None:
+            return KillChain((), "", "", 0, 0)
+        plan = self.kernel.get_current_plan(self.operation.id)
+        tasks = list(plan.tasks) if plan else []
+        gate_total = len(plan.gates) if plan else 0
+        gate_passed = sum(1 for gate in plan.gates if gate.status.value == "passed") if plan else 0
+        findings = self.kernel.kernel.list_findings(self.operation.id)
+        verified = sum(1 for f in findings if f.evidence_ids)
+        flags = self.ctf.list_flags(self.operation.id)
+        challenge = self._challenge_flag_total()
+        facts = nodes_to_payloads(self.graph.for_operation(self.operation.id))
+        levels = self._impact_levels(self.operation.id)
+        return phase_for(
+            self.operation.mode,
+            tasks,
+            fact_payloads=facts,
+            impact_levels=levels,
+            flag_count=len(flags),
+            flag_total=challenge,
+            verified_findings=verified,
+            gate_passed=gate_passed,
+            gate_total=gate_total,
+            chain=tuple(gate.id for gate in plan.gates) if plan and plan.gates else None,
+        )
+
+    def _challenge_flag_total(self) -> int:
+        """How many flags the challenge has, when the operation is one."""
+        try:
+            challenge = self.ctf.get_challenge(self.operation.id)  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 - a non-CTF operation has none
+            return 0
+        return 2 if challenge is not None else 0
+
+    def _impact_levels(self, operation_id: str) -> list[str]:
+        return [
+            str(event.payload.get("level"))
+            for event in self.service.events(operation_id)
+            if event.event_type == "impact.attempt" and event.payload.get("level")
+        ]
+
+    def _phase_label(self, phase: str) -> str:
+        """A translated stage name, or the raw gate id made readable."""
+        key = "killchain.phase." + phase
+        label = self.translator.t(key)
+        return phase.replace("-", " ") if label == key else label
+
+    def _refresh_killchain(self) -> None:
+        widget = self.query_one("#killchain", Static)
+        chain = self._killchain()
+        if not chain:
+            widget.display = False
+            return
+        widget.display = True
+        line = Text()
+        for phase in chain.phases:
+            if phase == chain.current:
+                line.append(f"▶ {self._phase_label(phase)} ",
+                            style=self.paint("bold risk-mid"))
+            else:
+                done = chain.phases.index(phase) < chain.phases.index(chain.current)
+                mark = "✓" if done else "·"
+                line.append(f"{mark} {self._phase_label(phase)} ",
+                            style=self.paint("success" if done else "dim text-faint"))
+        if chain.counter_label:
+            total = f"/{chain.counter_total}" if chain.counter_total else ""
+            line.append(
+                f"│ {self.translator.t('killchain.counter.' + chain.counter_label)} "
+                f"{chain.counter_done}{total}",
+                style=self.paint("accent"),
+            )
+        widget.update(line)
+        if chain.current and chain.current != self._killchain_phase:
+            previous, self._killchain_phase = self._killchain_phase, chain.current
+            if previous:
+                self._write_dim(
+                    self.translator.t(
+                        "killchain.moved",
+                        **{
+                            "from": self._phase_label(previous),
+                            "to": self._phase_label(chain.current),
+                        },
+                    ),
+                    process=False,
+                )
+
     def _refresh_welcome(self) -> None:
         welcome = self.query_one("#welcome", Static)
         if self.operation is not None:
@@ -2965,6 +3062,7 @@ class SamuraiApp(
         self._refresh_chrome()
 
     def _refresh_chrome(self) -> None:
+        self._refresh_killchain()
         self._refresh_welcome()
         self.query_one("#brand", Static).update(self._brand_text())
         self.query_one("#tab-chat", Tab).label = self._chat_label()
