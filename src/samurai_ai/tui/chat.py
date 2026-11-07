@@ -158,7 +158,7 @@ class ChatController:
         _DIM_STYLE: str
         _last_ai_text: str | None
         _turn_todo: list[tuple[str, str]]
-        _proposed_plan: tuple[str, list[str]] | None
+        _proposed_plan: tuple[str, list[dict[str, object]]] | None
         _last_user_text: str
         _live_answer: Any
         _last_ai_code: str | None
@@ -451,7 +451,31 @@ class ChatController:
                         "type": "array",
                         "minItems": 1,
                         "maxItems": 12,
-                        "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "items": {
+                            "oneOf": [
+                                {"type": "string", "minLength": 1, "maxLength": 200},
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200,
+                                        },
+                                        "depends_on": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                        },
+                                        "risk_class": {
+                                            "type": "string",
+                                            "enum": ["R0", "R1", "R2", "R3", "R4"],
+                                        },
+                                    },
+                                    "required": ["title"],
+                                    "additionalProperties": False,
+                                },
+                            ]
+                        },
                     },
                     "notes": {"type": "string", "maxLength": 600},
                 },
@@ -1363,14 +1387,38 @@ class ChatController:
             return Message(
                 role="user", content="[tool propose_plan] title and tasks are required"
             )
-        tasks = [str(item).strip() for item in raw_tasks if str(item).strip()][:12]
+        tasks: list[dict[str, object]] = []
+        for item in raw_tasks[:12]:
+            if isinstance(item, str):
+                title_text = item.strip()
+                if title_text:
+                    tasks.append({"title": title_text})
+            elif isinstance(item, dict):
+                title_text = str(item.get("title", "")).strip()
+                if not title_text:
+                    continue
+                entry: dict[str, object] = {"title": title_text}
+                if item.get("depends_on"):
+                    entry["depends_on"] = [
+                        str(dep) for dep in item["depends_on"] if str(dep).strip()
+                    ]
+                if item.get("risk_class"):
+                    entry["risk_class"] = str(item["risk_class"])
+                tasks.append(entry)
         if not tasks:
             return Message(role="user", content="[tool propose_plan] no tasks given")
         self._proposed_plan = (title, tasks)
         block = Text()
         block.append("≡ " + title, style=self.paint("bold $accent"))
         for index, task in enumerate(tasks, start=1):
-            block.append(f"\n  {index}. {task}", style=self.paint("$text"))
+            label = str(task["title"])
+            if task.get("depends_on"):
+                raw_deps = task["depends_on"]
+                deps = [str(d) for d in raw_deps] if isinstance(raw_deps, list) else []
+                label += " ← " + ", ".join(deps)
+            if task.get("risk_class"):
+                label += f" [{task['risk_class']}]"
+            block.append(f"\n  {index}. {label}", style=self.paint("$text"))
         notes = str(call.arguments.get("notes", "") or "").strip()
         if notes:
             block.append("\n" + notes, style=self.paint("dim"))
