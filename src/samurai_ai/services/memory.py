@@ -19,15 +19,19 @@ from samurai_ai.domain.memory import (
     MemoryNotFoundError,
 )
 from samurai_ai.services.vault import VaultService
-from samurai_ai.storage.memory import MemoryRepository
+from samurai_ai.storage.memory import MemoryRepository, MemorySearchRepository
 
 
 class CampaignMemoryService:
     def __init__(
-        self, memory: MemoryRepository, vault: VaultService | None = None
+        self,
+        memory: MemoryRepository,
+        vault: VaultService | None = None,
+        search: MemorySearchRepository | None = None,
     ) -> None:
         self.memory = memory
         self.vault = vault
+        self.search = search
 
     def add(
         self,
@@ -50,6 +54,8 @@ class CampaignMemoryService:
             created_by=created_by,
         )
         self.memory.add(entry)
+        if self.search is not None:
+            self.search.index(entry)
         return entry
 
     def get(self, entry_id: str) -> MemoryEntry:
@@ -99,6 +105,17 @@ class CampaignMemoryService:
 
     def purge_expired(self) -> list[str]:
         return self.memory.purge_expired()
+
+    def recall(self, query: str, limit: int = 8) -> list[MemoryEntry]:
+        """Past entries that answer the query, best first; empty without a match."""
+        if self.search is None:
+            return []
+        entries = []
+        for entry_id in self.search.search(query, limit):
+            entry = self.memory.get(entry_id)
+            if entry is not None:
+                entries.append(entry)
+        return entries
 
     def digest(self, workspace: str) -> tuple[str, tuple[str, ...]]:
         """Bounded, redacted read-only view for agent prompts.

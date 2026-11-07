@@ -40,6 +40,7 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.memory import CampaignMemoryService
+from samurai_ai.storage.memory import MemorySearchRepository
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
 from samurai_ai.services.planning import PlanningService
@@ -164,7 +165,9 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
     agents.add(swarm_member)
     swarm_member.finish(AgentRunStatus.COMPLETED)
     agents.finish(swarm_member)
-    memory = CampaignMemoryService(MemoryRepository(database))
+    memory = CampaignMemoryService(
+        MemoryRepository(database), search=MemorySearchRepository(database)
+    )
     memory.add("tui-ws", "TUI methodology", kind=MemoryKind.METHODOLOGY)
     skills = SkillService(SkillRepository(database), gaps=SkillGapRepository(database))
     skills.install("tui-skill", "TUI skill body", trusted=True)
@@ -386,7 +389,9 @@ def _minimal_stack(tmp_path: Path, provider_factory=None, trust_cwd: bool = True
         PlanningService(service, kernel, PlanningRepository(database)),
         SwarmRunRepository(database),
         GoalService(OperationService(OperationRepository(database)), GoalRepository(database)),
-        CampaignMemoryService(MemoryRepository(database)),
+        CampaignMemoryService(
+            MemoryRepository(database), search=MemorySearchRepository(database)
+        ),
         SkillService(SkillRepository(database), gaps=SkillGapRepository(database)),
         models,
     )
@@ -6711,5 +6716,47 @@ def test_the_attack_map_shows_once_two_hosts_have_access(tmp_path: Path) -> None
             assert panel.display
             text = str(panel.render())
             assert "☠ 10.0.0.5" in text and "● 10.0.0.9" in text
+
+    asyncio.run(exercise())
+
+
+def test_a_turn_recalls_matching_memory_into_the_context(tmp_path: Path) -> None:
+    """The model sees the SSTI note when the user asks about a template."""
+    class _Echo:
+        requests: list = []
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self):
+            return ["m"]
+
+        async def complete(self, request):
+            from samurai_ai.agents.provider import ChatResponse, Usage
+
+            _Echo.requests.append(request)
+            return ChatResponse(text="ok", usage=Usage(), model_id=request.model_id,
+                                provider_id="gpt", latency_ms=1)
+
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: _Echo())
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "gpt/m@v1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+    stack[15].add("ws", "SSTI in ticket notes", "Go template .File reads /proc/self/environ")
+    stack[15].add("ws", "Unrelated", "nothing here")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "what about the template?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            system = [m for m in _Echo.requests[0].messages if m.role == "system"]
+            assert any("SSTI in ticket notes" in m.content for m in system)
+            assert not any("Unrelated" in m.content for m in system)
 
     asyncio.run(exercise())
