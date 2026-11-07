@@ -407,10 +407,45 @@ def test_subagent_depth_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     )
     assert child.depth == 1
 
+    # depth 2 is the helper level now; depth 3 is still refused
+    make_plan_for_third_task(kernel2, operation_id)
+    fake.queue(
+        '{"steps": ["s"]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+    )
+    grandchild = orchestrator.run_task(
+        operation_id, "probe3", [MODEL_ID], parent_run_id=child.id
+    )
+    assert grandchild.depth == 2
     with pytest.raises(AgentDepthError, match="max_depth"):
         orchestrator.run_task(
-            operation_id, "probe2", [MODEL_ID], parent_run_id=child.id
+            operation_id, "probe3", [MODEL_ID], parent_run_id=grandchild.id
         )
+
+
+def make_plan_for_third_task(kernel: KernelService, operation_id: str) -> None:
+    plan = kernel.get_current_plan(operation_id)
+    assert plan is not None
+    from samurai_ai.domain.kernel import PlanTask, RiskClass
+
+    expected_version = plan.version
+    plan.tasks = tuple(plan.tasks) + (
+        PlanTask(id="probe3", title="Third", risk_class=RiskClass.R1),
+    )
+    plan.touch()
+    from samurai_ai.domain.operations import OperationEvent
+
+    kernel.kernel.save_plan(
+        plan,
+        expected_version,
+        OperationEvent(
+            operation_id=operation_id,
+            event_type="plan.revised",
+            payload={"plan_id": plan.id},
+        ),
+    )
+    kernel.start_task(operation_id, "probe3")
+    kernel.register_artifact(operation_id, ArtifactKind.NOTE, "seed", task_id="probe3")
 
 
 def make_plan_for_second_task(kernel: KernelService, operation_id: str) -> None:

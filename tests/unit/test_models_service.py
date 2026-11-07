@@ -27,7 +27,9 @@ def test_a_handwritten_prlctl_command_is_requoted(tmp_path: Path) -> None:
 
     # the helper is a pure function of the command; call it unbound
     normalize = ChatController._normalize_prlctl
-    out = normalize(None, "prlctl exec {1381d6d4-31a6-4aee-ab87-4193b12e98ae} curl -s http://10.0.0.5/")
+    out = normalize(
+        None, "prlctl exec {1381d6d4-31a6-4aee-ab87-4193b12e98ae} curl -s http://10.0.0.5/"
+    )
     assert out.startswith("prlctl exec ")
     assert "curl" in out and "http://10.0.0.5/" in out
     # already-quoted or unrelated commands pass through unchanged
@@ -47,13 +49,17 @@ def test_streaming_completion_arrives_token_by_token(tmp_path: Path) -> None:
             lines = [
                 b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n',
                 b'data: {"choices":[{"delta":{"content":"lo"}}]}\n',
-                b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"shell_exec","arguments":"{\\"command\\":\\"echo hi\\"}"}}]}}]}\n',
-                b'data: [DONE]\n',
+                (
+                    b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                    b'"id":"c1","function":{"name":"shell_exec",'
+                    b'"arguments":"{\\"command\\":\\"echo hi\\"}"}}]}}]}\n'
+                ),
+                b"data: [DONE]\n",
             ]
             yield from lines
 
     from samurai_ai.agents.openai_compat import OpenAICompatProvider
-    from samurai_ai.domain.models import ModelDefinition, ProviderDefinition
+    from samurai_ai.domain.models import ProviderDefinition
 
     provider_def = ProviderDefinition(
         id="fake", name="fake", base_url="http://fake", api_family="openai-compatible"
@@ -76,30 +82,40 @@ def test_streaming_falls_back_to_a_plain_call_without_sse(tmp_path: Path) -> Non
     """A gateway that rejects stream=true must still answer."""
     import asyncio
 
-    from samurai_ai.agents.provider import ChatRequest, ChatResponse, Message, Usage
     from samurai_ai.agents.openai_compat import OpenAICompatProvider
+    from samurai_ai.agents.provider import ChatRequest, Message
     from samurai_ai.domain.models import ProviderDefinition
 
     class _NoStreamBroker:
         def fetch(self, url, **kwargs):
             from samurai_ai.execution.http import HttpResponse
+
             return HttpResponse(
-                url=url, status=200, reason="OK",
+                url=url,
+                status=200,
+                reason="OK",
                 body=b'{"choices":[{"message":{"role":"assistant","content":"plain"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}',
-                truncated=False, redirects=(),
+                truncated=False,
+                redirects=(),
             )
+
         def fetch_stream(self, url, **kwargs):
             from samurai_ai.domain.execution import ToolExecutionError
+
             raise ToolExecutionError("no stream")
 
     provider_def = ProviderDefinition(
         id="fake", name="fake", base_url="http://fake", api_family="openai-compatible"
     )
     provider = OpenAICompatProvider(provider_def, None, broker=_NoStreamBroker())  # type: ignore[arg-type]
-    response = asyncio.run(provider.complete_stream(
-        ChatRequest(model_id="fake/m@v1", messages=(Message(role="user", content="hi"),), tools=()),
-        lambda _t: None,
-    ))
+    response = asyncio.run(
+        provider.complete_stream(
+            ChatRequest(
+                model_id="fake/m@v1", messages=(Message(role="user", content="hi"),), tools=()
+            ),
+            lambda _t: None,
+        )
+    )
     assert response.text == "plain"
 
 
@@ -121,19 +137,27 @@ def test_swarm_merge_folds_duplicate_findings(tmp_path: Path) -> None:
         [],
     )
     swarm = swarms.start(operation.id, ["t-1"], ["fake/agent@v1"])
-    # two findings with the same title: the first has evidence, the second not
-    first = kernel.record_finding(
-        operation.id, "SQL injection in /login", "error-based", evidence_ids=("art_1",)
-    ) if hasattr(kernel, "record_finding") else None
     # findings live in the kernel repo; write directly if no service wrapper
     from samurai_ai.domain.kernel import Finding
     from samurai_ai.domain.operations import OperationEvent
 
     repo = kernel.kernel
-    a = Finding(operation_id=operation.id, title="SQL injection in /login", evidence_ids=("a1", "a2"))
+    a = Finding(
+        operation_id=operation.id, title="SQL injection in /login", evidence_ids=("a1", "a2")
+    )
     b = Finding(operation_id=operation.id, title="sql injection in /login", evidence_ids=())
-    repo.add_finding(a, OperationEvent(operation_id=operation.id, event_type="finding.proposed", payload={"finding_id": a.id}))
-    repo.add_finding(b, OperationEvent(operation_id=operation.id, event_type="finding.proposed", payload={"finding_id": b.id}))
+    repo.add_finding(
+        a,
+        OperationEvent(
+            operation_id=operation.id, event_type="finding.proposed", payload={"finding_id": a.id}
+        ),
+    )
+    repo.add_finding(
+        b,
+        OperationEvent(
+            operation_id=operation.id, event_type="finding.proposed", payload={"finding_id": b.id}
+        ),
+    )
 
     report = swarms.merge_findings(swarm.id)
     assert report["merged"] == 1
@@ -166,3 +190,13 @@ def test_replay_scrubs_to_a_prefix() -> None:
     assert len(all_lines) == 2
     assert len(replay_lines(events, upto=1)) == 1
     assert "tool.run.started" in all_lines[0]
+
+
+def test_the_second_level_runs_a_third_of_the_budget(tmp_path: Path) -> None:
+    """depth 1 is the helper level: its steps and wall are cut by three."""
+    # the constant moved: the second level exists now
+    from samurai_ai.agents import orchestrator
+    from samurai_ai.agents.orchestrator import DEFAULT_MAX_STEPS
+
+    assert orchestrator.DEFAULT_MAX_DEPTH == 2
+    assert DEFAULT_MAX_STEPS > 0
