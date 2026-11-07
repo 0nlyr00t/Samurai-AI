@@ -408,7 +408,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "the far side and prefix them with the relay verbatim — do not write "
             "your own wrapper script."
         ),
-        "chat.tool-limit": "tool round limit reached — settling what is already known",
+        "chat.tool-limit": "round budget spent — settling what is known, then continuing",
+        "chat.auto-continue": "[continue {index}/{total}] still working on the goal",
+        "chat.continue-note": (
+            "The round budget refilled. Keep going from where you are: do not "
+            "restate the plan, make the next call."
+        ),
         "chat.ended-rounds": (
             "— turn ended: the round budget is spent; ask it to continue "
             "(raise the ceiling in /settings) —"
@@ -574,6 +579,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "side.access": "ACCESS",
         "side.access-empty": "no confirmed access",
         "side.creds": "SECRETS",
+        "side.secret-saved": "[vault] stored {name}",
         "side.creds-empty": "no vaulted secrets",
         "side.workspace": "workspace",
         "newop.title": "New operation tab",
@@ -1048,7 +1054,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Релей в VM этой операции: `{relay}`; пиши команды под удалённую "
             "сторону и ставь релей перед ними дословно — своих обёрток не пиши."
         ),
-        "chat.tool-limit": "лимит раундов команд — подвожу итог без инструментов",
+        "chat.tool-limit": "бюджет раундов исчерпан — фиксирую известное и продолжаю",
+        "chat.auto-continue": "[продолжение {index}/{total}] ещё работаю над целью",
+        "chat.continue-note": (
+            "Бюджет раундов пополнен. Продолжай с того места, где остановился: "
+            "не пересказывай план, делай следующий вызов."
+        ),
         "chat.ended-rounds": (
             "— ход завершён: бюджет раундов исчерпан, скажи «продолжай» "
             "(потолок — в /settings) —"
@@ -1217,6 +1228,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "side.access": "ДОСТУПЫ",
         "side.access-empty": "подтверждённых доступов нет",
         "side.creds": "СЕКРЕТЫ",
+        "side.secret-saved": "[хранилище] сохранён {name}",
         "side.creds-empty": "секретов в хранилище нет",
         "side.workspace": "рабочая папка",
         "newop.title": "Новая вкладка операции",
