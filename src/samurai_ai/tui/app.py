@@ -3119,10 +3119,8 @@ class SamuraiApp(
         ]
 
     def _phase_label(self, phase: str) -> str:
-        """A translated stage name, or the raw gate id made readable."""
-        key = "killchain.phase." + phase
-        label = self.translator.t(key)
-        return phase.replace("-", " ") if label == key else label
+        """Stage names stay English in every locale — they are terms of art."""
+        return phase.replace("-", " ")
 
     def _refresh_killchain(self) -> None:
         widget = self.query_one("#killchain", Static)
