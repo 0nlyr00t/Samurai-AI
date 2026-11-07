@@ -16,7 +16,14 @@ from typing import Any
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
-from samurai_ai.domain.kernel import Approval, OperationPlan, PlanTask, RiskClass, TaskStatus
+from samurai_ai.domain.kernel import (
+    Approval,
+    Finding,
+    OperationPlan,
+    PlanTask,
+    RiskClass,
+    TaskStatus,
+)
 from samurai_ai.domain.models import parse_model_id
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.swarm import (
@@ -185,6 +192,47 @@ class SwarmService:
             final = SwarmStatus.PARTIAL
         self._finish(swarm, final)
         return self.get_swarm(swarm.id)
+
+    def merge_findings(self, swarm_id: str) -> dict[str, Any]:
+        """Fold duplicate findings across swarm members into one.
+
+        Members discover the same thing through different doors; the report
+        must not show four rows for one bug. Key: title-normalized
+        (lowercase, no punctuation) plus shared evidence. The surviving row
+        keeps the most evidence; losers are marked duplicate and still kept.
+        """
+        swarm = self.get_swarm(swarm_id)
+        operation_id = swarm.operation_id
+        findings = self.kernel.kernel.list_findings(operation_id)
+        merged: dict[str, list[str]] = {}
+        for finding in findings:
+            key = _finding_key(finding)
+            merged.setdefault(key, []).append(finding.id)
+        duplicates: list[tuple[str, str]] = []
+        for _key, ids in merged.items():
+            if len(ids) < 2:
+                continue
+            keeper = max(
+                (self.kernel.kernel.get_finding(fid) for fid in ids),
+                key=lambda f: len(f.evidence_ids) if f else 0,
+            )
+            keeper_id = keeper.id if keeper else ids[0]
+            for fid in ids:
+                if fid == keeper_id:
+                    continue
+                try:
+                    self.kernel.mark_duplicate(fid, keeper_id)
+                    duplicates.append((fid, keeper_id))
+                except Exception:  # noqa: BLE001 - already duplicate
+                    continue
+        return {
+            "swarm_id": swarm_id,
+            "operation_id": operation_id,
+            "merged": sum(1 for ids in merged.values() if len(ids) > 1),
+            "duplicates": duplicates,
+        }
+
+
 
     def report(self, swarm_id: str) -> dict[str, Any]:
         swarm = self.get_swarm(swarm_id)
@@ -362,3 +410,13 @@ class SwarmService:
         self.operations.repository.append_event(
             OperationEvent(operation_id=operation_id, event_type=event_type, payload=payload)
         )
+
+
+def _finding_key(finding: Finding) -> str:
+    """Two findings about the same thing key alike: host+kind from the title,
+    plus whatever evidence they share."""
+    import re
+
+    title = re.sub(r"[^a-z0-9]+", " ", finding.title.lower()).strip()
+    return title
+
