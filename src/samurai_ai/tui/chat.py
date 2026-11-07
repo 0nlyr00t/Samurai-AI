@@ -69,6 +69,16 @@ _IMAGE_TEXT_LIMIT = 4000
 _IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                 ".webp": "image/webp", ".gif": "image/gif"}
 
+_PROMISE_RE = re.compile(
+    r"(?:проверю|проверим|сделаю|попробую|запущу|выполню|начну\b|далее\b|теперь\b"
+    r"|i(?:'| wi)?ll\b|let me\b|going to\b|now i\b|next,? i\b)",
+    re.IGNORECASE,
+)
+# A turn that ends on a promise of action is a broken turn: nudge the model to
+# actually make the call instead of closing "completed". Bounded so a chatty
+# model cannot spend the whole budget on promises.
+_MAX_PROMISE_NUDGES = 2
+
 
 def _resolve_image(raw: str, cwd: Path) -> Path:
     """Absolute-ise against the workspace, then resolve symlinks."""
@@ -855,6 +865,7 @@ class ChatController:
             # rebuilt every launch, never persisted
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
         rounds_left = self._max_tool_rounds()
+        promise_nudges = 0
         self._remember(Message(role="user", content=text))
         for _round in range(rounds_left):
             self._drain_steering()
@@ -881,6 +892,18 @@ class ChatController:
                     return TerminalReason.CANCELLED
                 if self._steer_queue:
                     # the operator steered while this answer was in flight
+                    continue
+                if promise_nudges < _MAX_PROMISE_NUDGES and _PROMISE_RE.search(
+                    response.text or ""
+                ):
+                    promise_nudges += 1
+                    self._write_dim(self.translator.t("chat.promise-nudge"))
+                    self._remember(
+                        Message(
+                            role="user",
+                            content=self.translator.t("chat.promise-note"),
+                        )
+                    )
                     continue
                 return TerminalReason.COMPLETED
             if response.text.strip():
