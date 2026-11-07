@@ -404,6 +404,7 @@ class SamuraiApp(
         self._dir_trusted: bool | None = None
         self._last_ai_text: str | None = None
         self._last_ai_code: str | None = None
+        self._last_user_text: str = ""
         self._ctx_tokens: int = 0
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0

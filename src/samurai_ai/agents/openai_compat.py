@@ -34,7 +34,7 @@ from samurai_ai.domain.models import (
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.http import HttpEgressBroker
 
-DEFAULT_TIMEOUT = 60.0
+DEFAULT_TIMEOUT = 180.0
 _MAX_ERROR_SNIPPET = 200
 
 
