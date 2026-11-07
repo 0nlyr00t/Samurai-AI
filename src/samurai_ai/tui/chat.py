@@ -66,8 +66,13 @@ if TYPE_CHECKING:
 LEARN_BODY_LIMIT = 500
 _IMAGE_MAX_BYTES = 8 * 1024 * 1024
 _IMAGE_TEXT_LIMIT = 4000
-_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                ".webp": "image/webp", ".gif": "image/gif"}
+_IMAGE_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
 
 _PROMISE_RE = re.compile(
     r"(?:проверю|проверим|сделаю|попробую|запущу|выполню|начну\b|далее\b|теперь\b"
@@ -126,6 +131,7 @@ class ChatController:
         _cwd: Any
 
         def paint(self, style: str) -> str: ...
+
         _chat_history: list[Message]
         _progress: Stagnation
         _last_turn_reason: TerminalReason | None
@@ -149,6 +155,7 @@ class ChatController:
         _process_block: list[str]
         _DIM_STYLE: str
         _last_ai_text: str | None
+        _turn_todo: list[tuple[str, str]]
         _last_ai_code: str | None
         _thinking_timer: Any
         _thinking_depth: int
@@ -382,8 +389,42 @@ class ChatController:
                 "additionalProperties": False,
             },
         ),
+        ToolSpec(
+            name="update_todo",
+            description=(
+                "Replace the turn's checklist. Send the whole list every time — it "
+                "is displayed to the operator and replaces what was there. Keep it "
+                "short (2-6 lines): what you are doing now, then what is next. "
+                "Mark an item done as soon as it is done."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "minLength": 1, "maxLength": 120},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "done"],
+                                },
+                            },
+                            "required": ["title", "status"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["items"],
+                "additionalProperties": False,
+            },
+        ),
     )
+    #: Chat tool name → registry tool id, for the ones that are real adapters.
     _CHAT_TOOL_IDS = {"shell_exec": "shell.exec"}
+
     _CHAT_TOOL_HANDLERS = {
         "shell_exec": "_run_shell_tool",
         "agent_spawn": "_run_spawn_tool",
@@ -394,6 +435,7 @@ class ChatController:
         "close_intent": "_run_close_intent_tool",
         "propose_finding": "_run_propose_finding_tool",
         "record_traffic": "_run_record_traffic_tool",
+        "update_todo": "_run_update_todo_tool",
     }
 
     #: Braille spinner, the way quiet harnesses show work in progress.
@@ -515,9 +557,7 @@ class ChatController:
         self._last_turn_reason = reason
         if reason in (TerminalReason.ROUNDS, TerminalReason.MODEL_ERROR):
             # without a visible note the end of a turn reads as a freeze
-            self._write_dim(
-                self.translator.t(f"chat.ended-{reason.value}"), process=False
-            )
+            self._write_dim(self.translator.t(f"chat.ended-{reason.value}"), process=False)
         if self.operation is None:
             return
         self.service.repository.append_event(
@@ -607,6 +647,7 @@ class ChatController:
         self.query_one("#thinking", Static).display = False
 
     def _start_chat(self, text: str) -> None:
+        self._turn_todo: list[tuple[str, str]] = []  # a fresh checklist
         model_id = self.models.default_model()
         if model_id is None:
             self._write_line("[error] " + self.translator.t("chat.no-model"))
@@ -656,9 +697,7 @@ class ChatController:
         self._shell_background = False
         # Shell-mode output lands in the conversation context, so it is marked
         # as untrusted-external exactly like a tool result.
-        self._remember(
-            Message(role="user", content=f"[shell !{command}] (operator command)")
-        )
+        self._remember(Message(role="user", content=f"[shell !{command}] (operator command)"))
         risk = classify_command(command, str(self._cwd))
         badge = f"  [{risk.label()}]" if not risk.empty else ""
         self._write_dim(f"⚙ !{command}{badge}")
@@ -672,12 +711,8 @@ class ChatController:
             reusable=self._reusable_approval("shell.exec"),
         )
         if decision.is_denied:
-            self._write_dim(
-                self.translator.t("chat.tool-denied", command=command), process=False
-            )
-            self._remember(
-                Message(role="user", content=f"[shell !{command}] denied by rule")
-            )
+            self._write_dim(self.translator.t("chat.tool-denied", command=command), process=False)
+            self._remember(Message(role="user", content=f"[shell !{command}] denied by rule"))
             self._shell_running = ""
             return
         ask = decision.action == "ask"
@@ -691,8 +726,8 @@ class ChatController:
             )
             if not allowed:
                 self._write_dim(
-                self.translator.t("chat.tool-denied", command=command), process=False
-            )
+                    self.translator.t("chat.tool-denied", command=command), process=False
+                )
                 self._remember(
                     Message(role="user", content=f"[shell !{command}] denied by the operator")
                 )
@@ -719,16 +754,15 @@ class ChatController:
                 )
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self._write_line(f"[error] {exc}")
-            self._remember(
-                Message(role="user", content=f"[shell !{command}] error: {exc}")
-            )
+            self._remember(Message(role="user", content=f"[shell !{command}] error: {exc}"))
             self._shell_running = ""
             return
         prefix = "[bg] " if self._shell_background else ""
         if not self._graph_used:
             self._progress.last_stuck = self._progress.record(command)
         self._write_tool_block(
-            prefix + self.translator.t(
+            prefix
+            + self.translator.t(
                 "chat.tool-collapsed",
                 command=f"!{command}",
                 code=result.run.exit_code,
@@ -852,9 +886,7 @@ class ChatController:
                 )
                 return None
 
-    async def _chat_loop(
-        self, text: str, model_id: str, approval_id: str | None
-    ) -> TerminalReason:
+    async def _chat_loop(self, text: str, model_id: str, approval_id: str | None) -> TerminalReason:
         del approval_id  # approvals are handled per call inside the loop
         self._progress.reset()
         findings_before = self._finding_count()
@@ -897,9 +929,7 @@ class ChatController:
                 if self._steer_queue:
                     # the operator steered while this answer was in flight
                     continue
-                if promise_nudges < _MAX_PROMISE_NUDGES and _PROMISE_RE.search(
-                    response.text or ""
-                ):
+                if promise_nudges < _MAX_PROMISE_NUDGES and _PROMISE_RE.search(response.text or ""):
                     promise_nudges += 1
                     self._write_dim(self.translator.t("chat.promise-nudge"))
                     self._remember(
@@ -922,9 +952,7 @@ class ChatController:
             self._trim_chat_history()
             if self._stop_requested and not self._stop_note_sent:
                 self._stop_note_sent = True
-                self._remember(
-                    Message(role="user", content=self.translator.t("chat.stop-note"))
-                )
+                self._remember(Message(role="user", content=self.translator.t("chat.stop-note")))
             self._note_stagnation()
             if self._finding_count() > findings_before:
                 findings_before = self._finding_count()
@@ -957,13 +985,9 @@ class ChatController:
             for spec in self._CHAT_TOOL_SPECS
             if spec.name in ("record_fact", "close_intent", "propose_finding")
         )
-        self._remember(
-            Message(role="user", content=self.translator.t("chat.settle-prompt"))
-        )
+        self._remember(Message(role="user", content=self.translator.t("chat.settle-prompt")))
         try:
-            response = await self._request_chat_completion(
-                operation_id, model_id, reasoning, tools
-            )
+            response = await self._request_chat_completion(operation_id, model_id, reasoning, tools)
         except Exception:  # noqa: BLE001 - the closing summary still has to happen
             return
         if response is None:
@@ -999,9 +1023,7 @@ class ChatController:
                 content=f"[tool error] unknown tool: {call.name!r}",
             )
         if not self._directory_trusted():
-            self._write_dim(
-                self.translator.t("chat.tool-denied", command=call.name), process=False
-            )
+            self._write_dim(self.translator.t("chat.tool-denied", command=call.name), process=False)
             return Message(
                 role="user",
                 content=f"[tool {call.name}] the operator has not trusted this directory",
@@ -1176,6 +1198,26 @@ class ChatController:
         self._write_dim(self.translator.t("graph.intent-closed", intent=intent.id, state=outcome))
         return Message(role="user", content=f"[tool close_intent] {intent.id} is {outcome}")
 
+    async def _run_update_todo_tool(self, call: ToolCall) -> Message:
+        """The model owns this checklist; the operator only reads it."""
+        items = call.arguments.get("items")
+        if not isinstance(items, list):
+            return Message(role="user", content="[tool update_todo] items must be a list")
+        checklist: list[tuple[str, str]] = []
+        for entry in items[:8]:
+            if not isinstance(entry, dict):
+                continue
+            title = str(entry.get("title", "")).strip()
+            status = str(entry.get("status", "pending"))
+            if title:
+                checklist.append((title, status))
+        self._turn_todo = checklist
+        refresh = getattr(self, "_refresh_ops_strip", None)
+        if refresh is not None:
+            refresh()
+        done = sum(1 for _, status in checklist if status == "done")
+        return Message(role="user", content=f"[tool update_todo] {done}/{len(checklist)} done")
+
     async def _run_record_traffic_tool(self, call: ToolCall) -> Message:
         if self.operation is None:
             return Message(role="user", content="[tool record_traffic] no operation open")
@@ -1236,8 +1278,7 @@ class ChatController:
         return Message(
             role="user",
             content=(
-                f"[tool propose_finding] {finding.id} registered on {fact.id} "
-                f"({severity.value})"
+                f"[tool propose_finding] {finding.id} registered on {fact.id} ({severity.value})"
             ),
         )
 
@@ -1304,9 +1345,7 @@ class ChatController:
                 summary=f"image: {path.name}",
                 created_by="agent",
             )
-            self._write_dim(
-                self.translator.t("image.stored", name=path.name, artifact=artifact.id)
-            )
+            self._write_dim(self.translator.t("image.stored", name=path.name, artifact=artifact.id))
         return Message(role="user", content=f"[tool read_image {path.name}]\n{result}")
 
     def _vision_model(self) -> str | None:
@@ -1453,12 +1492,8 @@ class ChatController:
             reusable=self._reusable_approval(tool_id),
         )
         if decision.is_denied:
-            self._write_dim(
-                self.translator.t("chat.tool-denied", command=command), process=False
-            )
-            return Message(
-                role="user", content=f"[tool {call.name}] denied by rule"
-            )
+            self._write_dim(self.translator.t("chat.tool-denied", command=command), process=False)
+            return Message(role="user", content=f"[tool {call.name}] denied by rule")
         ask = decision.action == "ask"
         if ask:
             allowed = await self.push_screen_wait(
@@ -1470,8 +1505,8 @@ class ChatController:
             )
             if not allowed:
                 self._write_dim(
-                self.translator.t("chat.tool-denied", command=command), process=False
-            )
+                    self.translator.t("chat.tool-denied", command=command), process=False
+                )
                 return Message(
                     role="user",
                     content=f"[tool {call.name}] denied by the operator",
@@ -1505,9 +1540,7 @@ class ChatController:
             self._write_line(f"[error] {exc}")
             return Message(role="user", content=f"[tool {call.name}] error: {exc}")
         exit_code = result.run.exit_code
-        self._progress.last_stuck = (
-            None if self._graph_used else self._progress.record(command)
-        )
+        self._progress.last_stuck = None if self._graph_used else self._progress.record(command)
         # The run lands as a collapsible block; a failure opens on its own.
         self._write_tool_block(
             self.translator.t(
@@ -1556,9 +1589,7 @@ class ChatController:
         title_text = Text(title, style=self.paint(self._DIM_STYLE))
         if run_id:
             title_text.append(" ")
-            title_text.append_text(
-                entity_span("ⓘ", "run", run_id, base_style=self.paint("accent"))
-            )
+            title_text.append_text(entity_span("ⓘ", "run", run_id, base_style=self.paint("accent")))
         journal.add_tool_block(
             title_text,
             body.splitlines() if body else [],
@@ -1567,9 +1598,7 @@ class ChatController:
         )
         self._current_tool = ""
 
-    def _write_entity_line(
-        self, prefix: str, kind: str, ref: str, label: str
-    ) -> None:
+    def _write_entity_line(self, prefix: str, kind: str, ref: str, label: str) -> None:
         """A journal line whose tail is a clickable entity link."""
         journal = self.query_one("#journal", BlockJournal)
         journal.write(

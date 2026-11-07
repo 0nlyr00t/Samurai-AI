@@ -6123,3 +6123,27 @@ def test_resume_switches_to_a_chosen_earlier_operation(tmp_path: Path) -> None:
             assert app.operation is not None and app.operation.id == first.id
 
     asyncio.run(exercise())
+
+
+def test_the_model_checklist_shows_in_the_strip_and_the_tasks_tab(tmp_path: Path) -> None:
+    """The turn's checklist is the model's own and must be visible."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Checklist lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._turn_todo = [("map /api", "done"), ("fuzz authed", "in_progress")]
+            app._refresh_ops_strip()
+            app.action_view_tasks()
+            await pilot.pause()
+            strip = str(app.query_one("#strip-todo", Static).render())
+            assert "steps 1/2" in strip and "fuzz authed" in strip
+            tab = app.query_one("#view-hunt", BlockJournal).text()
+            assert "map /api" in tab and "▶ fuzz authed" in tab
+
+    asyncio.run(exercise())

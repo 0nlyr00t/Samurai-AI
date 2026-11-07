@@ -410,6 +410,7 @@ class SamuraiApp(
         self._selection_copy_timer: Timer | None = None
         self._last_auto_copy: str | None = None
         self._killchain_phase: str = ""
+        self._turn_todo: list[tuple[str, str]] = []
         self._chat_history: list[Message] = []
         self._progress = Stagnation()
         self._graph_used = False
@@ -3295,23 +3296,42 @@ class SamuraiApp(
             agents_item.display = True
         else:
             agents_item.display = False
+        checklist = getattr(self, "_turn_todo", [])
+        if checklist:
+            done_steps = sum(1 for _, status in checklist if status == "done")
+            current_step = next(
+                (title for title, status in checklist if status == "in_progress"),
+                next((title for title, status in checklist if status != "done"), ""),
+            )
+            todo_item.update(
+                Text(
+                    self.translator.t(
+                        "strip.checklist", done=done_steps, total=len(checklist)
+                    )
+                    + (f" · {current_step}" if current_step else ""),
+                    style=self.paint("$accent"),
+                )
+            )
+            todo_item.tooltip = "\n".join(f"{s} | {title}" for title, s in checklist)
+            todo_item.display = True
         plan = self.kernel.get_current_plan(operation_id)
         tasks = plan.tasks if plan is not None else []
         if not tasks:
             todo_item.display = False
             task_item.display = False
             return
-        done = sum(1 for task in tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED))
-        todo_item.update(
-            Text(
-                self.translator.t("strip.todo", done=done, total=len(tasks)),
-                style=self.paint("$accent"),
+        if not checklist:
+            done = sum(1 for task in tasks if task.status in (TaskStatus.DONE, TaskStatus.SKIPPED))
+            todo_item.update(
+                Text(
+                    self.translator.t("strip.todo", done=done, total=len(tasks)),
+                    style=self.paint("$accent"),
+                )
             )
-        )
-        todo_item.tooltip = "\n".join(
-            f"{task.id} | {task.status.value} | {task.title}" for task in tasks
-        )
-        todo_item.display = True
+            todo_item.tooltip = "\n".join(
+                f"{task.id} | {task.status.value} | {task.title}" for task in tasks
+            )
+            todo_item.display = True
         current = next((task for task in tasks if task.status == TaskStatus.IN_PROGRESS), None)
         if current is not None:
             task_item.update(Text(f"▸ {current.title}", style=self.paint("$warning")))
