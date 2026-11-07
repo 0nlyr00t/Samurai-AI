@@ -125,7 +125,11 @@ from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.goals import GoalConflictError, GoalRepository
 from samurai_ai.storage.kernel import KernelRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
-from samurai_ai.storage.memory import MemoryConflictError, MemoryRepository
+from samurai_ai.storage.memory import (
+    MemoryConflictError,
+    MemoryRepository,
+    MemorySearchRepository,
+)
 from samurai_ai.storage.models import (
     CustomModelConflictError,
     CustomModelRepository,
@@ -900,7 +904,9 @@ def _make_services(
         permission_rules=settings.permission_rules,
         permission_mode=lambda: settings.get_value("tui.permission_mode"),
     )
-    memory_service = CampaignMemoryService(MemoryRepository(database), vault)
+    memory_service = CampaignMemoryService(
+        MemoryRepository(database), vault, search=MemorySearchRepository(database)
+    )
     skill_service = SkillService(
         SkillRepository(database), vault, SkillGapRepository(database)
     )

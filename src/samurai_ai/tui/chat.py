@@ -513,6 +513,19 @@ class ChatController:
         "accent",
     )
 
+    def _recall_for(self, text: str) -> str:
+        """Past memory entries that match the user's text; empty when none."""
+        try:
+            entries = self.memory.recall(text)
+        except Exception:  # noqa: BLE001 - memory must not break a turn
+            return ""
+        if not entries:
+            return ""
+        lines = ["Related campaign memory:"]
+        for entry in entries[:4]:
+            lines.append(f"- {entry.title}: {entry.body[:120]}")
+        return "\n".join(lines)
+
     def _chat_system_prompt(self) -> str:
         autonomy = self.translator.t(
             "chat.autonomy.never"
@@ -1015,6 +1028,9 @@ class ChatController:
             # rebuilt every launch, never persisted
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
         self._last_user_text = text
+        recall = self._recall_for(text)
+        if recall:
+            self._remember(Message(role="system", content=recall))
         rounds_left = self._max_tool_rounds()
         promise_nudges = 0
         self._remember(Message(role="user", content=text))
