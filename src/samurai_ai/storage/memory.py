@@ -132,3 +132,43 @@ class MemoryRepository:
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
+
+
+class MemorySearchRepository:
+    """FTS5 over campaign memory: find the past, not read it all."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+        self.database.initialize()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts
+                USING fts5(entry_id UNINDEXED, title, body, tags)
+                """
+            )
+
+    def index(self, entry: MemoryEntry) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "DELETE FROM memory_fts WHERE entry_id = ?", (entry.id,)
+            )
+            connection.execute(
+                "INSERT INTO memory_fts (entry_id, title, body, tags) VALUES (?, ?, ?, ?)",
+                (entry.id, entry.title, entry.body, " ".join(entry.tags)),
+            )
+
+    def search(self, query: str, limit: int = 8) -> list[str]:
+        """Entry ids whose title/body/tags match, best first."""
+        with self.database.connect() as connection:
+            # a bare user query is not FTS5 syntax: quote each token
+            terms = [w.replace('"', '""') for w in query.split() if w.strip()]
+            if not terms:
+                return []
+            safe = " OR ".join(f'"{w}"' for w in terms)
+            rows = connection.execute(
+                "SELECT entry_id FROM memory_fts WHERE memory_fts MATCH ? "
+                "ORDER BY rank LIMIT ?",
+                (safe, limit),
+            ).fetchall()
+        return [row["entry_id"] for row in rows]

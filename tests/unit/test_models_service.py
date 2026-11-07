@@ -200,3 +200,16 @@ def test_the_second_level_runs_a_third_of_the_budget(tmp_path: Path) -> None:
 
     assert orchestrator.DEFAULT_MAX_DEPTH == 2
     assert DEFAULT_MAX_STEPS > 0
+
+
+def test_recall_finds_the_relevant_entry_not_everything(tmp_path: Path) -> None:
+    """FTS5 over memory: the SSTI note answers 'template', the password note does not."""
+    from samurai_ai.cli import _make_services
+
+    services = _make_services(tmp_path / "t.db")
+    memory = services[16]
+    memory.add("ws", "SSTI in ticket notes", "Go template .File reads /proc/self/environ")
+    memory.add("ws", "Default creds", "admin/admin on the staging panel")
+    hits = memory.recall("template")
+    assert [h.title for h in hits] == ["SSTI in ticket notes"]
+    assert memory.recall("nonexistent-xyzzy") == []
