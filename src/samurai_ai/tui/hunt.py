@@ -213,6 +213,10 @@ class HuntController:
 
     def refresh_hunt(self) -> None:
         """Re-render the tab if it is the visible pane."""
+        refresh_chain = getattr(self, "_refresh_killchain", None)
+        if refresh_chain is not None:
+            # the same three-minute beat keeps the stage rail honest
+            refresh_chain()
         switcher: Any = self.query_one("#views")
         if str(switcher.current or "") != "view-hunt":
             return
