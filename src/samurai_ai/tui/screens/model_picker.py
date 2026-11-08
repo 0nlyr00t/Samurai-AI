@@ -56,6 +56,8 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         add_custom_label: str | None = None,
         current_marker: str = "",
         reasoning_by_model: dict[str, str] | None = None,
+        needs_key: list[tuple[str, str]] | None = None,
+        needs_key_label: str = "",
     ) -> None:
         super().__init__()
         self.translator = translator
@@ -65,6 +67,8 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         self.reasoning_by_model = reasoning_by_model or {}
         self.current_model = current_model
         self.current_reasoning = current_reasoning
+        self.needs_key = needs_key or []
+        self.needs_key_label = needs_key_label
         self.selected_model = current_model or (model_ids[0] if model_ids else ADD_CUSTOM_ID)
         self.selected_reasoning = current_reasoning
 
@@ -72,6 +76,11 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         model_options: list[Option] = []
         if self.add_custom_label is not None:
             model_options.append(Option(self.add_custom_label, id="m-add"))
+        for provider_id, provider_label in self.needs_key:
+            # a provider without a key is still reachable from here
+            model_options.append(
+                Option(f"⚠ {provider_label} — {self.needs_key_label}", id=f"k-{provider_id}")
+            )
         for index, model_id in enumerate(self.model_ids):
             label = model_id
             if self.current_marker and model_id == self.current_model:
@@ -97,7 +106,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
     def on_mount(self) -> None:
         models = self.query_one("#model-options", OptionList)
         if self.current_model in self.model_ids:
-            offset = 1 if self.add_custom_label is not None else 0
+            offset = (1 if self.add_custom_label is not None else 0) + len(self.needs_key)
             models.highlighted = self.model_ids.index(self.current_model) + offset
         reasoning = self.query_one("#reasoning-options", OptionList)
         reasoning.highlighted = REASONING_LEVELS.index(self.current_reasoning)
@@ -113,6 +122,9 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
                     self.selected_model = ADD_CUSTOM_ID
                     return
                 index -= 1
+            index -= len(self.needs_key)
+            if index < 0:
+                return  # a key row: the model choice is unchanged
             if 0 <= index < len(self.model_ids):
                 model_id = self.model_ids[index]
                 changed = model_id != self.selected_model
@@ -130,11 +142,12 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
                 self.selected_reasoning = REASONING_LEVELS[index]
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if (
-            event.option_list.id == "model-options"
-            and event.option is not None
-            and event.option.id == "m-add"
-        ):
+        option_id = str(event.option.id) if event.option is not None else ""
+        if event.option_list.id == "model-options" and option_id.startswith("k-"):
+            # the caller sets the key, then reopens the picker
+            self.dismiss((f"key:{option_id[2:]}", self.selected_reasoning))
+            return
+        if event.option_list.id == "model-options" and option_id == "m-add":
             self.dismiss((ADD_CUSTOM_ID, self.selected_reasoning))
             return
         self.dismiss((self.selected_model, self.selected_reasoning))
