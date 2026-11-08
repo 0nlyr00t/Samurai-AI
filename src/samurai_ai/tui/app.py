@@ -3798,6 +3798,53 @@ class SamuraiApp(
             self.translator.t("settings.rounds-set", value=self._max_tool_rounds())
         )
 
+    def _provider_oauth(self, provider_id: str) -> None:
+        """`/oauth <provider>`: device-code login, token lands in the vault."""
+        provider_id = provider_id.strip()
+        if not provider_id:
+            self._write_dim(self.translator.t("oauth.usage"))
+            return
+        issuer = self.settings.get_value(f"model.oauth.{provider_id}.issuer") or ""
+        client_id = self.settings.get_value(f"model.oauth.{provider_id}.client_id") or ""
+        if not issuer or not client_id:
+            self._write_dim(
+                self.translator.t("oauth.not-configured", provider=provider_id)
+            )
+            return
+        self.run_worker(self._run_oauth(provider_id, issuer, client_id), exclusive=False)
+
+    async def _run_oauth(self, provider_id: str, issuer: str, client_id: str) -> None:
+        from samurai_ai.services import provider_oauth
+
+        def transport(url: str, form: dict[str, str]) -> tuple[int, dict[str, object]]:
+            import json as _json
+            import urllib.parse
+            import urllib.request
+
+            body = urllib.parse.urlencode(form).encode()
+            request = urllib.request.Request(
+                url, data=body, headers={"Accept": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return response.status, _json.loads(response.read() or b"{}")
+            except urllib.error.HTTPError as exc:
+                return exc.code, _json.loads(exc.read() or b"{}")
+
+        prompt = await asyncio.to_thread(provider_oauth.begin, transport, issuer, client_id)
+        self._write_line(self.translator.t("oauth.open", url=prompt.verification_url))
+        self._write_line(self.translator.t("oauth.code", code=prompt.user_code))
+        try:
+            token = await asyncio.to_thread(
+                provider_oauth.wait_for_token, transport, issuer, client_id, prompt
+            )
+        except provider_oauth.DeviceFlowError as exc:
+            self._write_line(f"[oauth] {exc}")
+            return
+        self.vault.add(f"{provider_id}-access-token", token, created_by=self._actor())
+        self._write_dim(self.translator.t("oauth.saved", provider=provider_id))
+        self._refresh_chrome()
+
     def _show_model_picker(self) -> None:
         self.run_worker(self._open_model_picker(), exclusive=True)
 
