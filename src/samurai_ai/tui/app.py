@@ -95,9 +95,10 @@ from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
 from samurai_ai.tui.hunt import REFRESH_SECONDS as HUNT_REFRESH_SECONDS
 from samurai_ai.tui.hunt import HuntController
-from samurai_ai.tui.journal import (
+from samurai_ai.tui.journal import (  # noqa: F401
     BlockJournal,
     InspectSummaryBlock,
+    ToolBlock,
     UserBlock,
     entity_span,
 )
@@ -469,7 +470,8 @@ class SamuraiApp(
         self._chat_busy = False
         self._stop_requested = False
         self._stop_note_sent = False
-        self._process_block = []
+        self._process_block: list[str] = []
+        self._thinking_block: ToolBlock | None = None
         self._shell_running = ""
         self._shell_background = False
         # live status: what the running turn is doing right now
@@ -567,22 +569,43 @@ class SamuraiApp(
         """
         if process and self._chat_busy:
             self._process_block.append(text)
+            self._thinking(text)
             return
         journal = self.query_one("#journal", BlockJournal)
         journal.write(Text(text, style=self.paint(self._DIM_STYLE)))
 
-    def _close_process_block(self) -> None:
-        """Collapse the turn's grey lines into one block the operator can open."""
-        if not self._process_block:
-            return
-        title = self.translator.t("chat.process-block", lines=len(self._process_block))
+    def _thinking(self, text: str) -> None:
+        """Grey chatter lands in the turn's single «thinking» block."""
         journal = self.query_one("#journal", BlockJournal)
-        journal.add_tool_block(
-            Text(f"⚙ {title}", style=self.paint(self._DIM_STYLE)),
-            list(self._process_block),
-            body_style=self.paint(self._DIM_STYLE),
-            expanded=False,
+        if self._thinking_block is None:
+            self._thinking_block = journal.add_tool_block(
+                Text(
+                    "💭 " + self.translator.t("chat.thinking", count=0),
+                    style=self.paint(self._DIM_STYLE),
+                ),
+                [],
+                body_style=self.paint(self._DIM_STYLE),
+                expanded=False,
+            )
+        block = self._thinking_block
+        block.set_body(list(self._process_block), self.paint(self._DIM_STYLE))
+        header = Text(
+            "💭 " + self.translator.t("chat.thinking", count=len(self._process_block)),
+            style=self.paint(self._DIM_STYLE),
         )
+        block.set_title(header)
+
+    def _close_process_block(self) -> None:
+        """Fold the turn's thinking into the one block it belongs to."""
+        self._close_thinking_block()
+
+    def _close_thinking_block(self) -> None:
+        if self._thinking_block is None:
+            return
+        block = self._thinking_block
+        self._thinking_block = None
+        if self._process_block:
+            block.set_body(list(self._process_block), self.paint(self._DIM_STYLE))
         self._process_block.clear()
 
     def _brand_text(self) -> Text:

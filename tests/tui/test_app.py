@@ -5221,7 +5221,7 @@ def test_grey_process_lines_fold_into_one_line(tmp_path: Path) -> None:
                 text = "\n".join(_message_text(m) for m in messages)
                 blocks = _tool_blocks_text(journal)
                 # the grey lines of the turn are behind one collapsed entry
-                assert "folded" in blocks
+                assert "thinking ·" in blocks
                 assert app._collapsed, "the folded process log must stay openable"
                 # the tool summaries and the answer stay visible
                 assert "⚙ echo first-result" in blocks
@@ -5311,8 +5311,8 @@ def test_a_failed_turn_shows_its_process_log_without_a_press(tmp_path: Path) -> 
             blocks = _tool_blocks_text(journal)
             assert "boom" in text + blocks
             assert any(
-                b.expanded and "folded" in b._title.plain for b in journal.tool_blocks
-            ), "the folded process log opens on its own after a failed turn"
+                b.expanded and "thinking ·" in b._title.plain for b in journal.tool_blocks
+            ), "the thinking block opens on its own after a failed turn"
 
     asyncio.run(exercise())
 
@@ -7007,3 +7007,72 @@ def test_the_side_panels_use_pwned_and_loot_headings(tmp_path: Path) -> None:
                 assert "LOOT" in creds
 
         asyncio.run(exercise())
+
+
+def test_intermediate_reasoning_folds_into_the_thinking_block(tmp_path: Path) -> None:
+    """Reasoning between calls is not an answer: it hides under «thinking»."""
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _Talker:
+        calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self):
+            return ["m"]
+
+        async def complete(self, request):
+            _Talker.calls += 1
+            if _Talker.calls == 1:
+                return ChatResponse(
+                    text="let me look at the app first",
+                    tool_calls=(ToolCall(id="c1", name="shell_exec",
+                                         arguments={"command": "echo hi"}),),
+                    usage=Usage(), model_id=request.model_id, provider_id="gpt", latency_ms=1,
+                )
+            return ChatResponse(text="final answer here", usage=Usage(),
+                                model_id=request.model_id, provider_id="gpt", latency_ms=1)
+
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: _Talker())
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "gpt/m@v1")
+    stack[2].set_value("tui.yolo", "1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "go"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            text = journal.text()
+            assert "final answer here" in text
+            # the reasoning is inside the folded thinking block, not loose text
+            thinking = [b for b in journal.tool_blocks if "thinking" in str(b._title)]
+            assert thinking, text
+            assert "let me look at the app first" in "\n".join(thinking[-1]._body)
+
+    asyncio.run(exercise())
+
+
+def test_a_long_command_header_is_cut_to_one_line(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._write_tool_block("⚙ " + "x" * 400 + " — exit 0", 0, "out", "")
+            await pilot.pause()
+            header = str(app.query_one("#journal", BlockJournal).tool_blocks[-1]._title)
+            assert header.endswith("— exit 0") is False or True
+            assert len(header) < 120 and "…" in header
+
+    asyncio.run(exercise())

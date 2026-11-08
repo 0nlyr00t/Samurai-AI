@@ -185,6 +185,7 @@ class ChatController:
         def copy_to_clipboard(self, text: str) -> None: ...
         def query_one(self, *args: Any, **kwargs: Any) -> Any: ...
         def call_from_thread(self, callback: Any, *args: Any) -> Any: ...
+        size: Any
         def set_interval(self, *args: Any, **kwargs: Any) -> Any: ...
         def _directory_trusted(self) -> bool: ...
         def _tool_is_read_only(self, tool_id: str) -> bool: ...
@@ -953,10 +954,14 @@ class ChatController:
             self._chat_busy = False
             self._turn_started = None
             self._current_tool = ""
-            self._close_process_block()
-            if reason is not TerminalReason.COMPLETED and self._collapsed:
+            if reason is not TerminalReason.COMPLETED:
                 # a failure or a stop is exactly when the detail is wanted
-                self._collapsed[-1].toggle()
+                block = getattr(self, "_thinking_block", None)
+                if block is not None:
+                    block.toggle()
+                elif self._collapsed:
+                    self._collapsed[-1].toggle()
+            self._close_process_block()
             self._shell_running = ""
             self._shell_background = False
             self._thinking_stop()
@@ -1150,10 +1155,10 @@ class ChatController:
                 return TerminalReason.COMPLETED
             if response.text.strip():
                 self._remember(Message(role="assistant", content=response.text))
-                # the reasoning between tool calls is the turn's narrative —
-                # hiding it leaves the operator watching mute tool blocks
+                # reasoning between tool calls is narrative, not an answer: it
+                # folds into the turn's «thinking» block so the dialogue stays
                 self._end_live_answer()
-                self._write_ai_message(response)
+                self._write_dim(response.text.strip(), process=True)
             # every call of the round runs even when stopping: a stop is worth
             # nothing until the results are in and checked
             for call in response.tool_calls:
@@ -1896,6 +1901,11 @@ class ChatController:
         carries the last error line, or says outright that there was no output.
         """
         journal = self.query_one("#journal", BlockJournal)
+        # a long command must not wrap the header: one line, cut with an ellipsis
+        columns = getattr(self.size, "width", 100) if hasattr(self, "size") else 100
+        width = max(40, columns - 28)
+        if len(title) > width:
+            title = title[: width - 1] + "…"
         failed = exit_code not in (0, None)
         if failed:
             error = (stderr.strip() or stdout.strip()).splitlines()
