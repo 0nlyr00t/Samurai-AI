@@ -46,6 +46,7 @@ from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
 from samurai_ai.i18n import Translator
+from samurai_ai.services import goal_judge
 from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
@@ -987,6 +988,8 @@ class ChatController:
         model_id: str,
         reasoning: str | None,
         tools: tuple[ToolSpec, ...],
+        max_tokens: int | None = None,
+        messages: tuple[Message, ...] | None = None,
     ) -> ChatResponse | None:
         """One model call with inline approval handling; None = denied/failed."""
         approval_id: str | None = None
@@ -996,10 +999,11 @@ class ChatController:
                     self.models.chat,
                     operation_id,
                     model_id,
-                    tuple(self._chat_history),
+                    messages if messages is not None else tuple(self._chat_history),
                     tools=tools,
                     reasoning_effort=reasoning,
                     approval_id=approval_id,
+                    max_tokens=max_tokens,
                     on_token=self._stream_token,
                 )
             except ApprovalRequiredError as exc:
@@ -1072,6 +1076,11 @@ class ChatController:
                     return TerminalReason.CANCELLED
                 if stretches_used >= self._AUTO_CONTINUES:
                     break
+                if self._operation_goal(operation_id):
+                    verdict = await self._judge_goal(operation_id, model_id)
+                    if verdict == goal_judge.STOP:
+                        self._write_dim(self.translator.t("chat.goal-met"))
+                        return TerminalReason.COMPLETED
                 stretches_used += 1
                 self._write_dim(
                     self.translator.t(
@@ -1187,6 +1196,36 @@ class ChatController:
             self._write_ai_message(final)
         return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.ROUNDS
 
+
+    def _operation_goal(self, operation_id: str) -> str:
+        """The goal from the store — the in-memory copy can be stale."""
+        try:
+            return self.service.get(operation_id).goal
+        except Exception:  # noqa: BLE001 - no operation means no goal
+            return ""
+
+    async def _judge_goal(self, operation_id: str, model_id: str) -> str | None:
+        """Ask the cheap judge whether the condition holds; None when unsure."""
+        goal = self._operation_goal(operation_id)
+        if not goal:
+            return None
+        transcript = [
+            str(message.content)[:400]
+            for message in self._chat_history[-12:]
+            if message.role in ("assistant", "user")
+        ]
+        system, question = goal_judge.build_prompt(goal, goal_judge.digest(transcript))
+        messages = (
+            Message(role="system", content=system),
+            Message(role="user", content=question),
+        )
+        answer = await self._request_chat_completion(
+            operation_id, model_id, None, (), max_tokens=8, messages=messages
+        )
+        if answer is None:
+            self._write_dim(self.translator.t("chat.goal-judge-failed"))
+            return None
+        return goal_judge.parse_verdict(answer.text)
 
     async def _settle(self, operation_id: str, model_id: str, reasoning: str | None) -> None:
         """One write-only round: persist what the turn found, without new exploration."""

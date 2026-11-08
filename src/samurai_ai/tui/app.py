@@ -1155,6 +1155,29 @@ class SamuraiApp(
         self._refresh_chrome()
 
 
+    def _goal_command(self, argument: str) -> None:
+        """`/goal <condition>` sets it; bare `/goal` shows it; `clear` drops it."""
+        if self.operation is None:
+            self._write_line("[goal] " + self.translator.t("status.no-operation"))
+            return
+        value = argument.strip()
+        if not value:
+            goal = self.operation.goal
+            self._write_dim(
+                self.translator.t("goal.current", goal=goal)
+                if goal
+                else self.translator.t("goal.empty")
+            )
+            return
+        if value.lower() in ("clear", "off"):
+            self.operation = self.service.set_goal(self.operation.id, "")
+            self._write_dim(self.translator.t("goal.cleared"))
+            self._refresh_chrome()
+            return
+        self.operation = self.service.set_goal(self.operation.id, value)
+        self._write_dim(self.translator.t("goal.set", goal=value))
+        self._refresh_chrome()
+
     def action_toggle_follow(self) -> None:
         """Ctrl+T: tail-follow on or off — read back without losing the stream."""
         journal = self.query_one("#journal", BlockJournal)
@@ -3773,7 +3796,14 @@ class SamuraiApp(
             for item in (agents_item, todo_item, task_item, goal_item):
                 item.display = False
             return
-        self._refresh_goal_strip(goal_item)
+        if self.operation.goal:
+            goal_item.update(
+                Text("◎ " + self.operation.goal[:60], style=self.paint("$accent"))
+            )
+            goal_item.tooltip = self.operation.goal
+            goal_item.display = True
+        else:
+            self._refresh_goal_strip(goal_item)
         operation_id = self.operation.id
         runs = self.agents.list_runs(operation_id)
         if runs:

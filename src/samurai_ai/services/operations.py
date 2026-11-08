@@ -93,6 +93,19 @@ class OperationService:
         self.repository.update(operation, expected_version, event)
         return operation
 
+    def set_goal(self, operation_id: str, goal: str) -> Operation:
+        """Set or clear the operation's completion condition."""
+        operation = self.get(operation_id)
+        expected_version = operation.version
+        operation.goal = goal.strip()[:500]
+        event = OperationEvent(
+            operation_id=operation.id,
+            event_type="operation.goal.changed",
+            payload={"goal": operation.goal},
+        )
+        self.repository.update(operation, expected_version, event)
+        return operation
+
     def set_relay(self, operation_id: str, relay: str) -> Operation:
         """Point the operation at a relay prefix, or clear it with an empty value."""
         from samurai_ai.execution.relay import validate_relay
