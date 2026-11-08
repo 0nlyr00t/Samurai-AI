@@ -66,7 +66,7 @@ def test_goal_create_status_and_pause(tmp_path, capsys) -> None:  # type: ignore
     assert json.loads(capsys.readouterr().out)["state"] == "active"
 
 
-def test_goal_step_blocks_on_budget(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+def test_goal_step_extends_the_budget(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
     database = str(tmp_path / "goal.db")
     operation_id = make_operation(database)
     main(
@@ -85,9 +85,9 @@ def test_goal_step_blocks_on_budget(tmp_path, capsys) -> None:  # type: ignore[n
     capsys.readouterr()
 
     assert main(["--db", database, "--json", "goal", "step", operation_id]) == 0
-    blocked = json.loads(capsys.readouterr().out)
-    assert blocked["state"] == "blocked"
-    assert "step budget 1 spent" in blocked["block_reason"]
+    extended = json.loads(capsys.readouterr().out)
+    assert extended["state"] == "active"
+    assert extended["budget_steps"] == 41
 
 
 def test_goal_next_queues_and_complete_promotes(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
