@@ -469,6 +469,13 @@ class ModelService:
             raise ToolStateError(f"approval {approval_id} was rejected")
         return stored
 
+    def oauth_token(self, provider_id: str) -> str | None:
+        """The provider's OAuth token from the vault, when a device login ran."""
+        try:
+            return self.vault.get(f"{provider_id}-access-token")
+        except Exception:  # noqa: BLE001 - no token is the normal case
+            return None
+
     def request_timeout(self) -> float:
         """Seconds one model call may take; the operator's setting, bounded.
 
@@ -489,7 +496,11 @@ class ModelService:
         if provider.api_family is ApiFamily.OLLAMA:
             return OllamaProvider(provider)
         api_key: str | None = None
-        if provider.secret_name:
+        token = self.oauth_token(provider.id)
+        if token:
+            # a device-code login outranks a stored key for this provider
+            api_key = token
+        elif provider.secret_name:
             try:
                 api_key = self.vault.get(provider.secret_name)
             except SecretNotFoundError as exc:
