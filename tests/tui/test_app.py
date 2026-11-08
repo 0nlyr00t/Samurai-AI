@@ -7163,3 +7163,132 @@ def test_a_manual_path_opens_the_project(tmp_path: Path) -> None:
             assert str(app._cwd) == str(typed)
 
     asyncio.run(exercise())
+
+
+def test_goal_is_set_shown_and_cleared(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Goal", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._goal_command("both flags on 10.0.0.5")
+            await pilot.pause()
+            assert stack[0].get(operation.id).goal == "both flags on 10.0.0.5"
+            app._refresh_ops_strip()
+            await pilot.pause()
+            goal_item = app.query_one("#strip-goal", Static)
+            assert "both flags" in str(goal_item.render())
+            app._goal_command("clear")
+            await pilot.pause()
+            assert stack[0].get(operation.id).goal == ""
+
+    asyncio.run(exercise())
+
+
+def test_the_judge_stops_the_run_when_the_condition_holds(tmp_path: Path) -> None:
+    """A goal plus a STOP verdict ends the turn instead of stretching on."""
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _Worker:
+        calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self):
+            return ["m"]
+
+        async def complete(self, request):
+            _Worker.calls += 1
+            # judge calls are short (max_tokens=8): answer STOP
+            if request.max_tokens == 8:
+                return ChatResponse(text="STOP", usage=Usage(),
+                                    model_id=request.model_id, provider_id="gpt", latency_ms=1)
+            return ChatResponse(
+                text="", tool_calls=(ToolCall(id=f"c{_Worker.calls}", name="shell_exec",
+                                              arguments={"command": f"echo t{_Worker.calls}"}),),
+                usage=Usage(), model_id=request.model_id, provider_id="gpt", latency_ms=1,
+            )
+
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: _Worker())
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "gpt/m@v1")
+    stack[2].set_value("tui.yolo", "1")
+    stack[2].set_value("tui.max_tool_rounds", "4")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+    operation = stack[0].create(
+        "Judge", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[0].set_goal(operation.id, "root flag")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "go"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "judge says the condition holds" in journal
+
+    asyncio.run(exercise())
+
+
+def test_a_broken_judge_falls_back_to_the_counter(tmp_path: Path) -> None:
+    """The judge must never stall a run: unclear answers keep it going."""
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _Mute:
+        calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self):
+            return ["m"]
+
+        async def complete(self, request):
+            _Mute.calls += 1
+            if request.max_tokens == 8:
+                return ChatResponse(text="hmm", usage=Usage(),
+                                    model_id=request.model_id, provider_id="gpt", latency_ms=1)
+            return ChatResponse(
+                text="", tool_calls=(ToolCall(id=f"c{_Mute.calls}", name="shell_exec",
+                                              arguments={"command": f"echo t{_Mute.calls}"}),),
+                usage=Usage(), model_id=request.model_id, provider_id="gpt", latency_ms=1,
+            )
+
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: _Mute())
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "gpt/m@v1")
+    stack[2].set_value("tui.yolo", "1")
+    stack[2].set_value("tui.max_tool_rounds", "4")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+    operation = stack[0].create(
+        "Mute judge", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[0].set_goal(operation.id, "root flag")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "go"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "continue 5/5" in journal  # it still stretched to the end
+            assert "turn ended" in journal  # and closed honestly
+
+    asyncio.run(exercise())
