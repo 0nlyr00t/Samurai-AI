@@ -93,6 +93,20 @@ class OperationService:
         self.repository.update(operation, expected_version, event)
         return operation
 
+    def rename(self, operation_id: str, name: str) -> Operation:
+        """Rename the operation; the tab label follows it."""
+        operation = self.get(operation_id)
+        expected_version = operation.version
+        previous = operation.name
+        operation.name = name.strip()[:200]
+        event = OperationEvent(
+            operation_id=operation.id,
+            event_type="operation.renamed",
+            payload={"from": previous, "to": operation.name},
+        )
+        self.repository.update(operation, expected_version, event)
+        return operation
+
     def set_goal(self, operation_id: str, goal: str) -> Operation:
         """Set or clear the operation's completion condition."""
         operation = self.get(operation_id)

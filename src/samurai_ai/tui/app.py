@@ -119,6 +119,7 @@ from samurai_ai.tui.screens import (
     ProjectPickerScreen,
     Section,
     SettingsScreen,
+    TabMenuScreen,
     TrustDirectoryScreen,
 )
 from samurai_ai.tui.screens.attach import AttachScreen
@@ -3539,6 +3540,49 @@ class SamuraiApp(
             return
         panel.display = True
         panel.update("\n".join(attack_map(rows)))
+
+    def _tab_menu(self, operation_id: str, label: str) -> None:
+        """Right-click on a tab: rename it, or close it (alone or with others)."""
+        self.push_screen(
+            TabMenuScreen(self.translator, label, others=len(self._open_tabs) > 1),
+            lambda choice: self._on_tab_menu(choice, operation_id),
+        )
+
+    def _on_tab_menu(self, choice: str | None, operation_id: str) -> None:
+        if choice is None:
+            return
+        from samurai_ai.tui.screens.tab_menu import CLOSE, CLOSE_OTHERS, RENAME
+
+        if choice == RENAME:
+            self.run_worker(self._rename_operation(operation_id), exclusive=False)
+            return
+        if choice == CLOSE:
+            self._close_operation_by_id(operation_id)
+            return
+        if choice == CLOSE_OTHERS:
+            for other in list(self._open_tabs):
+                if other != operation_id:
+                    self._tab_states.pop(other, None)
+            self._open_tabs = [operation_id]
+            if self.operation is None or self.operation.id != operation_id:
+                self._open_operation(operation_id)
+            self._refresh_operations_strip()
+
+    async def _rename_operation(self, operation_id: str) -> None:
+        """Give the operation (and its tab) a new name."""
+        answer = await self.push_screen_wait(
+            ArgumentScreen(self.translator, self.translator.t("tabmenu.name-prompt"))
+        )
+        if not answer or not answer.strip():
+            return
+        try:
+            self.service.rename(operation_id, answer.strip())
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            self._write_line(f"[rename] {exc}")
+            return
+        if self.operation is not None and self.operation.id == operation_id:
+            self.operation = self.service.get(operation_id)
+        self._refresh_chrome()
 
     def _refresh_operations_strip(self) -> None:
         """One row of open operations; the current one is marked."""

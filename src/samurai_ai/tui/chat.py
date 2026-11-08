@@ -116,6 +116,13 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def _short_tool(tool_id: str, command: str) -> str:
+    """`bash · prlctl exec … echo…` — the tool plus a cut command, one line."""
+    name = tool_id.split(".")[-1]
+    head = command.split()[0] if command.split() else ""
+    return f"{name} · {head} …" if head and len(command.split()) > 1 else name
+
+
 class ChatController:
     """Behaviour that needs the app's widgets; mixed into ``SamuraiApp``."""
 
@@ -914,6 +921,7 @@ class ChatController:
                 "chat.tool-collapsed",
                 command=f"!{command}",
                 code=result.run.exit_code,
+                code_mark="" if result.run.exit_code == 0 else f" ✗{result.run.exit_code}",
                 lines=len(result.stdout.strip().splitlines()),
             ),
             result.run.exit_code,
@@ -1840,8 +1848,9 @@ class ChatController:
             )
         risk = classify_command(command, str(self._cwd))
         badge = f"  [{risk.label()}]" if not risk.empty else ""
-        self._write_dim(f"⚙ {command}{badge}")
-        self._current_tool = command
+        # the running command lives in the status bar; the finished one becomes
+        # its own one-line block, so a repeat in the buffer is noise
+        self._current_tool = _short_tool(tool_id, command) + badge
         # A tool already approved for this operation is not asked again, except
         # for a sensitive path or a destructive shape, which stay worth a look.
         mode = self._permission_mode
@@ -1907,8 +1916,9 @@ class ChatController:
         self._write_tool_block(
             self.translator.t(
                 "chat.tool-collapsed",
-                command=command,
+                command=_short_tool(tool_id, command),
                 code=exit_code,
+                code_mark="" if exit_code == 0 else f" ✗{exit_code}",
                 lines=len(result.stdout.strip().splitlines()),
             ),
             exit_code,
@@ -1948,10 +1958,8 @@ class ChatController:
         failed = exit_code not in (0, None)
         if failed:
             error = (stderr.strip() or stdout.strip()).splitlines()
-            if error:
-                title += f"  ← {error[-1][:120]}"
-            else:
-                title += f"  ← exit {exit_code}, no output"
+            tail = error[-1] if error else f"exit {exit_code}, no output"
+            title = title[: max(20, width - 30)] + "  ← " + tail[:26]
         body = (stdout if stdout.strip() else stderr).rstrip()
         title_text = Text(title, style=self.paint(self._DIM_STYLE))
         if run_id:

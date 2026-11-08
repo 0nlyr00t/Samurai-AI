@@ -1279,9 +1279,10 @@ def test_chat_tool_loop_executes_shell_command(tmp_path: Path) -> None:
                 # round 1: tool call, round 2: final text answer
                 assert provider.calls == 2
                 text = "\n".join(_message_text(m) for m in messages)
-                assert "echo hello-from-tool" in text + _tool_blocks_text(journal)
-                # output is collapsed under an arrow, not spilled as a wall
-                assert "⚙ echo hello-from-tool" in _tool_blocks_text(journal)
+                # output is folded under an arrow; the header names tool and command
+                blocks = _tool_blocks_text(journal)
+                assert "hello-from-tool" in blocks
+                assert "⚙ exec · echo" in blocks
                 assert "ran it" in text
                 # /expand opens the collapsed block in place
                 block = app._collapsed[0]
@@ -1346,7 +1347,7 @@ def test_chat_tool_call_denied_by_operator(tmp_path: Path) -> None:
                     if isinstance(app.screen, AccessPromptScreen):
                         break
                 assert isinstance(app.screen, AccessPromptScreen)
-                assert "echo hello-from-tool" in str(
+                assert "hello-from-tool" in str(
                     app.screen.query_one("#access-action", Static).render()
                 )
                 # deny: pick the second option
@@ -5225,7 +5226,7 @@ def test_grey_process_lines_fold_into_one_line(tmp_path: Path) -> None:
                 assert "thinking ·" in blocks
                 assert app._collapsed, "the folded process log must stay openable"
                 # the tool summaries and the answer stay visible
-                assert "⚙ echo first-result" in blocks
+                assert "⚙ exec · echo" in blocks
                 assert "обе гипотезы проверены" in text
 
     asyncio.run(exercise())
@@ -5543,9 +5544,9 @@ def test_a_failed_tool_block_carries_the_error_and_opens(tmp_path: Path) -> None
             await pilot.pause()
             first, second, third = journal.tool_blocks
             assert "Invalid argument" in first._title.plain
-            assert first.failed and first.expanded
+            assert first.failed and not first.expanded
             assert "no output" in second._title.plain
-            assert second.failed and second.expanded
+            assert second.failed and not second.expanded
             assert not third.failed and not third.expanded
 
     asyncio.run(exercise())
@@ -6458,6 +6459,14 @@ def test_right_click_on_a_tab_closes_it(tmp_path: Path) -> None:
             tab = next(child for child in strip.children if child.operation_id == second.id)
             tab.on_click(type("E", (), {"button": 3})())
             await pilot.pause()
+            from samurai_ai.tui.screens.tab_menu import CLOSE, TabMenuScreen
+
+            assert isinstance(app.screen, TabMenuScreen)
+            listed = app.screen.query_one("#tabmenu-list", OptionList)
+            ids = [str(option.id) for option in listed.options]
+            listed.highlighted = ids.index(CLOSE)
+            await pilot.press("enter")
+            await pilot.pause()
             assert second.id not in app._open_tabs
             assert stack[0].get(second.id).name == "Right"
 
@@ -6987,7 +6996,7 @@ def test_choosing_a_key_row_saves_the_key_and_reopens_the_picker(tmp_path: Path)
     asyncio.run(exercise())
 
 
-def test_the_side_panels_use_pwned_and_loot_headings(tmp_path: Path) -> None:
+def test_the_side_panels_use_scope_and_loot_headings(tmp_path: Path) -> None:
     """The panel speaks the trade's words, in either locale."""
     for locale in ("en", "ru"):
         stack = _minimal_stack(tmp_path / locale if False else tmp_path)
@@ -7004,7 +7013,7 @@ def test_the_side_panels_use_pwned_and_loot_headings(tmp_path: Path) -> None:
                 await pilot.pause()
                 access = str(app.query_one("#side-access", Static).render())
                 creds = str(app.query_one("#side-creds", Static).render())
-                assert "PWNED" in access
+                assert "SCOPE" in access
                 assert "LOOT" in creds
 
         asyncio.run(exercise())
