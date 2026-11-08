@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import PlanTask, TaskStatus
 from samurai_ai.domain.operations import OperationMode
+from samurai_ai.domain.scope import ScopeContract
 
 #: Fallback chains, cheap stage first. `None` in CTF means "flags, if any".
 _CHAINS: dict[OperationMode, tuple[str, ...]] = {
@@ -202,3 +203,46 @@ def attack_map(rows: Iterable[AccessRow]) -> list[str]:
         if row.note:
             lines.append(f"   └─ {row.level} · {row.note}")
     return lines
+
+
+def hosts_in(texts: Iterable[str]) -> set[str]:
+    """Every host named anywhere in the texts, lower-cased."""
+    found: set[str] = set()
+    for text in texts:
+        for match in _HOST_RE.finditer(text):
+            found.add(match.group(0).lower())
+    return found
+
+
+@dataclass(frozen=True)
+class ScopeRow:
+    """One scope target in the side block: what it is and whether work reached it."""
+
+    rule: str
+    excluded: bool
+    hit: bool
+    note: str = ""
+
+
+def scope_rows(scope: ScopeContract, touched: Iterable[str]) -> list[ScopeRow]:
+    """The task's targets: include rules, host aliases, then exclusions.
+
+    A rule counts as hit when a touched host evaluates against it; an alias
+    counts when either its name or the address it stands for was touched, and
+    a touched alias also marks the rule its address falls under.
+    """
+    hosts = {host.lower() for host in touched}
+    matched: set[str] = set()
+    for host in hosts:
+        decision = scope.evaluate(scope.resolve_host(host))
+        if decision.allowed and decision.matched_rule:
+            matched.add(decision.matched_rule)
+    rows: list[ScopeRow] = []
+    for rule in scope.includes:
+        rows.append(ScopeRow(rule=rule, excluded=False, hit=rule in matched))
+    for name, target in scope.hosts.items():
+        hit = name.lower() in hosts or target.lower() in hosts
+        rows.append(ScopeRow(rule=name, excluded=False, hit=hit, note=f"→ {target}"))
+    for rule in scope.excludes:
+        rows.append(ScopeRow(rule=rule, excluded=True, hit=False))
+    return rows

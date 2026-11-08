@@ -99,6 +99,39 @@ def test_ctf_counter_reads_flags_and_not_verified_findings() -> None:
     assert (bounty.counter_label, bounty.counter_done) == ("verified", 9)
 
 
+def test_scope_rows_mark_touched_targets_and_keep_exclusions_last() -> None:
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.tui.killchain import scope_rows
+
+    scope = ScopeContract(
+        includes=("10.0.0.0/24", "*.example.com"),
+        excludes=("10.0.0.1",),
+        hosts={"flight.htb": "10.0.0.7"},
+    )
+    rows = scope_rows(scope, {"10.0.0.7", "other.htb"})
+    by_rule = {row.rule: row for row in rows}
+    # a touched host inside the network marks the include rule
+    assert by_rule["10.0.0.0/24"].hit is True
+    assert by_rule["*.example.com"].hit is False
+    # the alias is hit through the address it stands for, with the note
+    assert by_rule["flight.htb"].hit is True
+    assert by_rule["flight.htb"].note == "→ 10.0.0.7"
+    # exclusions trail the list and never count as hit
+    assert rows[-1].rule == "10.0.0.1" and rows[-1].excluded and not rows[-1].hit
+
+
+def test_scope_rows_resolve_a_touched_alias_into_its_rule() -> None:
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.tui.killchain import scope_rows
+
+    scope = ScopeContract(includes=("10.0.0.9",), hosts={"flight.htb": "10.0.0.9"})
+    rows = scope_rows(scope, {"flight.htb"})
+    by_rule = {row.rule: row for row in rows}
+    assert by_rule["flight.htb"].hit is True
+    # the alias name touched in a command also marks the rule its address means
+    assert by_rule["10.0.0.9"].hit is True
+
+
 def test_the_marker_table_covers_every_fallback_phase() -> None:
     """Each chain phase must be reachable by some marker, or the rail stalls."""
     from samurai_ai.tui.killchain import _CHAINS, _MARKERS

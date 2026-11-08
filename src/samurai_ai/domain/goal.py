@@ -98,6 +98,19 @@ class Goal(BaseModel):
         self.spent_steps += steps
         self.touch()
 
+    def extend_budget(self) -> None:
+        """Raise the spent-through limits so the run goes on.
+
+        The budget is a safety net, not a stop condition: the finish line and
+        the auto-continue cap decide when a run ends, so hitting the counter
+        raises it by one default allotment instead of blocking mid-work.
+        """
+        if self.spent_steps >= self.budget_steps:
+            self.budget_steps += DEFAULT_BUDGET_STEPS
+        if self.spent_seconds >= self.budget_seconds:
+            self.budget_seconds += DEFAULT_BUDGET_SECONDS
+        self.touch()
+
     def tick(self, seconds: int) -> None:
         if seconds < 0:
             raise GoalError("elapsed time cannot be negative")
