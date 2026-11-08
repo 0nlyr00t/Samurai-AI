@@ -164,6 +164,9 @@ class SamuraiApp(
 ):
     COMMANDS = {CommandProvider}
 
+    #: how much of an attached file rides into the message
+    _ATTACH_LIMIT = 200_000
+
     CSS = """
     Screen {
         layout: vertical;
@@ -419,6 +422,7 @@ class SamuraiApp(
         self._last_user_text: str = ""
         self._open_tabs: list[str] = []
         self._tab_states: dict[str, dict[str, Any]] = {}
+        self._pastes: dict[int, str] = {}
         self._proposed_plan: tuple[str, list[dict[str, object]]] | None = None
         self._ctx_tokens: int = 0
         self._auto_title: str | None = None
@@ -738,7 +742,7 @@ class SamuraiApp(
                 self.accept_suggestion()
                 return
         popup.display = False
-        command = event.value.strip()
+        command = self._attach_paths(self._expand_pastes(event.value.strip()))
         event.input.value = ""
         if not command and self._collapsed:
             # Enter on an empty line opens the newest collapsed block
@@ -752,6 +756,70 @@ class SamuraiApp(
             self._history_index = None
             self._history_draft = ""
             self._handle_command(command)
+
+    def on_paste(self, event: events.Paste) -> None:
+        """A big paste becomes a marker in the field; the text expands on send.
+
+        Markers alone are a known trap (a harness that sends the marker instead
+        of the content loses the paste), so `_expand_pastes` puts it back.
+        """
+        text = event.text
+        field = self.focused
+        if not isinstance(field, Input) or field.id != "command-input":
+            return
+        if len(text.splitlines()) < 8 and len(text) < 1200:
+            return  # a short paste types itself in
+        event.prevent_default()
+        event.stop()
+        index = len(self._pastes) + 1
+        self._pastes[index] = text
+        marker = self.translator.t(
+            "input.paste-marker", index=index, lines=len(text.splitlines())
+        )
+        position = field.cursor_position
+        field.value = field.value[:position] + marker + field.value[position:]
+        field.cursor_position = position + len(marker)
+        self._write_dim(
+            self.translator.t("input.paste-stored", index=index, chars=len(text)),
+            process=False,
+        )
+
+    def _expand_pastes(self, text: str) -> str:
+        """Put every `[pasted #N]` marker back to its content; markers then clear."""
+        if not self._pastes:
+            return text
+        for index, block in list(self._pastes.items()):
+            marker = self.translator.t(
+                "input.paste-marker", index=index, lines=len(block.splitlines())
+            )
+            if marker in text:
+                text = text.replace(marker, block)
+        self._pastes.clear()
+        return text
+
+    def _attach_paths(self, text: str) -> str:
+        """`@path` mentions become fenced file contents; bad paths stay as text."""
+        if "@" not in text:
+            return text
+        import re
+
+        def replace(match: re.Match[str]) -> str:
+            path = Path(match.group(1))
+            if not path.is_file():
+                self._write_dim(self.translator.t("input.attach-missing", path=str(path)))
+                return match.group(0)
+            try:
+                body = path.read_text(errors="replace")[: self._ATTACH_LIMIT]
+            except OSError as exc:
+                self._write_dim(f"[attach] {exc}")
+                return match.group(0)
+            self._write_dim(
+                self.translator.t("input.attached", path=str(path), chars=len(body)),
+                process=False,
+            )
+            return f"\n\n`{path}`:\n```\n{body}\n```\n"
+
+        return re.sub(r"@([\w./\-]+\.[\w]+)", replace, text)
 
     def history_step(self, direction: int) -> None:
         if not self._history:
