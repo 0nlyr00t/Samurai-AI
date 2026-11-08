@@ -107,15 +107,19 @@ class OperationService:
         self.repository.update(operation, expected_version, event)
         return operation
 
-    def set_goal(self, operation_id: str, goal: str) -> Operation:
-        """Set or clear the operation's completion condition."""
+    def set_goal(self, operation_id: str, goal: str, *, automatic: bool = False) -> Operation:
+        """Set or clear the operation's completion condition.
+
+        ``automatic`` marks a goal derived from the task rather than typed by the
+        operator, so the journal can say where it came from.
+        """
         operation = self.get(operation_id)
         expected_version = operation.version
         operation.goal = goal.strip()[:500]
         event = OperationEvent(
             operation_id=operation.id,
             event_type="operation.goal.changed",
-            payload={"goal": operation.goal},
+            payload={"goal": operation.goal, "automatic": automatic},
         )
         self.repository.update(operation, expected_version, event)
         return operation
