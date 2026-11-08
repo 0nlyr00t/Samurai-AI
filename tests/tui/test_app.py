@@ -6873,3 +6873,64 @@ def test_a_touched_host_shows_in_the_access_panel(tmp_path: Path) -> None:
             assert "10.0.0.7" in access
 
     asyncio.run(exercise())
+
+
+def test_a_big_paste_collapses_to_a_marker_and_expands_on_send(tmp_path: Path) -> None:
+    """The field shows a marker; the model receives the whole text."""
+    from textual import events
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    big = "\n".join(f"line {i} of a pasted log" for i in range(40))
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            field = app.query_one("#command-input", Input)
+            field.focus()
+            app.on_paste(events.Paste(big))
+            await pilot.pause()
+            assert "[pasted #1" in field.value, field.value
+            assert "line 1 of" not in field.value  # the field stays short
+            sent = app._attach_paths(app._expand_pastes(field.value))
+            assert big in sent
+
+    asyncio.run(exercise())
+
+
+def test_a_short_paste_types_itself_in(tmp_path: Path) -> None:
+    from textual import events
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            field = app.query_one("#command-input", Input)
+            field.focus()
+            app.on_paste(events.Paste("two\nlines"))
+            await pilot.pause()
+            assert app._pastes == {}
+
+    asyncio.run(exercise())
+
+
+def test_an_at_path_inlines_the_file(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    target = tmp_path / "notes.txt"
+    target.write_text("pasted file body")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            out = app._attach_paths(f"look at @{target}")
+            assert "pasted file body" in out
+            missing = app._attach_paths("look at @/nope/missing.txt")
+            assert "@" in missing  # a bad path stays as text
+
+    asyncio.run(exercise())

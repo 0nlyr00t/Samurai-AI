@@ -3,6 +3,10 @@ DEFAULT_LOCALE = "en"
 
 _TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
+        "input.paste-marker": "[pasted #{index} · {lines} lines]",
+        "input.paste-stored": "[paste] stored block #{index} ({chars} chars); it expands on send",
+        "input.attach-missing": "[attach] no such file: {path}",
+        "input.attached": "[attach] inlined {path} ({chars} chars)",
         "input.placeholder": "Enter a command; /help lists Operation Kernel capabilities",
         "welcome.help-hint": "Use /help to list available commands.",
         "help.help": "/help             Show available commands",
