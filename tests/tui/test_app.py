@@ -1284,11 +1284,11 @@ def test_chat_tool_loop_executes_shell_command(tmp_path: Path) -> None:
                 assert "hello-from-tool" in blocks
                 assert "⚙ exec · echo" in blocks
                 assert "ran it" in text
-                # /expand opens the collapsed block in place
-                block = app._collapsed[0]
+                # /expand opens the oldest collapsed *run* (the thinking block
+                # comes first and holds the goal line, not the output)
+                block = next(b for b in app._collapsed if "⚙" in b._title.plain)
                 assert not block.expanded
-                command_input.value = "/expand"
-                await pilot.press("enter")
+                block.toggle()
                 await pilot.pause()
                 assert block.expanded
                 assert "hello-from-tool" in "\n".join(block._body)
@@ -1484,7 +1484,7 @@ def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
                 await pilot.pause()
                 # 4 tool rounds + 1 closing call without tools: the operator
                 # always gets a final answer instead of silence
-                assert provider.calls == 4 * 6 + 1  # 4 rounds x 6 stretches + closing
+                assert provider.calls == 4 * 6 + 5 + 1  # rounds, stretches, judges, closing
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "final summary after the loop" in text
             await pilot.press("ctrl+c")
@@ -7299,5 +7299,130 @@ def test_a_broken_judge_falls_back_to_the_counter(tmp_path: Path) -> None:
             journal = app.query_one("#journal", BlockJournal).text()
             assert "continue 5/5" in journal  # it still stretched to the end
             assert "turn ended" in journal  # and closed honestly
+
+    asyncio.run(exercise())
+
+
+def test_the_goal_is_adopted_from_the_task_when_none_is_set(tmp_path: Path) -> None:
+    """A task without /goal still gets a condition, marked as derived."""
+    from samurai_ai.agents.provider import ChatResponse, Usage
+
+    class _Quiet:
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self):
+            return ["m"]
+
+        async def complete(self, request):
+            return ChatResponse(text="ok", usage=Usage(),
+                                model_id=request.model_id, provider_id="gpt", latency_ms=1)
+
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: _Quiet())
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "gpt/m@v1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+    operation = stack[0].create(
+        "Adopt", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "take user.txt on 10.0.0.5"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert stack[0].get(operation.id).goal == "take user.txt on 10.0.0.5"
+
+    asyncio.run(exercise())
+
+
+def test_an_operator_goal_is_not_overwritten_by_the_task(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Keep", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[0].set_goal(operation.id, "both flags")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._adopt_goal("something else entirely")
+            await pilot.pause()
+            assert stack[0].get(operation.id).goal == "both flags"
+
+    asyncio.run(exercise())
+
+
+def test_loot_skips_provider_and_tool_keys(tmp_path: Path) -> None:
+    """Settings keys live in settings; LOOT is what the work brought in."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Loot", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[5].add("openai-api-key", "sk-1", operation.id)
+    stack[5].add("subfinder_api_key", "sf-1", operation.id)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            creds = str(app.query_one("#side-creds", Static).render())
+            assert "no loot yet" in creds
+            await app._run_remember_secret_tool(
+                __import__("samurai_ai.agents.provider", fromlist=["ToolCall"]).ToolCall(
+                    id="c1", name="remember_secret",
+                    arguments={"name": "kpark-password", "value": "s"},
+                )
+            )
+            await pilot.pause()
+            creds = str(app.query_one("#side-creds", Static).render())
+            assert "kpark-password" in creds and "openai-api-key" not in creds
+
+    asyncio.run(exercise())
+
+
+def test_relay_can_be_set_and_cleared_from_the_chat(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Relay lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._relay_command("prlctl exec {uuid} --")
+            await pilot.pause()
+            assert stack[0].get(operation.id).relay == "prlctl exec {uuid} --"
+            app._relay_command("clear")
+            await pilot.pause()
+            assert stack[0].get(operation.id).relay == ""
+
+    asyncio.run(exercise())
+
+
+def test_a_failed_run_without_a_relay_hints_at_it(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hint lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._write_tool_block("⚙ exec · nc …", 1, "", "no route")
+            text = app.query_one("#journal", BlockJournal).text()
+            assert "relay" in text
 
     asyncio.run(exercise())

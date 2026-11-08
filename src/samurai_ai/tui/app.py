@@ -76,6 +76,7 @@ from samurai_ai.services.retests import RetestService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
 from samurai_ai.services.teamwork import TeamworkService
+from samurai_ai.services.tool_keys import CATALOGUE
 from samurai_ai.services.traffic import TrafficService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.access import AccessRepository
@@ -426,6 +427,7 @@ class SamuraiApp(
         self._open_tabs: list[str] = []
         self._tab_states: dict[str, dict[str, Any]] = {}
         self._pastes: dict[int, str] = {}
+        self._relay_warned = False
         self._projects: list[str] = []
         self._proposed_plan: tuple[str, list[dict[str, object]]] | None = None
         self._ctx_tokens: int = 0
@@ -1155,6 +1157,33 @@ class SamuraiApp(
         self._write_dim(self.translator.t("plan.discarded"))
         self._refresh_chrome()
 
+
+    def _relay_command(self, argument: str) -> None:
+        """`/relay <prefix>` runs network tools in a VM; bare `/relay` shows it."""
+        if self.operation is None:
+            self._write_line("[relay] " + self.translator.t("status.no-operation"))
+            return
+        value = argument.strip()
+        if not value:
+            relay = self.operation.relay
+            self._write_dim(
+                self.translator.t("relay.current", relay=relay)
+                if relay
+                else self.translator.t("relay.empty")
+            )
+            return
+        if value.lower() in ("clear", "off"):
+            self.operation = self.service.set_relay(self.operation.id, "")
+            self._write_dim(self.translator.t("relay.cleared"))
+            self._refresh_chrome()
+            return
+        try:
+            self.operation = self.service.set_relay(self.operation.id, value)
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            self._write_line(f"[relay] {exc}")
+            return
+        self._write_dim(self.translator.t("relay.set", relay=self.operation.relay))
+        self._refresh_chrome()
 
     def _goal_command(self, argument: str) -> None:
         """`/goal <condition>` sets it; bare `/goal` shows it; `clear` drops it."""
@@ -3424,6 +3453,19 @@ class SamuraiApp(
             lines.append("\n")
         panel.update(lines)
 
+    def _is_service_key(self, name: str) -> bool:
+        """Provider and tool keys belong to settings, not to LOOT."""
+        # OAuth logins and tool keys stored by env name are settings, not loot
+        if name.endswith("-access-token") or name.endswith(("_api_key", "_api_token", "_org_id")):
+            return True
+        try:
+            for provider in self.models.list_providers():
+                if provider.get("secret_name") == name:
+                    return True
+        except Exception:  # noqa: BLE001 - providers are optional
+            pass
+        return name in {entry.env_name.lower() for entry in CATALOGUE}
+
     def _refresh_side_blocks(self) -> None:
         """Hosts we hold access to, and the names of vaulted secrets."""
         from samurai_ai.tui.killchain import access_rows
@@ -3460,7 +3502,11 @@ class SamuraiApp(
             lines.append(f" {row.level}\n", style=self.paint(token))
         access.update(lines)
 
-        names = [meta.name for meta in self.vault.list_metadata(self.operation.id)]
+        names = [
+            meta.name
+            for meta in self.vault.list_metadata(self.operation.id)
+            if not self._is_service_key(meta.name)
+        ]
         secrets = Text()
         secrets.append(self.translator.t("side.creds") + "\n", style=self.paint("dim accent"))
         if not names:
@@ -3706,6 +3752,13 @@ class SamuraiApp(
                 label_key = "keys.action." + action.replace("_", "-")
                 parts.append(f"{key} {self.translator.t(label_key)}")
         bar.update(" · ".join(parts))
+
+    def _relay_warning(self) -> None:
+        """Say it once when a target is unreachable and no relay is set."""
+        if self.operation is None or self.operation.relay or self._relay_warned:
+            return
+        self._relay_warned = True
+        self._write_dim(self.translator.t("relay.hint"), process=False)
 
     def _refresh_chrome(self) -> None:
         self._refresh_hint_bar()

@@ -569,6 +569,9 @@ class ChatController:
         )
         prompt = self._append_constraints(prompt)
         prompt = self._append_frontier(prompt)
+        goal = self._operation_goal(self.operation.id) if self.operation else ""
+        if goal:
+            prompt += "\n\n" + self.translator.t("chat.goal-hint", goal=goal)
         relay = getattr(self.operation, "relay", "") if self.operation else ""
         if relay:
             # hand the relay to the model as-is so it never invents a helper
@@ -1065,6 +1068,7 @@ class ChatController:
             # rebuilt every launch, never persisted
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
         self._last_user_text = text
+        self._adopt_goal(text)
         recall = self._recall_for(text)
         if recall:
             self._remember(Message(role="system", content=recall))
@@ -1204,6 +1208,24 @@ class ChatController:
             self._write_ai_message(final)
         return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.ROUNDS
 
+
+    def _adopt_goal(self, text: str) -> None:
+        """Take the task as the goal when none was set; the operator can override.
+
+        A run without a goal is judged by the round counter alone, which cannot
+        tell "still working" from "done" — so the task's own wording becomes the
+        condition, marked as derived.
+        """
+        if self.operation is None:
+            return
+        if self._operation_goal(self.operation.id):
+            return
+        objective = (self.operation.objective or "").strip()
+        derived = objective or " ".join(text.split())[:300]
+        if not derived:
+            return
+        self.operation = self.service.set_goal(self.operation.id, derived, automatic=True)
+        self._write_dim(self.translator.t("goal.adopted", goal=derived))
 
     def _operation_goal(self, operation_id: str) -> str:
         """The goal from the store — the in-memory copy can be stale."""
@@ -1956,6 +1978,10 @@ class ChatController:
         if len(title) > width:
             title = title[: width - 1] + "…"
         failed = exit_code not in (0, None)
+        if failed and not (self.operation and self.operation.relay):
+            warn = getattr(self, "_relay_warning", None)
+            if warn is not None:
+                warn()
         if failed:
             error = (stderr.strip() or stdout.strip()).splitlines()
             tail = error[-1] if error else f"exit {exit_code}, no output"

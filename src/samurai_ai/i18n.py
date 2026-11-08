@@ -591,9 +591,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "newop.name": "operation name",
         "newop.scope": "scope includes, comma-separated (empty = 127.0.0.1/32)",
         "newop.created": "new operation tab: {name} ({mode})",
+        "relay.current": "[relay] {relay}",
+        "relay.empty": "[relay] off — commands run on this host",
+        "relay.set": "[relay] network tools now run through: {relay}",
+        "relay.cleared": "[relay] off",
+        "relay.hint": (
+            "[relay] off: if the target is only reachable from a VM, set "
+            "/relay prlctl exec <uuid> -- without it every call fights quoting"
+        ),
         "goal.current": "[goal] {goal}",
         "goal.empty": "[goal] no completion condition set",
         "goal.set": "[goal] done when: {goal} — the run continues until a judge says so",
+        "goal.adopted": "◎ goal taken from the task: {goal}",
+        "chat.goal-hint": "Completion condition for this operation: {goal}",
         "chat.goal-met": "◎ the judge says the condition holds — finishing",
         "chat.goal-judge-failed": "[goal] judge unavailable, falling back to the counter",
         "goal.cleared": "[goal] cleared, back to the round counter",
@@ -1274,9 +1284,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tabmenu.close": "Закрыть вкладку",
         "tabmenu.close-others": "Закрыть остальные вкладки",
         "tabmenu.name-prompt": "новое название операции",
+        "relay.current": "[релей] {relay}",
+        "relay.empty": "[релей] выключен — команды идут на этом хосте",
+        "relay.set": "[релей] сетевые инструменты теперь идут через: {relay}",
+        "relay.cleared": "[релей] выключен",
+        "relay.hint": (
+            "[релей] выключен: если цель достижима только из VM, задай "
+            "/relay prlctl exec <uuid> -- иначе каждый вызов воюет с кавычками"
+        ),
         "goal.current": "[цель] {goal}",
         "goal.empty": "[цель] условие готовности не задано",
         "goal.set": "[цель] готово, когда: {goal} — прогон идёт, пока оценщик не скажет «стоп»",
+        "goal.adopted": "◎ цель взята из задачи: {goal}",
+        "chat.goal-hint": "Условие готовности этой операции: {goal}",
         "chat.goal-met": "◎ оценщик считает условие выполненным — завершаю",
         "chat.goal-judge-failed": "[цель] оценщик недоступен, работает счётчик",
         "goal.cleared": "[цель] снята, снова работает счётчик раундов",
