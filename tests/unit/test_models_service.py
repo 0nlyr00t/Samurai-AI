@@ -234,3 +234,61 @@ def test_patch_diff_reads_a_cve_style_patch(tmp_path: Path) -> None:
     assert "RCE" in analysis.hypothesis or "rce" in analysis.hypothesis
     text = report(analysis)
     assert "src/parse.c" in text and "bounds" in text
+
+
+def test_device_code_login_polls_until_the_token_arrives() -> None:
+    """RFC 8628 shape: pending answers keep polling, a token ends the flow."""
+    from samurai_ai.services import provider_oauth
+
+    calls: list[str] = []
+
+    def transport(url: str, form: dict[str, str]):
+        calls.append(url)
+        if url.endswith("/device_authorization"):
+            return 200, {
+                "verification_uri": "https://idp.example/device",
+                "user_code": "ABCD-1234",
+                "device_code": "dev-1",
+                "interval": 0,
+            }
+        if len([c for c in calls if c.endswith("/token")]) < 2:
+            return 400, {"error": "authorization_pending"}
+        return 200, {"access_token": "tok-1"}
+
+    prompt = provider_oauth.begin(transport, "https://idp.example", "cli-1")
+    assert prompt.user_code == "ABCD-1234"
+    token = provider_oauth.wait_for_token(
+        transport, "https://idp.example", "cli-1", prompt, sleep=lambda _s: None
+    )
+    assert token == "tok-1"
+
+
+def test_device_code_login_gives_up_on_a_real_refusal() -> None:
+    import pytest as _pytest
+
+    from samurai_ai.services import provider_oauth
+
+    def transport(url: str, form: dict[str, str]):
+        if url.endswith("/device_authorization"):
+            return 200, {"verification_uri": "u", "user_code": "c", "device_code": "d"}
+        return 400, {"error": "access_denied"}
+
+    prompt = provider_oauth.begin(transport, "https://idp.example", "cli-1")
+    with _pytest.raises(provider_oauth.DeviceFlowError):
+        provider_oauth.wait_for_token(
+            transport, "https://idp.example", "cli-1", prompt, sleep=lambda _s: None
+        )
+
+
+def test_an_oauth_token_outranks_a_stored_key(tmp_path: Path) -> None:
+    """A device login wins over an API key for that provider."""
+    from samurai_ai.cli import _make_services
+
+    services = _make_services(tmp_path / "t.db")
+    models, vault = services[7], services[5]
+    vault.add("moonshot-api-key", "sk-key")
+    provider = next(p for p in models.registry.list_providers() if p.id == "moonshot")
+    assert models.oauth_token("moonshot") is None
+    vault.add("moonshot-access-token", "tok-oauth")
+    assert models.oauth_token("moonshot") == "tok-oauth"
+    assert provider.secret_name == "moonshot-api-key"
