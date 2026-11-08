@@ -381,7 +381,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "is done."
         ),
         "chat.autonomy.ask": "",
-        "chat.thinking": "Thinking",
+        "chat.thinking": "thinking · {count}",
         "chat.steer": "steering: {text}",
         "shell.empty": "shell mode: type a command after !",
         "chat.undone": "last prompt undone",
@@ -1038,7 +1038,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "допущения в ответе и доводи задачу до конца."
         ),
         "chat.autonomy.ask": "",
-        "chat.thinking": "Думает",
         "chat.steer": "вброс в текущий ход: {text}",
         "shell.empty": "shell-режим: наберите команду после !",
         "chat.undone": "последний промпт отменён",
@@ -1110,6 +1109,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "inspect.empty": "(пустой артефакт)",
 
         "chat.tool-collapsed": "⚙ {command} — exit {code} · строк: {lines}",
+        "chat.thinking": "думаю · {count}",
         "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",
         "chat.process-block": "{lines} шаг(ов) свёрнуто — Ctrl+E, Enter или клик, чтобы открыть",
         "chat.process-title": "журнал процесса",
