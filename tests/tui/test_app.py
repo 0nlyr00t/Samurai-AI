@@ -2078,7 +2078,8 @@ def test_goal_next_queues_without_replacing(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_goal_step_budget_blocks_the_goal(tmp_path: Path) -> None:
+def test_goal_step_budget_extends_instead_of_blocking(tmp_path: Path) -> None:
+    """A spent step budget raises itself — the strip must not claim a stop mid-run."""
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")
 
@@ -2094,9 +2095,9 @@ def test_goal_step_budget_blocks_the_goal(tmp_path: Path) -> None:
                 app.goals.create(operation.id, "short", budget_steps=1)
                 app._count_goal_step()
                 goal = app._current_goal()
-                assert goal.state.value == "blocked"
-                assert "step budget 1 spent" in goal.block_reason
-                assert any("goal blocked" in str(m) for m in messages)
+                assert goal.state.value == "active"
+                assert goal.budget_steps == 41
+                assert any("raised to 41 steps" in str(m) for m in messages)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -6025,7 +6026,7 @@ def test_the_side_column_lists_access_and_secret_names(tmp_path: Path) -> None:
             await pilot.pause()
             access = str(app.query_one("#side-access", Static).render())
             creds = str(app.query_one("#side-creds", Static).render())
-            assert "nothing pwned yet" in access
+            assert "*.example.com" in access
             assert "n8n-api-key" in creds
 
     asyncio.run(exercise())
@@ -6853,14 +6854,14 @@ def test_a_found_secret_lands_in_the_sidebar(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_a_touched_host_shows_in_the_access_panel(tmp_path: Path) -> None:
-    """A successful command against a host is access at read level at least."""
+def test_a_touched_scope_target_gets_a_hit_marker(tmp_path: Path) -> None:
+    """A successful command against a scope target marks it in the SCOPE block."""
     from samurai_ai.domain.execution import ToolRun, ToolRunStatus
 
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     operation = stack[0].create(
-        "Touch lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+        "Touch lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("10.0.0.7",))
     )
     run = ToolRun(
         operation_id=operation.id, tool_id="shell.exec", tool_version=1,
@@ -6880,9 +6881,98 @@ def test_a_touched_host_shows_in_the_access_panel(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 34)) as pilot:
             await pilot.pause()
             access = str(app.query_one("#side-access", Static).render())
-            assert "10.0.0.7" in access
+            assert "● 10.0.0.7" in access
 
     asyncio.run(exercise())
+
+
+def test_a_long_scope_folds_behind_a_more_row_and_opens_as_a_list(tmp_path: Path) -> None:
+    """Past ten targets the panel shows «N more…»; a click opens the full list."""
+    from samurai_ai.tui.screens.picker import PickerScreen
+    from samurai_ai.tui.widgets import SideBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    includes = tuple(f"10.0.0.{index}" for index in range(2, 15))
+    operation = stack[0].create(
+        "Wide lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=includes)
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            block = app.query_one("#side-access", SideBlock)
+            text = str(block.render())
+            assert "10.0.0.2" in text
+            assert "10.0.0.12" not in text
+            assert "3 more" in text
+            block.on_click()
+            await pilot.pause()
+            assert isinstance(app.screen, PickerScreen)
+            assert "10.0.0.14" in [label for _id, label, _desc in app.screen.picks]
+            await pilot.press("escape")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_long_loot_list_folds_behind_a_more_row_and_opens_as_a_list(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens.picker import PickerScreen
+    from samurai_ai.tui.widgets import SideBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Loot lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("10.0.0.5",))
+    )
+    for index in range(12):
+        stack[5].add(f"secret-{index:02d}", "x", operation.id)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            block = app.query_one("#side-creds", SideBlock)
+            text = str(block.render())
+            assert "secret-00" in text
+            assert "secret-10" not in text
+            assert "2 more" in text
+            block.on_click()
+            await pilot.pause()
+            assert isinstance(app.screen, PickerScreen)
+            assert "secret-11" in [label for _id, label, _desc in app.screen.picks]
+            await pilot.press("escape")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_the_bounty_tab_calls_the_scope_scope(tmp_path: Path) -> None:
+    """The Bug Bounty view heads the scope section «Scope» in both locales."""
+    for locale, expected in (("en", "Scope"), ("ru", "Scope")):
+        stack = _minimal_stack(tmp_path)
+        stack[2].set_locale(locale)
+        operation = stack[0].create(
+            f"Bounty {locale}", OperationMode.BUG_BOUNTY,
+            ScopeContract(includes=("*.example.com",)),
+        )
+
+        async def exercise(app_stack=stack, op=operation, wanted=expected) -> None:
+            app = SamuraiApp(*app_stack, op.id)
+            async with app.run_test(size=(120, 34)) as pilot:
+                await pilot.pause()
+                app._render_view("view-bounty")
+                await pilot.pause()
+                bounty_log = app.query_one("#view-bounty", BlockJournal)
+                text = "\n".join(strip.text for strip in bounty_log.lines)
+                assert wanted in text
+                await pilot.press("ctrl+c")
+                await pilot.press("ctrl+c")
+
+        asyncio.run(exercise())
 
 
 def test_a_big_paste_collapses_to_a_marker_and_expands_on_send(tmp_path: Path) -> None:

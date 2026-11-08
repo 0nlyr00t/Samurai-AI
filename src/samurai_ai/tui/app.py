@@ -140,6 +140,7 @@ from samurai_ai.tui.widgets import (
     HistoryInput,
     OperationTab,
     PlusButton,
+    SideBlock,
     ViewTabs,
 )
 
@@ -661,8 +662,8 @@ class SamuraiApp(
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
                 yield Static(id="side-swarm")
-                yield Static(id="side-access")
-                yield Static(id="side-creds")
+                yield SideBlock("scope", id="side-access")
+                yield SideBlock("loot", id="side-creds")
         with Horizontal(id="ops-strip"):
             yield Static(id="strip-agents", classes="strip-item")
             yield Static(id="strip-todo", classes="strip-item")
@@ -1864,14 +1865,20 @@ class SamuraiApp(
             self._chat_history.append(Message(role="user", content=steered))
 
     def _count_goal_step(self) -> None:
-        """One model request against the active goal, enforcing the budget."""
+        """One model request against the active goal; a spent budget is raised."""
         goal = self._current_goal()
         if goal is None or goal.state.value != "active":
             return
-        blocked = self.goals.record_step(goal.id)
-        if blocked.state.value == "blocked":
+        steps_before, seconds_before = goal.budget_steps, goal.budget_seconds
+        updated = self.goals.record_step(goal.id)
+        if updated.budget_steps > steps_before or updated.budget_seconds > seconds_before:
             self._write_line(
-                "[goal] " + self.translator.t("goal.blocked", reason=blocked.block_reason)
+                "[goal] "
+                + self.translator.t(
+                    "goal.budget-extended",
+                    steps=updated.budget_steps,
+                    seconds=updated.budget_seconds,
+                )
             )
             self._refresh_chrome()
 
@@ -3467,56 +3474,85 @@ class SamuraiApp(
         return name in {entry.env_name.lower() for entry in CATALOGUE}
 
     def _refresh_side_blocks(self) -> None:
-        """Hosts we hold access to, and the names of vaulted secrets."""
-        from samurai_ai.tui.killchain import access_rows
+        """SCOPE: the operation's targets and whether work reached them. LOOT: secret names."""
+        from samurai_ai.tui.killchain import hosts_in, scope_rows
 
-        access = self.query_one("#side-access", Static)
-        creds = self.query_one("#side-creds", Static)
+        scope_block = self.query_one("#side-access", SideBlock)
+        loot_block = self.query_one("#side-creds", SideBlock)
         if self.operation is None:
-            access.update("")
-            creds.update("")
+            scope_block.entries = []
+            loot_block.entries = []
+            scope_block.update("")
+            loot_block.update("")
             return
-        facts = [
-            str(node.payload.get("summary") or node.text())
-            for node in self.graph.for_operation(self.operation.id)
-            if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
-        ]
-        # hosts the agent actually touched count too: a hit is access at read
-        # level even before a fact is recorded, otherwise the block never moves
-        touched = [
+        # hosts the agent actually touched: a successful run against a target
+        # marks it, otherwise the block never moves
+        touched = hosts_in(
             str(run.parameters.get("command", ""))
-            for run in self.execution.list_runs(self.operation.id)
+            for run in self.execution.list_runs(self.operation.id)[-40:]
             if run.exit_code == 0
+        )
+        rows = scope_rows(self.operation.scope, touched)
+        scope_block.entries = [
+            f"{row.rule} {row.note}".strip() + (" (excluded)" if row.excluded else "")
+            for row in rows
         ]
-        rows = access_rows([*facts, *touched[-40:]])
         lines = Text()
         lines.append(self.translator.t("side.access") + "\n", style=self.paint("dim accent"))
         if not rows:
             lines.append(
                 self.translator.t("side.access-empty"), style=self.paint("dim text-faint")
             )
-        for row in rows[:6]:
-            token = {"root": "success", "user": "risk-mid"}.get(row.level, "dim text-faint")
-            lines.append("● ", style=self.paint(token))
-            lines.append(row.host, style=self.paint("text"))
-            lines.append(f" {row.level}\n", style=self.paint(token))
-        access.update(lines)
+        for row in rows[: SideBlock.LIMIT]:
+            if row.excluded:
+                lines.append("+ ", style=self.paint("risk-mid"))
+                lines.append(row.rule, style=self.paint("dim text-faint"))
+            else:
+                marker = "● " if row.hit else "○ "
+                token = "success" if row.hit else "dim text-faint"
+                lines.append(marker, style=self.paint(token))
+                lines.append(row.rule, style=self.paint("text" if row.hit else "dim"))
+            if row.note:
+                lines.append(f" {row.note}", style=self.paint("dim text-faint"))
+            lines.append("\n")
+        if len(rows) > SideBlock.LIMIT:
+            lines.append(
+                self.translator.t("side.more", left=len(rows) - SideBlock.LIMIT),
+                style=self.paint("accent"),
+            )
+        scope_block.update(lines)
 
         names = [
             meta.name
             for meta in self.vault.list_metadata(self.operation.id)
             if not self._is_service_key(meta.name)
         ]
+        loot_block.entries = names
         secrets = Text()
         secrets.append(self.translator.t("side.creds") + "\n", style=self.paint("dim accent"))
         if not names:
             secrets.append(
                 self.translator.t("side.creds-empty"), style=self.paint("dim text-faint")
             )
-        for name in names[:6]:
+        for name in names[: SideBlock.LIMIT]:
             secrets.append("· ", style=self.paint("dim"))
             secrets.append(name + "\n", style=self.paint("text"))
-        creds.update(secrets)
+        if len(names) > SideBlock.LIMIT:
+            secrets.append(
+                self.translator.t("side.more", left=len(names) - SideBlock.LIMIT),
+                style=self.paint("accent"),
+            )
+        loot_block.update(secrets)
+
+    def _show_side_list(self, target: str, entries: list[str]) -> None:
+        """The full SCOPE or LOOT list behind the «ещё N…» row."""
+        from samurai_ai.tui.screens import PickerScreen
+
+        title_key = "side.scope-title" if target == "scope" else "side.loot-title"
+        picks = [(str(index), entry, "") for index, entry in enumerate(entries)]
+        self.push_screen(
+            PickerScreen(self.translator, title_key, "side.list-hint", "side.list-empty", picks)
+        )
 
     def _killchain(self) -> Any:
         """The stage rail for the current operation; empty when there is none."""
