@@ -159,6 +159,31 @@ class ToolBlock(Vertical):
         yield ToolHeader(self._render_title())
         yield Static(self._render_body(), classes="tool-body")
 
+    def set_title(self, title: Text) -> None:
+        """Replace the header line (the thinking counter moves)."""
+        self._title = title
+        if not self.is_mounted:
+            return
+        self.query_one(ToolHeader).update(self._render_title())
+
+    def set_body(self, body: list[str], style: str = "") -> None:
+        """Replace the body in place — the thinking block grows during a turn."""
+        self._body = body
+        self._body_style = style
+        if self.is_mounted:
+            self.query_one(".tool-body", Static).update(self._render_body())
+            self._apply_state()
+            return
+        # called before the children exist (freshly mounted): apply on refresh
+        self.call_after_refresh(self._apply_after_mount)
+
+    def _apply_after_mount(self) -> None:
+        if not self.is_mounted:
+            return
+        body = self.query_one(".tool-body", Static)
+        body.update(self._render_body())
+        self._apply_state()
+
     def on_mount(self) -> None:
         self._apply_state()
 
