@@ -75,6 +75,7 @@ from samurai_ai.tui.journal import (
     ToolHeader,
     UserBlock,
 )
+from samurai_ai.tui.screens.project import ProjectPickerScreen
 
 
 def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> None:
@@ -7074,5 +7075,91 @@ def test_a_long_command_header_is_cut_to_one_line(tmp_path: Path) -> None:
             header = str(app.query_one("#journal", BlockJournal).tool_blocks[-1]._title)
             assert header.endswith("— exit 0") is False or True
             assert len(header) < 120 and "…" in header
+
+    asyncio.run(exercise())
+
+
+def test_a_single_project_opens_without_a_prompt(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # nothing to choose: no picker on screen, the project is remembered
+            assert not isinstance(app.screen, ProjectPickerScreen)
+            assert str(Path.cwd().resolve()) in app._known_projects()
+
+    asyncio.run(exercise())
+
+
+def test_several_projects_ask_and_switch(tmp_path: Path) -> None:
+    """Two known projects: the picker appears and the choice moves the cwd."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    other = tmp_path / "other-project"
+    other.mkdir()
+    stack[2].set_value("tui.projects", json.dumps([str(other)]))
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, ProjectPickerScreen)
+            listed = app.screen.query_one("#project-list", OptionList)
+            ids = [str(option.id) for option in listed.options]
+            target = ids.index(str(other))
+            listed.highlighted = target
+            await pilot.press("enter")
+            await pilot.pause()
+            assert str(app._cwd) == str(other)
+
+    asyncio.run(exercise())
+
+
+def test_the_plus_button_starts_a_new_chat_in_the_project(tmp_path: Path) -> None:
+    """`+` is the "new chat" affordance inside the chosen project."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._show_new_operation()
+            await pilot.pause()
+            from samurai_ai.tui.screens import NewOperationScreen
+
+            assert isinstance(app.screen, NewOperationScreen)
+
+    asyncio.run(exercise())
+
+
+def test_a_manual_path_opens_the_project(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.projects", json.dumps([str(tmp_path / "somewhere")]))
+    (tmp_path / "somewhere").mkdir()
+    typed = tmp_path / "typed-project"
+    typed.mkdir()
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            if not isinstance(app.screen, ProjectPickerScreen):
+                app._show_project_picker()
+                await pilot.pause()
+            listed = app.screen.query_one("#project-list", OptionList)
+            ids = [str(option.id) for option in listed.options]
+            listed.highlighted = ids.index("p-manual")
+            await pilot.press("enter")
+            await pilot.pause()
+            field = app.screen.query_one("#project-path", Input)
+            field.value = str(typed)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert str(app._cwd) == str(typed)
 
     asyncio.run(exercise())
