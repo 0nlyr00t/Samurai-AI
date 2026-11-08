@@ -85,6 +85,7 @@ class OperationTab(Static):
     ) -> None:
         super().__init__()
         self.operation_id = operation_id
+        self.label = label
         self.busy = busy
         self.current = current
         self.update(self.render_label(label))
@@ -96,9 +97,9 @@ class OperationTab(Static):
 
     def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
         if getattr(event, "button", 1) == 3:
-            closer = getattr(self.app, "_close_operation_by_id", None)
-            if closer is not None:
-                closer(self.operation_id)
+            menu = getattr(self.app, "_tab_menu", None)
+            if menu is not None:
+                menu(self.operation_id, self.label)
             return
         opener = getattr(self.app, "_open_operation", None)
         if opener is not None:
