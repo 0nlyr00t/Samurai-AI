@@ -153,7 +153,7 @@ class ToolBlock(Vertical):
         self._body = body
         self._failed = failed
         self._body_style = body_style
-        self.expanded = failed if expanded is None else expanded
+        self.expanded = False if expanded is None else expanded
 
     def compose(self) -> ComposeResult:
         yield ToolHeader(self._render_title())
