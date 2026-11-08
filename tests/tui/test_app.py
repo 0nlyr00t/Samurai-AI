@@ -6023,7 +6023,7 @@ def test_the_side_column_lists_access_and_secret_names(tmp_path: Path) -> None:
             await pilot.pause()
             access = str(app.query_one("#side-access", Static).render())
             creds = str(app.query_one("#side-creds", Static).render())
-            assert "no confirmed access" in access
+            assert "nothing pwned yet" in access
             assert "n8n-api-key" in creds
 
     asyncio.run(exercise())
@@ -6984,3 +6984,26 @@ def test_choosing_a_key_row_saves_the_key_and_reopens_the_picker(tmp_path: Path)
             assert stack[5].get("moonshot-api-key") == "sk-test-123"
 
     asyncio.run(exercise())
+
+
+def test_the_side_panels_use_pwned_and_loot_headings(tmp_path: Path) -> None:
+    """The panel speaks the trade's words, in either locale."""
+    for locale in ("en", "ru"):
+        stack = _minimal_stack(tmp_path / locale if False else tmp_path)
+        stack[2].set_locale(locale)
+        operation = stack[0].create(
+            f"Headings {locale}",
+            OperationMode.BUG_BOUNTY,
+            ScopeContract(includes=("*.example.com",)),
+        )
+
+        async def exercise() -> None:
+            app = SamuraiApp(*stack, operation.id)
+            async with app.run_test(size=(120, 34)) as pilot:
+                await pilot.pause()
+                access = str(app.query_one("#side-access", Static).render())
+                creds = str(app.query_one("#side-creds", Static).render())
+                assert "PWNED" in access
+                assert "LOOT" in creds
+
+        asyncio.run(exercise())
