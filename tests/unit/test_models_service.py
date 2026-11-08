@@ -292,3 +292,22 @@ def test_an_oauth_token_outranks_a_stored_key(tmp_path: Path) -> None:
     vault.add("moonshot-access-token", "tok-oauth")
     assert models.oauth_token("moonshot") == "tok-oauth"
     assert provider.secret_name == "moonshot-api-key"
+
+
+def test_the_goal_judge_reads_a_verdict() -> None:
+    from samurai_ai.services import goal_judge
+
+    assert goal_judge.parse_verdict("STOP") == "stop"
+    assert goal_judge.parse_verdict("continue.") == "continue"
+    assert goal_judge.parse_verdict("hmm") is None
+    system, question = goal_judge.build_prompt("both flags", "ran nmap")
+    assert "STOP" in system
+    assert "both flags" in question and "ran nmap" in question
+
+
+def test_the_digest_keeps_the_tail() -> None:
+    from samurai_ai.services import goal_judge
+
+    lines = [f"line {i}" for i in range(500)]
+    out = goal_judge.digest(lines, limit=100)
+    assert len(out) <= 100 and "line 499" in out
