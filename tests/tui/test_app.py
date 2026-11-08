@@ -6934,3 +6934,53 @@ def test_an_at_path_inlines_the_file(tmp_path: Path) -> None:
             assert "@" in missing  # a bad path stays as text
 
     asyncio.run(exercise())
+
+
+def test_the_model_picker_lists_providers_without_a_key(tmp_path: Path) -> None:
+    """An unconfigured provider is reachable from /model instead of invisible."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/m")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            await app._open_model_picker()
+            await pilot.pause()
+            listed = app.screen.query_one("#model-options", OptionList)
+            ids = [str(option.id) for option in listed.options]
+            assert any(i.startswith("k-") for i in ids), ids
+            key_row = next(i for i in ids if i.startswith("k-"))
+            listed.highlighted = ids.index(key_row)
+            await pilot.press("enter")
+            await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_choosing_a_key_row_saves_the_key_and_reopens_the_picker(tmp_path: Path) -> None:
+    """The key path works end to end: prompt, vault, reopen."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    from samurai_ai.tui.screens import ArgumentScreen
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            app._key_secret_by_provider = {"moonshot": "moonshot-api-key"}
+            worker = app.run_worker(app._ask_provider_key("moonshot"), exclusive=False)
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ArgumentScreen)
+            field = screen.query_one("Input")
+            field.value = "sk-test-123"
+            await pilot.press("enter")
+            await pilot.pause()
+            await worker.wait()
+            await pilot.pause()
+            assert stack[5].get("moonshot-api-key") == "sk-test-123"
+
+    asyncio.run(exercise())

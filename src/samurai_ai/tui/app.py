@@ -3833,6 +3833,17 @@ class SamuraiApp(
         reasoning = (
             reasoning_by_model.get(current or "") or self.models.default_reasoning_effort() or "off"
         )
+        # providers without a key stay visible: the operator can set it right here
+        needs_key = [
+            (provider["id"], provider["id"])
+            for provider in providers
+            if provider["auth"] == "missing" and provider["secret_name"]
+        ]
+        self._key_secret_by_provider = {
+            provider["id"]: provider["secret_name"]
+            for provider in providers
+            if provider["secret_name"]
+        }
         self.push_screen(
             ModelPickerScreen(
                 self.translator,
@@ -3842,6 +3853,8 @@ class SamuraiApp(
                 add_custom_label=self.translator.t("model.picker-add-custom"),
                 current_marker=self.translator.t("model.current-marker"),
                 reasoning_by_model=reasoning_by_model,
+                needs_key=needs_key,
+                needs_key_label=self.translator.t("model.needs-key"),
             ),
             self._on_model_chosen,
         )
@@ -3850,6 +3863,9 @@ class SamuraiApp(
         if choice is None:
             return
         model_id, reasoning = choice
+        if model_id.startswith("key:"):
+            self.run_worker(self._ask_provider_key(model_id[4:]), exclusive=False)
+            return
         if model_id == ADD_CUSTOM_ID:
             self.push_screen(
                 CustomEndpointScreen(self.translator, self.models, self.vault, self.settings),
@@ -3864,6 +3880,24 @@ class SamuraiApp(
         )
         self._refresh_chrome()
         self.query_one("#command-input", Input).focus()
+
+    async def _ask_provider_key(self, provider_id: str) -> None:
+        """Take the provider's key once, store it masked, then reopen /model."""
+        secret = getattr(self, "_key_secret_by_provider", {}).get(provider_id)
+        if secret is None:
+            return
+        answer = await self.push_screen_wait(
+            ArgumentScreen(
+                self.translator,
+                self.translator.t("model.key-prompt", provider=provider_id),
+            )
+        )
+        if not answer:
+            return
+        self.vault.add(secret, answer.strip(), created_by=self._actor())
+        self._write_dim(self.translator.t("model.key-saved", provider=provider_id))
+        self._refresh_chrome()
+        await self._open_model_picker()
 
     def _on_custom_endpoint_done(self, model_id: str | None) -> None:
         if model_id:
