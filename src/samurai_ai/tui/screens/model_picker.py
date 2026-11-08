@@ -76,16 +76,16 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
         model_options: list[Option] = []
         if self.add_custom_label is not None:
             model_options.append(Option(self.add_custom_label, id="m-add"))
-        for provider_id, provider_label in self.needs_key:
-            # a provider without a key is still reachable from here
-            model_options.append(
-                Option(f"⚠ {provider_label} — {self.needs_key_label}", id=f"k-{provider_id}")
-            )
         for index, model_id in enumerate(self.model_ids):
             label = model_id
             if self.current_marker and model_id == self.current_model:
                 label = f"{model_id}{self.current_marker}"
             model_options.append(Option(label, id=f"m{index}"))
+        for provider_id, provider_label in self.needs_key:
+            # a provider without a key stays reachable, below the models
+            model_options.append(
+                Option(f"⚠ {provider_label} — {self.needs_key_label}", id=f"k-{provider_id}")
+            )
         with Vertical(id="model-dialog"):
             yield Static(self.translator.t("model.picker-title"), id="model-title")
             with Horizontal(id="model-columns"):
@@ -106,7 +106,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
     def on_mount(self) -> None:
         models = self.query_one("#model-options", OptionList)
         if self.current_model in self.model_ids:
-            offset = (1 if self.add_custom_label is not None else 0) + len(self.needs_key)
+            offset = 1 if self.add_custom_label is not None else 0
             models.highlighted = self.model_ids.index(self.current_model) + offset
         reasoning = self.query_one("#reasoning-options", OptionList)
         reasoning.highlighted = REASONING_LEVELS.index(self.current_reasoning)
@@ -122,8 +122,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str]]):
                     self.selected_model = ADD_CUSTOM_ID
                     return
                 index -= 1
-            index -= len(self.needs_key)
-            if index < 0:
+            if index >= len(self.model_ids):
                 return  # a key row: the model choice is unchanged
             if 0 <= index < len(self.model_ids):
                 model_id = self.model_ids[index]
