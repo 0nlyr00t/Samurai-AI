@@ -116,6 +116,7 @@ from samurai_ai.tui.screens import (
     LanguagePromptScreen,
     ModelPickerScreen,
     NewOperationScreen,
+    ProjectPickerScreen,
     Section,
     SettingsScreen,
     TrustDirectoryScreen,
@@ -424,6 +425,7 @@ class SamuraiApp(
         self._open_tabs: list[str] = []
         self._tab_states: dict[str, dict[str, Any]] = {}
         self._pastes: dict[int, str] = {}
+        self._projects: list[str] = []
         self._proposed_plan: tuple[str, list[dict[str, object]]] | None = None
         self._ctx_tokens: int = 0
         self._auto_title: str | None = None
@@ -689,6 +691,7 @@ class SamuraiApp(
             self.operation = None
 
         self._refresh_chrome()
+        self._show_project_picker()
         for problem in self._theme_problems:
             self._write_dim(self.translator.t("theme.problem", problem=problem))
         for problem in self._key_problems:
@@ -1531,6 +1534,61 @@ class SamuraiApp(
         command_input.focus()
 
     # --- directory trust & yolo -----------------------------------------
+
+    def _remember_project_operation(self, directory: str, operation_id: str) -> None:
+        self.settings.set_value(f"tui.project.last.{directory}", operation_id)
+
+    def _remember_project(self, directory: str) -> None:
+        """Track a working directory as a project, newest last."""
+        known = [p for p in self._projects if p != directory]
+        self._projects = [*known, directory][-20:]
+        self.settings.set_value("tui.projects", json.dumps(self._projects))
+
+    def _known_projects(self) -> list[str]:
+        raw = self.settings.get_value("tui.projects") or "[]"
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            value = []
+        listed = [str(item) for item in value] if isinstance(value, list) else []
+        for directory in self._stored_trusted_dirs():
+            if directory not in listed:
+                listed.append(directory)
+        return [d for d in listed if Path(d).is_dir()]
+
+    def _show_project_picker(self) -> None:
+        """Ask which project this session works in; a single one opens itself."""
+        projects = self._known_projects()
+        current = str(self._cwd)
+        if len(projects) <= 1 and (not projects or projects[0] == current):
+            self._remember_project(current)
+            return
+        labels = [
+            (path, path + self.translator.t("project.current-marker") if path == current else path)
+            for path in projects
+        ]
+        self.push_screen(
+            ProjectPickerScreen(self.translator, labels), self._on_project_chosen
+        )
+
+    def _on_project_chosen(self, choice: tuple[str, str] | None) -> None:
+        if choice is None:
+            self._remember_project(str(self._cwd))
+            return
+        _, path = choice
+        self._switch_project(path)
+
+    def _switch_project(self, path: str) -> None:
+        """Point the session at another directory and its last operation."""
+        self._store_tab_state()
+        self._cwd = Path(path)
+        self._remember_project(path)
+        self._saved_dir = path
+        last = self.settings.get_value(f"tui.project.last.{path}") or ""
+        if last:
+            self._open_operation(last)
+        self._write_dim(self.translator.t("project.switched", path=path))
+        self._refresh_chrome()
 
     def _stored_trusted_dirs(self) -> list[str]:
         raw = self.settings.get_value("tui.trusted_dirs") or "[]"
