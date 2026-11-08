@@ -6997,8 +6997,8 @@ def test_the_side_panels_use_pwned_and_loot_headings(tmp_path: Path) -> None:
             ScopeContract(includes=("*.example.com",)),
         )
 
-        async def exercise() -> None:
-            app = SamuraiApp(*stack, operation.id)
+        async def exercise(app_stack=stack, op=operation) -> None:
+            app = SamuraiApp(*app_stack, op.id)
             async with app.run_test(size=(120, 34)) as pilot:
                 await pilot.pause()
                 access = str(app.query_one("#side-access", Static).render())
