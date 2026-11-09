@@ -64,6 +64,8 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/uninstall.
 
 **Сеть за релeем.** Если цель видна только из VM или за jump-хостом, `--relay "prlctl exec '<uuid>'"` уводит сетевые инструменты туда; контейнер не нужен, scope и артефакты остаются, адрес самого релeя добавляется в scope. `samurai doctor --relay "<префикс>"` заранее скажет, каких инструментов на той стороне нет.
 
+**Локальные инструменты.** На машине оператора `samurai` берёт уже установленные инструменты нативно, без shell: executable и argv выбирает проверенный рецепт каталога, scope и одобрения остаются обязательными. `samurai tool capabilities` показывает окружение и найденные бинари, ничего не меняя; отсутствующий инструмент ставится по рецепту — `tool provision <id> --dry-run` печатает платформу, пакет, команды, привилегии и healthcheck и ничего не меняет, установка идёт отдельным одобрением (`sudo -n`, без пароля в модели) и без успешного healthcheck инструмент не считается готовым. Повторная установка — no-op, после сбоя нужен новый запуск. Модель называет только `tool_id`: ни имён пакетов, ни install-команд. Релей остаётся запасным транспортом. Подробности — [`md/local-tools.md`](md/local-tools.md).
+
 **Оффлайн-режим.** `--offline` у операции запрещает удалённые модели и инструменты, которым нужен интернет; отказ с причиной приходит до попытки, `offline check` показывает, что отказано.
 
 **Просмотр в браузере.** `samurai web <op>` — сводка, журнал, план, находки, скачивание отчётов. Только `127.0.0.1`, одноразовый токен в ссылке, без записи.
@@ -92,6 +94,8 @@ curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/uninstall.
 
 ## Документация
 
+- [`md/local-tools.md`](md/local-tools.md) — локальные инструменты, установка и её границы.
+- [`md/optin-platform-checks.md`](md/optin-platform-checks.md) — ручные проверки на живых платформах.
 - [`md/requirements.md`](md/requirements.md) — требования.
 - [`md/development-plan.md`](md/development-plan.md) — этапы, acceptance criteria, статус.
 - [`md/threat-review-security-tools.md`](md/threat-review-security-tools.md) — разбор инструментов и остаточные риски.
