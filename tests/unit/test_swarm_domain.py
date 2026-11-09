@@ -77,12 +77,24 @@ def test_specialization_values() -> None:
         "recon",
         "testing",
         "analysis",
+        "strategist",
+        "researcher",
     }
 
 
 def test_swarm_task_error_is_swarm_error() -> None:
     assert issubclass(SwarmTaskError, SwarmError)
     assert issubclass(SwarmError, ValueError)
+
+
+def test_every_specialization_has_a_prompt_profile() -> None:
+    from samurai_ai.agents.specializations import profile_for
+
+    for item in AgentSpecialization:
+        profile = profile_for(item)
+        if item is AgentSpecialization.GENERAL:
+            continue
+        assert profile.planner_focus and profile.executor_focus
 
 
 def test_agent_run_swarm_fields_default() -> None:
