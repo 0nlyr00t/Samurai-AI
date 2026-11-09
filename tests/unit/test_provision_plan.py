@@ -149,6 +149,38 @@ def test_the_plan_renders_everything_the_operator_must_see(tmp_path: Path) -> No
     assert "rolls" in text  # reproducibility is stated, not promised
 
 
+def test_a_failed_attempt_needs_a_new_decision(tmp_path: Path) -> None:
+    provisioner = _provisioner(tmp_path)
+    provisioner.state("scan.nmap").status = ProvisionStatus.FAILED
+    assert provisioner.needs_decision("scan.nmap") is True
+    provisioner.state("crack.hashcat")  # untouched
+    assert provisioner.needs_decision("crack.hashcat") is False
+
+
+def test_state_survives_a_restart_and_an_interrupted_lock_is_failed(
+    tmp_path: Path,
+) -> None:
+    from samurai_ai.execution.process import ProcessManager
+    from samurai_ai.services.provisioner import Provisioner
+
+    provisioner = _provisioner(tmp_path)
+    provisioner.state("scan.nmap").status = ProvisionStatus.READY
+    provisioner.state("scan.nmap").installed_version = "7.95"
+    provisioner.state("fuzz.ffuf").status = ProvisionStatus.INSTALLING
+    provisioner._save_state()
+
+    again = Provisioner(
+        operations=_Operations(),
+        kernel=None,
+        manager=ProcessManager(allowed_executables=frozenset({"apt-get"})),
+        tools_dir=tmp_path / "tools",
+        templates=Path("assets/templates"),
+    )
+    assert again.state("scan.nmap").installed_version == "7.95"
+    # a lock left behind by a crash must not block forever
+    assert again.state("fuzz.ffuf").status is ProvisionStatus.FAILED
+
+
 def test_the_catalog_is_the_only_source_of_package_names() -> None:
     """Nothing in the plan comes from a caller: only from the recipe file."""
     recipes = RecipeCatalog().load_all()
