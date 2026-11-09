@@ -19,8 +19,10 @@ _VERDICT = re.compile(r"\b(continue|stop)\b", re.IGNORECASE)
 
 PROMPT = (
     "You judge a security operation. Given the completion condition and a "
-    "digest of the latest turn, answer exactly one word: STOP when the "
-    "condition already holds, CONTINUE when real work is still left. No prose."
+    "digest of the latest turn, answer exactly one word: STOP only when the "
+    "digest shows concrete proof the condition holds (the flag text, the shell, "
+    "the artefact); announcements of intent (\"reading\", \"scanning\", \"next I "
+    "will\") are not proof. When in doubt, answer CONTINUE. No prose."
 )
 
 

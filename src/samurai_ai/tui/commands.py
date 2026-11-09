@@ -64,6 +64,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     # operation
     _spec("/new", GROUP_OPERATION, "_cmd_new_operation"),
     _spec("/open", GROUP_OPERATION, "_open_latest_operation"),
+    _spec("/close", GROUP_OPERATION, "_close_operation", operation=True),
     _spec("/status", GROUP_OPERATION, "_show_status"),
     _spec(
         "/scope",

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from samurai_ai.domain.goal import GoalState
+from samurai_ai.domain.goal import DEFAULT_BUDGET_SECONDS, DEFAULT_BUDGET_STEPS, GoalState
 from samurai_ai.domain.operations import Operation, OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.goals import GoalNotFoundError, GoalService
@@ -85,29 +85,29 @@ def test_clock_only_advances_while_active(tmp_path) -> None:  # type: ignore[no-
     assert service.get(goal.id).spent_seconds == 15
 
 
-def test_step_budget_blocks_the_goal(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_step_budget_extends_instead_of_blocking(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, _repo, _operations, operation = make_service(tmp_path)
     goal = service.create(operation.id, "short", budget_steps=2)
 
     service.record_step(goal.id)
     assert service.get(goal.id).state is GoalState.ACTIVE
-    blocked = service.record_step(goal.id)
+    extended = service.record_step(goal.id)
 
-    assert blocked.state is GoalState.BLOCKED
-    assert "step budget 2 spent" in blocked.block_reason
-    # a blocked goal records no further steps
-    assert service.record_step(goal.id).state is GoalState.BLOCKED
+    assert extended.state is GoalState.ACTIVE
+    assert extended.budget_steps == 2 + DEFAULT_BUDGET_STEPS
+    # and the run simply goes on under the raised budget
+    assert service.record_step(goal.id).state is GoalState.ACTIVE
 
 
-def test_time_budget_blocks_the_goal(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_time_budget_extends_instead_of_blocking(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, _repo, _operations, operation = make_service(tmp_path)
     goal = service.create(operation.id, "slow", budget_seconds=30)
 
     service.clock.advance(30)  # type: ignore[attr-defined]
-    blocked = service.record_step(goal.id)
+    extended = service.record_step(goal.id)
 
-    assert blocked.state is GoalState.BLOCKED
-    assert "time budget 30s spent" in blocked.block_reason
+    assert extended.state is GoalState.ACTIVE
+    assert extended.budget_seconds == 30 + DEFAULT_BUDGET_SECONDS
 
 
 def test_replace_cancels_the_current_goal(tmp_path) -> None:  # type: ignore[no-untyped-def]

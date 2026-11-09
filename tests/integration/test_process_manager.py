@@ -109,7 +109,7 @@ def test_circuit_breaker_opens_after_consecutive_timeouts() -> None:
         for _ in range(2):
             result = await manager.run([sys.executable, "-c", SLOW], timeout_seconds=0.4)
             assert result.timed_out
-        with pytest.raises(CircuitBreakerOpenError):
+        with pytest.raises(CircuitBreakerOpenError, match="retry possible in"):
             await manager.run(["echo", "blocked"])
         manager.reset_circuit_breaker()
         result = await manager.run(["echo", "again"])

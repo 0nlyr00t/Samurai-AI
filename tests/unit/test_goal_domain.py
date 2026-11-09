@@ -43,6 +43,21 @@ def test_budget_exhaustion_is_reported() -> None:
     assert seconds.exhausted is True
 
 
+def test_extend_budget_raises_only_the_spent_limits() -> None:
+    goal = make_goal(budget_steps=2, budget_seconds=1800)
+    goal.record_step(2)
+    goal.extend_budget()
+    assert goal.budget_steps == 2 + DEFAULT_BUDGET_STEPS
+    assert goal.budget_seconds == 1800
+    assert goal.exhausted is False
+
+    timed = make_goal(budget_seconds=5)
+    timed.tick(5)
+    timed.extend_budget()
+    assert timed.budget_seconds == 5 + DEFAULT_BUDGET_SECONDS
+    assert timed.budget_steps == DEFAULT_BUDGET_STEPS
+
+
 def test_tick_ignores_zero_and_rejects_negative() -> None:
     goal = make_goal()
     version = goal.version

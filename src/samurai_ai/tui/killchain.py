@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import PlanTask, TaskStatus
 from samurai_ai.domain.operations import OperationMode
+from samurai_ai.domain.scope import ScopeContract
 
 #: Fallback chains, cheap stage first. `None` in CTF means "flags, if any".
 _CHAINS: dict[OperationMode, tuple[str, ...]] = {
@@ -46,6 +47,14 @@ _MARKERS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (("execution", "выполнение", "rce", "reverse shell", "web shell"),
      ("execution", "exploit")),
+    # active exploitation attempts move the rail past recon even before a shell:
+    # «собираю SSTI в заметках» is not reconnaissance any more
+    (("ssti", "sql inject", "инъекц", "template inject", "forg", "поддел",
+      "bypass", "обход", "payload", "пейлоад", "exploit", "экспл"),
+     ("exploit", "foothold")),
+    (("login", "log in", "залогин", "регистрац", "registered", "account",
+      "checkout", "чекаут", "booked", "бронь"),
+     ("surface", "recon")),
     (("foothold", "зацеп", "shell", "session", "access"),
      ("foothold", "initial-access", "exploit")),
     (("initial access", "первичный доступ", "phish", "vpn"), ("initial-access",)),
@@ -109,6 +118,7 @@ def phase_for(
     verified_findings: int = 0,
     gate_passed: int = 0,
     gate_total: int = 0,
+    intent_texts: Iterable[str] = (),
     chain: Sequence[str] | None = None,
 ) -> KillChain:
     """Work out the rail for an operation; falsy when the mode has no chain."""
@@ -122,6 +132,10 @@ def phase_for(
             current = _advanced(current, _phase_from_text(task.title, phases), phases)
     for payload in fact_payloads:
         text = " ".join(str(value) for value in payload.values())
+        current = _advanced(current, _phase_from_text(text, phases), phases)
+    for text in intent_texts:
+        # what the agent is actively testing counts too: the chat path writes
+        # its work as graph intents, not plan tasks
         current = _advanced(current, _phase_from_text(text, phases), phases)
     for level in impact_levels:
         current = _advanced(current, _IMPACT_PHASE.get(level), phases)
@@ -165,12 +179,16 @@ class AccessRow:
     note: str
 
 
-def access_rows(facts: Iterable[str]) -> list[AccessRow]:
+def access_rows(
+    facts: Iterable[str], scope: ScopeContract | None = None
+) -> list[AccessRow]:
     """Hosts named by confirmed facts, with the strongest level each reached.
 
     A fact naming two hosts gets classified per host: the level markers count
     only in the fragment about that host (up to the next host name), so
-    "root on A; shell on B" does not paint both as root.
+    "root on A; shell on B" does not paint both as root. With a scope given,
+    out-of-scope mentions (a VPN gateway, a DNS resolver, a network base
+    address quoted by a fact) are not access and do not appear.
     """
     found: dict[str, AccessRow] = {}
     order = {"read": 0, "user": 1, "root": 2}
@@ -180,6 +198,8 @@ def access_rows(facts: Iterable[str]) -> list[AccessRow]:
             continue
         for index, match in enumerate(matches):
             host = match.group(0)
+            if scope is not None and not scope.evaluate(host).allowed:
+                continue
             end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
             fragment = text[max(0, match.start() - 24):end].lower()
             level = next(
@@ -187,9 +207,10 @@ def access_rows(facts: Iterable[str]) -> list[AccessRow]:
                  if any(m in fragment for m in markers)),
                 "read",
             )
+            note = text[max(0, match.start() - 24):end].strip()[:80]
             previous = found.get(host)
             if previous is None or order[level] > order[previous.level]:
-                found[host] = AccessRow(host, level, text[:80])
+                found[host] = AccessRow(host, level, note)
     return list(found.values())
 
 
@@ -202,3 +223,58 @@ def attack_map(rows: Iterable[AccessRow]) -> list[str]:
         if row.note:
             lines.append(f"   └─ {row.level} · {row.note}")
     return lines
+
+
+def hosts_in(texts: Iterable[str]) -> set[str]:
+    """Every host named anywhere in the texts, lower-cased."""
+    found: set[str] = set()
+    for text in texts:
+        for match in _HOST_RE.finditer(text):
+            found.add(match.group(0).lower())
+    return found
+
+
+def hosts_mentioned(text: str) -> list[str]:
+    """Hosts in first-mention order — for presenting a task's targets."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _HOST_RE.finditer(text):
+        host = match.group(0).lower()
+        if host not in seen:
+            seen.add(host)
+            found.append(host)
+    return found
+
+
+@dataclass(frozen=True)
+class ScopeRow:
+    """One scope target in the side block: what it is and whether work reached it."""
+
+    rule: str
+    excluded: bool
+    hit: bool
+    note: str = ""
+
+
+def scope_rows(scope: ScopeContract, touched: Iterable[str]) -> list[ScopeRow]:
+    """The task's targets: include rules, host aliases, then exclusions.
+
+    A rule counts as hit when a touched host evaluates against it; an alias
+    counts when either its name or the address it stands for was touched, and
+    a touched alias also marks the rule its address falls under.
+    """
+    hosts = {host.lower() for host in touched}
+    matched: set[str] = set()
+    for host in hosts:
+        decision = scope.evaluate(scope.resolve_host(host))
+        if decision.allowed and decision.matched_rule:
+            matched.add(decision.matched_rule)
+    rows: list[ScopeRow] = []
+    for rule in scope.includes:
+        rows.append(ScopeRow(rule=rule, excluded=False, hit=rule in matched))
+    for name, target in scope.hosts.items():
+        hit = name.lower() in hosts or target.lower() in hosts
+        rows.append(ScopeRow(rule=name, excluded=False, hit=hit, note=f"→ {target}"))
+    for rule in scope.excludes:
+        rows.append(ScopeRow(rule=rule, excluded=True, hit=False))
+    return rows
