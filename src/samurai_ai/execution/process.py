@@ -230,9 +230,21 @@ class ProcessManager:
             ):
                 self.reset_circuit_breaker()
             else:
+                remaining_s = 0
+                if opened is not None:
+                    remaining_s = max(
+                        0,
+                        int(
+                            self.breaker_cooldown_seconds
+                            - (time.monotonic() - opened)
+                        ),
+                    )
                 raise CircuitBreakerOpenError(
                     "process circuit breaker is open after "
-                    f"{self._consecutive_failures} consecutive failures"
+                    f"{self._consecutive_failures} consecutive failures "
+                    "(timeouts or stalled processes — the transport, not the "
+                    f"commands); retry possible in ~{remaining_s}s. Do not "
+                    "retry in a loop: check the relay/VPN/VM is alive first"
                 )
         if not argv:
             raise ToolValidationError("argv must contain at least the executable")
