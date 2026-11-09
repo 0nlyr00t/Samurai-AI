@@ -140,6 +140,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "inspector.copy-command": "command copied",
         "help.new": "/new              Create an operation",
         "help.open": "/open             Open the most recent operation",
+        "help.close": "/close            Close the tab and delete the operation (Ctrl+W)",
         "keys.title": "Keys",
         "keys.hint": "Enter rebinds · Esc closes",
         "keys.empty": "no bindable actions",
@@ -408,10 +409,53 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{autonomy}"
         ),
         "chat.tool-denied": "denied by operator: {command}",
+        "chat.doctrine": (
+            "Work the target like an operator, not a crawler: when a "
+            "registration form exists, register and log in; after logging in "
+            "enumerate what changed; on a login form try the obvious defaults; "
+            "follow state-changing features (booking, uploads, notes, comments) "
+            "before concluding there is nothing. Record every testable idea "
+            "with open_intent and every confirmed fact with record_fact as you "
+            "go — the next turn starts from what you recorded, not from this "
+            "chat. Before working a host the SCOPE board does not show, verify it "
+            "with check_scope; if it belongs to the task, widen the scope with "
+            "add_scope (one wildcard over many subdomains) — every addition is "
+            "journaled and the operator can revert it."
+        ),
+        "chat.structure-nudge": (
+            "[progress] {count} shell calls and nothing recorded — the structure "
+            "is empty"
+        ),
+        "scope.extended": "[scope] added: {rules}",
+        "scope.ask-title": "The command reaches a resource outside the scope",
+        "scope.ask-hint": "Enter — add it to the scope and run · s — skip the command",
+        "scope.edited": "[scope] added: {added} · removed: {removed}",
+        "chat.structure-note": (
+            "You have made many shell calls without recording anything. Stop and "
+            "fix the state: record every confirmed fact with record_fact, open "
+            "the next testable direction with open_intent, then continue."
+        ),
+        "chat.drift-nudge": (
+            "[progress] commands keep reading local paths outside the workspace — "
+            "that is not the target"
+        ),
+        "chat.drift-note": (
+            "You are poking local files outside the workspace again and again; "
+            "the target of this operation is elsewhere. Return to in-scope work "
+            "or explain why these local files matter to the objective."
+        ),
         "chat.relay-hint": (
             "The VM relay for this operation is `{relay}`; write commands against "
             "the far side and prefix them with the relay verbatim — do not write "
             "your own wrapper script."
+        ),
+        "chat.relay-absent": (
+            "No relay is set for this operation and the scope is not loopback. If "
+            "calls to the target fail on connectivity, do NOT hand-build prefixes "
+            "like `prlctl exec … bash -c '…'` — the quoting will eat your steps. "
+            "Instead call the set_relay tool (discover the VM first, e.g. `prlctl "
+            "list`) or ask the operator to set /relay. Once set, write plain "
+            "far-side commands; the harness quotes them for the relay."
         ),
         "chat.tool-limit": "round budget spent — settling what is known, then continuing",
         "chat.auto-continue": "[continue {index}/{total}] still working on the goal",
@@ -437,11 +481,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.settle-prompt": (
             "[wrap-up] rounds are spent. Record what this turn established with "
-            "record_fact (and close_intent), and say nothing else yet; a closing "
-            "summary follows without tools."
+            "record_fact (and close_intent) — or with memory_learn when no intent "
+            "was opened — and say nothing else yet; a closing summary follows "
+            "without tools."
         ),
         "chat.tool-exit": "exit {code}",
         "chat.tool-collapsed": "⚙ {command}{code_mark} · {lines} lines",
+        "chat.tool-background": "«{command}» takes a while — continuing in the background",
+        "chat.tool-background-done": "[bg] done: {command}…",
         "chat.expand-empty": "nothing to expand yet — no folded process or output",
         "chat.process-block": "{lines} step(s) folded — Ctrl+E, Enter or a click to open",
         "chat.process-title": "process log",
@@ -482,6 +529,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.restored-end": "— end of the restored history —",
         "chat.cleared": "history cleared ({count} messages)",
+        "chat.closed": "closed and deleted: {name}",
+        "chat.close-busy": "a run is in flight — close when it finishes",
         "chat.clear-busy": "a turn is running — /clear after it finishes",
         "chat.clear-no-operation": "no operation open — nothing to clear",
         "copy.done": "copied {chars} chars to the clipboard",
@@ -545,6 +594,25 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "killchain.counter.flags": "flags",
         "killchain.counter.gates": "gates",
         "killchain.counter.verified": "verified",
+        "killchain.exit.recon": "map the surface",
+        "killchain.exit.surface": "map the surface",
+        "killchain.exit.foothold": "a shell or session",
+        "killchain.exit.initial-access": "a way in",
+        "killchain.exit.execution": "code runs on target",
+        "killchain.exit.exploit": "a working exploit",
+        "killchain.exit.privesc": "root or SYSTEM",
+        "killchain.exit.persistence": "a way back in",
+        "killchain.exit.lateral": "the next host",
+        "killchain.exit.impact": "the effect proven",
+        "killchain.exit.validate": "proof attached",
+        "killchain.exit.loot": "flags and secrets",
+        "killchain.exit.report": "the write-up",
+        "killchain.stalled": "[stage] {stage} has not moved for {minutes} min ({steps} steps)",
+        "killchain.stalled-note": (
+            "The {stage} stage has not advanced for a long time despite many steps. "
+            "Stop and re-plan: what is blocking the exit, and which other vector "
+            "moves the kill chain forward?"
+        ),
         "killchain.moved": "— stage moved: {from} → {to} —",
         "resume.title": "Resume an operation",
         "resume.hint": "Enter switches the tab to the operation; Esc closes",
@@ -554,6 +622,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tabs.ops": "Red Team OPS",
         "tabs.bounty": "Bug Bounty",
         "tabs.hunt": "Tasks",
+        "tabs.scope": "Scope",
+        "scope.tab-empty": "no include rules — add one with /scope add",
+        "scope.tab-excluded": "(excluded)",
+        "scope.rule-excluded": "excluded from the scope: {rule} (click again to return)",
+        "scope.rule-back": "back in the scope: {rule}",
         "hunt.title-stats": "Search progress",
         "hunt.no-searches": "No brute-force, fuzzing or spraying tasks in this plan yet",
         "hunt.title-hypotheses": "Hypotheses",
@@ -581,12 +654,24 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "mouse.enabled": "mouse capture on (drag over the journal, then Ctrl+C copies)",
         "mouse.disabled": "mouse capture off — the terminal handles selection and copy natively",
         "side.swarm": "SWARM",
-        "side.access": "SCOPE",
-        "side.access-empty": "nothing pwned yet",
+        "side.access": "TARGETS",
+        "side.access-empty": "no targets in scope",
         "side.creds": "LOOT",
+        "side.more": "▾ {left} more…",
+        "side.scope-title": "Scope targets",
+        "side.loot-title": "Loot",
+        "side.list-hint": "read-only list — Esc closes",
+        "side.list-empty": "(empty)",
         "side.secret-saved": "[vault] stored {name}",
         "side.creds-empty": "no loot yet",
         "side.workspace": "workspace",
+        "strategist.review-task": (
+            "A fact was just confirmed: {fact}. Re-read the attack map this "
+            "opens: propose the next testable hypotheses with "
+            "propose_hypothesis, most probable first; skip anything already "
+            "on the board."
+        ),
+        "strategist.spawned": "[strategist] new fact — reviewing vectors (run {run})",
         "newop.title": "New operation tab",
         "newop.name": "operation name",
         "newop.scope": "scope includes, comma-separated (empty = 127.0.0.1/32)",
@@ -595,6 +680,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "relay.empty": "[relay] off — commands run on this host",
         "relay.set": "[relay] network tools now run through: {relay}",
         "relay.cleared": "[relay] off",
+        "relay.canary-ok": "[relay] canary answered through the relay — transport is live",
+        "relay.canary-fail": "[relay] canary failed through the relay: {detail} — check the prefix",
+        "relay.detected": "The task mentions a relay",
+        "relay.detected-hint": "Set it now, or the agent hand-builds the prefix into every command",
+        "relay.use": "Use relay: {relay}",
+        "relay.skip": "Not now",
+        "relay.detected-bare": (
+            "[relay] the task mentions a VM relay but names no target — discover it "
+            "(prlctl list) and set /relay prlctl exec <uuid>"
+        ),
         "relay.hint": (
             "[relay] off: if the target is only reachable from a VM, set "
             "/relay prlctl exec <uuid> -- without it every call fights quoting"
@@ -605,11 +700,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "goal.adopted": "◎ goal taken from the task: {goal}",
         "chat.goal-hint": "Completion condition for this operation: {goal}",
         "chat.goal-met": "◎ the judge says the condition holds — finishing",
+        "chat.goal-not-met": "[goal] the judge says the condition is not met — continuing",
+        "chat.goal-not-met-note": (
+            "The goal condition is not met yet according to the judge. Keep "
+            "working: make the next tool call instead of summarizing."
+        ),
         "chat.goal-judge-failed": "[goal] judge unavailable, falling back to the counter",
         "goal.cleared": "[goal] cleared, back to the round counter",
         "tabmenu.rename": "Rename this tab",
-        "tabmenu.close": "Close this tab",
-        "tabmenu.close-others": "Close the other tabs",
+        "tabmenu.close": "Close this tab and delete the operation",
+        "tabmenu.close-others": "Close the other tabs (they stay saved)",
         "tabmenu.name-prompt": "new operation name",
         "project.title": "Which project?",
         "project.hint": "Enter opens it; Esc keeps the current directory",
@@ -644,6 +744,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "goal.no-operation": "create or open an operation first",
         "goal.need-text": "give an objective: /goal next <objective>",
         "goal.blocked": "goal blocked: {reason}",
+        "goal.budget-extended": "goal budget spent — raised to {steps} steps · {seconds}s",
         "goal.strip.active": "goal · {steps} steps · {seconds}s",
         "goal.strip.paused": "goal paused · {steps} steps · {seconds}s",
         "goal.strip.blocked": "goal blocked · {steps} steps · {seconds}s",
@@ -721,6 +822,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.runs": "/runs             Показать запуски инструментов текущей операции",
         "help.agents": "/agents          Показать запуски агентов текущей операции",
         "help.swarm": "/swarm           Показать параллельные swarm-запуски операции",
+        "chat.closed": "вкладка закрыта, операция удалена: {name}",
+        "chat.close-busy": "прогон идёт — закрой, когда закончится",
         "chat.lessons": "уроки из прошлых исходов (принятые, принадлежат коду):\n{digest}",
         "lessons.empty": "уроков пока нет — их учат исходы, `/lessons extract` их читает",
         "lessons.extracted": "уроков допущено: {count}",
@@ -817,6 +920,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "inspector.copy-command": "команда скопирована",
         "help.new": "/new              Создать операцию",
         "help.open": "/open             Открыть последнюю операцию",
+        "help.close": "/close            Закрыть вкладку и удалить операцию (Ctrl+W)",
         "keys.title": "Клавиши",
         "keys.hint": "Enter перебиндивает · Esc закрывает",
         "keys.empty": "нет действий для перебиндинга",
@@ -1092,9 +1196,51 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "{autonomy}"
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
+        "chat.doctrine": (
+            "Работай цель как оператор, а не как краулер: есть форма регистрации — "
+            "зарегистрируйся и залогинься; после логина перечисли, что изменилось; "
+            "на форме входа попробуй очевидные дефолты; иди по state-changing "
+            "фичам (бронирование, загрузки, заметки, комментарии), прежде чем "
+            "решить, что там ничего нет. Каждую проверяемую идею записывай через "
+            "open_intent, каждый подтверждённый факт — через record_fact: "
+            "следующий ход начинается с записанного, а не с этого чата. "
+            "Прежде чем трогать хост, которого нет на доске SCOPE, проверь его "
+            "через check_scope; если он относится к задаче — расширь скоуп через "
+            "add_scope (один wildcard вместо множества субдоменов): каждое "
+            "добавление пишется в журнал, оператор может откатить."
+        ),
+        "chat.structure-nudge": (
+            "[прогресс] {count} вызовов shell и ноль записей — структура пустая"
+        ),
+        "scope.extended": "[скоуп] добавлено: {rules}",
+        "scope.ask-title": "Команда обращается за скоуп",
+        "scope.ask-hint": "Enter — добавить в скоуп и выполнить · s — пропустить",
+        "scope.edited": "[скоуп] добавлено: {added} · удалено: {removed}",
+        "chat.structure-note": (
+            "Много вызовов shell без единой записи. Остановись и зафиксируй "
+            "состояние: подтверждённые факты — через record_fact, следующее "
+            "проверяемое направление — через open_intent, затем продолжай."
+        ),
+        "chat.drift-nudge": (
+            "[прогресс] команды всё читают локальные пути вне рабочей папки — "
+            "это не цель"
+        ),
+        "chat.drift-note": (
+            "Ты снова и снова читаешь локальные файлы вне рабочей папки; цель "
+            "операции — не они. Вернись к работе в скоупе или объясни, зачем эти "
+            "файлы для цели."
+        ),
         "chat.relay-hint": (
             "Релей в VM этой операции: `{relay}`; пиши команды под удалённую "
             "сторону и ставь релей перед ними дословно — своих обёрток не пиши."
+        ),
+        "chat.relay-absent": (
+            "Для этой операции релей не задан, а скоуп — не loopback. Если вызовы "
+            "к цели падают по связности, НЕ собирай префиксы руками вида "
+            "`prlctl exec … bash -c '…'` — квотирование съест шаги. Вместо этого "
+            "вызови инструмент set_relay (сначала найди VM, например `prlctl list`) "
+            "или попроси оператора выставить /relay. После установки пиши обычные "
+            "команды под удалённую сторону — харнесс сам их квотирует под релей."
         ),
         "chat.tool-limit": "бюджет раундов исчерпан — фиксирую известное и продолжаю",
         "chat.auto-continue": "[продолжение {index}/{total}] ещё работаю над целью",
@@ -1136,6 +1282,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "inspect.empty": "(пустой артефакт)",
 
         "chat.tool-collapsed": "⚙ {command}{code_mark} · строк: {lines}",
+        "chat.tool-background": "«{command}» надолго — продолжаю в фоне",
+        "chat.tool-background-done": "[фон] готово: {command}…",
         "chat.thinking": "думаю · {count}",
         "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",
         "chat.process-block": "{lines} шаг(ов) свёрнуто — Ctrl+E, Enter или клик, чтобы открыть",
@@ -1187,7 +1335,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "access.denied": "запрещено: {action}",
         "copy.selection": "выделение скопировано ({chars} симв.)",
         "status.no-operation": "Операция не загружена",
-        "scope.includes": "включения: {rules}",
+        "scope.includes": "включает: {rules}",
         "scope.excludes": "исключения: {rules}",
         "scope.none": "(нет)",
         "plan.stage": "этап={stage}; цель={objective}",
@@ -1232,6 +1380,25 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "killchain.counter.flags": "флаги",
         "killchain.counter.gates": "гейты",
         "killchain.counter.verified": "подтверждено",
+        "killchain.exit.recon": "карта поверхности",
+        "killchain.exit.surface": "карта поверхности",
+        "killchain.exit.foothold": "шелл или сессия",
+        "killchain.exit.initial-access": "путь внутрь",
+        "killchain.exit.execution": "код исполняется на цели",
+        "killchain.exit.exploit": "рабочий эксплойт",
+        "killchain.exit.privesc": "root или SYSTEM",
+        "killchain.exit.persistence": "путь обратно",
+        "killchain.exit.lateral": "следующий хост",
+        "killchain.exit.impact": "доказанный эффект",
+        "killchain.exit.validate": "приложенное доказательство",
+        "killchain.exit.loot": "флаги и секреты",
+        "killchain.exit.report": "райтап",
+        "killchain.stalled": "[стадия] {stage} не двигается {minutes} мин ({steps} шагов)",
+        "killchain.stalled-note": (
+            "Стадия {stage} давно не двигается, хотя шагов много. Остановись и "
+            "перепланируй: что мешает выходу и какой другой вектор двигает kill "
+            "chain вперёд?"
+        ),
         "killchain.moved": "— фаза сменилась: {from} → {to} —",
         "resume.title": "Продолжить операцию",
         "resume.hint": "Enter переключает вкладку на операцию; Esc закрывает",
@@ -1241,6 +1408,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tabs.ops": "Red Team OPS",
         "tabs.bounty": "Bug Bounty",
         "tabs.hunt": "Задачи",
+        "tabs.scope": "Скоуп",
+        "scope.tab-empty": "нет правил — добавь через /scope add",
+        "scope.tab-excluded": "(исключён)",
+        "scope.rule-excluded": "исключено из скоупа: {rule} (клик вернёт)",
+        "scope.rule-back": "вернулось в скоуп: {rule}",
         "hunt.title-stats": "Статистика задач",
         "hunt.no-searches": "В этом плане пока нет задач на брутфорс, фазинг или спрей",
         "hunt.title-hypotheses": "Гипотезы",
@@ -1256,7 +1428,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "ops.gates": "Контрольные гейты",
         "ops.heatmap": "Тепловая карта техник MITRE ATT&CK",
         "ops.no-steps": "Техники пока не сопоставлены",
-        "bounty.scope": "Скоуп",
+        "bounty.scope": "Scope",
         "bounty.assets": "Активы: {count}",
         "bounty.findings": "Текущие находки",
         "strip.agents": "агенты {running}/{total}",
@@ -1268,12 +1440,24 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "mouse.enabled": "захват мыши включён (выделяй по журналу, Ctrl+C скопирует)",
         "mouse.disabled": "захват мыши выключен — выделение и копирование обычные, как в терминале",
         "side.swarm": "РОЙ",
-        "side.access": "SCOPE",
-        "side.access-empty": "ничего не зацеплено",
+        "side.access": "ЦЕЛИ",
+        "side.access-empty": "целей в скоупе нет",
         "side.creds": "LOOT",
+        "side.more": "▾ ещё {left}…",
+        "side.scope-title": "Цели скоупа",
+        "side.loot-title": "Добыча",
+        "side.list-hint": "только просмотр — Esc закрывает",
+        "side.list-empty": "(пусто)",
         "side.secret-saved": "[хранилище] сохранён {name}",
         "side.creds-empty": "добычи ещё нет",
         "side.workspace": "рабочая папка",
+        "strategist.review-task": (
+            "A fact was just confirmed: {fact}. Re-read the attack map this "
+            "opens: propose the next testable hypotheses with "
+            "propose_hypothesis, most probable first; skip anything already "
+            "on the board."
+        ),
+        "strategist.spawned": "[стратег] новый факт — пересмотр векторов (run {run})",
         "newop.title": "Новая вкладка операции",
         "newop.name": "название операции",
         "newop.scope": "скоуп через запятую (пусто = только 127.0.0.1/32)",
@@ -1281,13 +1465,26 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "trust.title": "Разрешить Samurai AI работать в этой директории?",
         "project.title": "Какой проект?",
         "tabmenu.rename": "Переименовать вкладку",
-        "tabmenu.close": "Закрыть вкладку",
+        "tabmenu.close": "Закрыть вкладку и удалить операцию",
         "tabmenu.close-others": "Закрыть остальные вкладки",
         "tabmenu.name-prompt": "новое название операции",
         "relay.current": "[релей] {relay}",
         "relay.empty": "[релей] выключен — команды идут на этом хосте",
         "relay.set": "[релей] сетевые инструменты теперь идут через: {relay}",
         "relay.cleared": "[релей] выключен",
+        "relay.canary-ok": "[релей] канарейка ответила через релей — транспорт жив",
+        "relay.canary-fail": "[релей] канарейка не прошла через релей: {detail} — проверь префикс",
+        "relay.detected": "В задаче упомянут релей",
+        "relay.detected-hint": (
+            "Выставь его сейчас, иначе агент будет вручную "
+            "встраивать префикс в каждую команду"
+        ),
+        "relay.use": "Использовать релей: {relay}",
+        "relay.skip": "Не сейчас",
+        "relay.detected-bare": (
+            "[релей] в задаче упомянут релей через VM, но без цели — найди её "
+            "(prlctl list) и выстави /relay prlctl exec <uuid>"
+        ),
         "relay.hint": (
             "[релей] выключен: если цель достижима только из VM, задай "
             "/relay prlctl exec <uuid> -- иначе каждый вызов воюет с кавычками"
@@ -1298,6 +1495,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "goal.adopted": "◎ цель взята из задачи: {goal}",
         "chat.goal-hint": "Условие готовности этой операции: {goal}",
         "chat.goal-met": "◎ оценщик считает условие выполненным — завершаю",
+        "chat.goal-not-met": "[цель] оценщик: условие не выполнено — продолжаю",
+        "chat.goal-not-met-note": (
+            "По мнению оценщика условие цели ещё не выполнено. Продолжай "
+            "работу: делай следующий вызов инструмента, а не сводку."
+        ),
         "chat.goal-judge-failed": "[цель] оценщик недоступен, работает счётчик",
         "goal.cleared": "[цель] снята, снова работает счётчик раундов",
         "project.hint": "Enter открывает; Esc оставляет текущий каталог",
@@ -1331,6 +1533,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "goal.no-operation": "сначала создайте или откройте операцию",
         "goal.need-text": "нужна формулировка: /goal next <цель>",
         "goal.blocked": "цель заблокирована: {reason}",
+        "goal.budget-extended": "бюджет цели исчерпан — поднимаю до {steps} шагов · {seconds}с",
         "goal.strip.active": "цель · {steps} шагов · {seconds}с",
         "goal.strip.paused": "цель на паузе · {steps} шагов · {seconds}с",
         "goal.strip.blocked": "цель заблокирована · {steps} шагов · {seconds}с",

@@ -38,13 +38,18 @@ def test_command_schema_accepts_whitelist() -> None:
                     "severity": "high",
                     "artifact_ids": ["art_1"],
                 },
+                {
+                    "type": "propose_hypothesis",
+                    "title": "notes render via template",
+                    "category": "web",
+                },
                 {"type": "complete_task"},
                 {"type": "fail", "reason": "stuck"},
             ]
         }
     )
-    assert len(output.commands) == 5
-    assert output.commands[3].type == "complete_task"
+    assert len(output.commands) == 6
+    assert output.commands[4].type == "complete_task"
 
 
 def test_command_schema_rejects_unknown_and_malformed() -> None:
@@ -62,6 +67,10 @@ def test_command_schema_rejects_unknown_and_malformed() -> None:
         )
     with pytest.raises(ValidationError):
         ExecutorOutput.model_validate({"commands": [{"type": "request_tool_run"}]})
+    with pytest.raises(ValidationError):
+        ExecutorOutput.model_validate(
+            {"commands": [{"type": "propose_hypothesis", "title": "t", "rogue": 1}]}
+        )
 
 
 def test_planner_output_schema() -> None:

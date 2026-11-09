@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -81,6 +83,17 @@ class ScopeContract(BaseModel):
     #: network: an HTB vhost, a box's internal DNS name. Both scope matching and
     #: the sandbox consult this, so `flight.htb` behaves like the address it names.
     hosts: dict[str, str] = Field(default_factory=dict)
+    #: plumbing that is never a target: resolvers, the platform API of the mode.
+    #: Not operator data — execution injects it per mode so both the adapter's own
+    #: check and the central guard let `api.hackthebox.com` through without the
+    #: contract having to authorize a host nobody attacks.
+    infra: tuple[str, ...] = ()
+
+    def with_infra(self, infra: frozenset[str] | tuple[str, ...]) -> ScopeContract:
+        """Same contract plus the mode's plumbing hosts."""
+        if not infra:
+            return self
+        return self.model_copy(update={"infra": tuple(sorted(infra))})
 
     @field_validator("includes")
     @classmethod
@@ -124,6 +137,13 @@ class ScopeContract(BaseModel):
             )
 
         target = _with_loopback_alias(_with_alias(self, target))
+        if self._is_infra(target.text):
+            return ScopeDecision(
+                allowed=True,
+                reason=ScopeDecisionReason.ALLOWED,
+                target=target.text,
+                detail="service host (resolver or platform API), not a target",
+            )
         for raw_rule in self.excludes:
             rule = _parse_rule(raw_rule)
             if _matches(rule, target):
@@ -175,6 +195,21 @@ class ScopeContract(BaseModel):
             if _rule_covers(rule, candidate):
                 return True
         return False
+
+    def _is_infra(self, raw: str) -> bool:
+        """A suffix entry («.hackthebox.com») covers any subdomain of the plumbing."""
+        if not self.infra:
+            return False
+        host = raw.strip().strip("'\"[]").lower()
+        if "://" in host:
+            host = urlsplit(host).hostname or host
+        host = host.split("/", 1)[0].split(":", 1)[0].lower()
+        if not host:
+            return False
+        return any(
+            host == entry or (entry.startswith(".") and host.endswith(entry))
+            for entry in self.infra
+        )
 
     def evaluate_network(self, raw_network: str) -> ScopeDecision:
         """Judge a whole network argument: it must fit inside the authorized scope.

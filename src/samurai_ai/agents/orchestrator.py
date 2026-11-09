@@ -43,10 +43,12 @@ from samurai_ai.domain.agents import (
     FailCommand,
     NoteCommand,
     ProposeFindingCommand,
+    ProposeHypothesisCommand,
     RecordImpactCommand,
     RequestToolRunCommand,
     command_summary,
 )
+from samurai_ai.domain.ctf import ChallengeCategory
 from samurai_ai.domain.execution import (
     ApprovalRequiredError,
     SecretRedactor,
@@ -64,6 +66,7 @@ from samurai_ai.domain.kernel import (
 from samurai_ai.domain.models import CapabilityError, ModelCapability, ModelError
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.swarm import AgentSpecialization
+from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.genes import GeneService
 from samurai_ai.services.impact import ImpactService
@@ -181,7 +184,10 @@ _EXECUTOR_INSTRUCTION = (
     '"timeout":120} — ask the operator and keep working if nobody answers, '
     'propose_finding '
     '{"type":"propose_finding","title":...,"summary":...,"severity":...,'
-    '"artifact_ids":[...]}, complete_task {"type":"complete_task"} — a task '
+    '"artifact_ids":[...]}, propose_hypothesis '
+    '{"type":"propose_hypothesis","title":...,"category":"web","notes":...} — put '
+    "a concrete, falsifiable hypothesis on the hunt board, "
+    'complete_task {"type":"complete_task"} — a task '
     'without a finding closes as {"type":"complete_task","no_finding":"<why>"}, '
     'fail {"type":"fail","reason":...}. No prose. '
     "A task that ends at the landing page is not done: when a registration form "
@@ -255,6 +261,7 @@ class AgentOrchestrator:
         genes: GeneService | None = None,
         impact: ImpactService | None = None,
         questions: OperatorQuestionService | None = None,
+        ctf: CtfService | None = None,
     ) -> None:
         self.models = models
         self.kernel = kernel
@@ -268,6 +275,7 @@ class AgentOrchestrator:
         self.genes = genes
         self.impact = impact
         self.questions = questions
+        self.ctf = ctf
         #: set by the host so a surfaced question can reach the operator
         self.question_notice: Callable[[str], None] | None = None
 
@@ -1047,6 +1055,12 @@ class AgentOrchestrator:
                     return reason
             elif isinstance(command, ProposeFindingCommand):
                 self._command_propose_finding(operation_id, run, command)
+            elif isinstance(command, ProposeHypothesisCommand):
+                try:
+                    self._command_propose_hypothesis(operation_id, command)
+                except ValueError as exc:
+                    self._reject(operation_id, run, command, str(exc))
+                    return str(exc)
             elif isinstance(command, RecordImpactCommand):
                 self._command_record_impact(run, command)
             elif isinstance(command, AskOperatorCommand):
@@ -1212,6 +1226,25 @@ class AgentOrchestrator:
                 "finding_id": finding.id,
                 "title": command.title,
             },
+        )
+
+    def _command_propose_hypothesis(
+        self, operation_id: str, command: ProposeHypothesisCommand
+    ) -> None:
+        """A hypothesis lands on the hunt board; a bad category is a rejection."""
+        if self.ctf is None:
+            raise ValueError("hypotheses are unavailable in this host")
+        category = None
+        if command.category:
+            try:
+                category = ChallengeCategory(command.category)
+            except ValueError:
+                allowed = ", ".join(item.value for item in ChallengeCategory)
+                raise ValueError(
+                    f"unknown hypothesis category {command.category!r}; allowed: {allowed}"
+                ) from None
+        self.ctf.propose_hypothesis(
+            operation_id, command.title, category=category, notes=command.notes
         )
 
     def _append_note(
