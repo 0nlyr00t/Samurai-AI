@@ -56,6 +56,17 @@ class ProposeFindingCommand(BaseModel):
     artifact_ids: tuple[str, ...] = ()
 
 
+class ProposeHypothesisCommand(BaseModel):
+    """Put a testable hypothesis on the hunt board; category is optional."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["propose_hypothesis"]
+    title: str = Field(min_length=1, max_length=200)
+    category: str = Field(default="", max_length=32)
+    notes: str = Field(default="", max_length=2000)
+
+
 class RecordImpactCommand(BaseModel):
     """Escalate a finding's impact; the ladder rules live in the service."""
 
@@ -125,6 +136,7 @@ AgentCommand = Annotated[
     RequestToolRunCommand
     | NoteCommand
     | ProposeFindingCommand
+    | ProposeHypothesisCommand
     | RecordImpactCommand
     | AskOperatorCommand
     | CompleteTaskCommand
@@ -189,6 +201,10 @@ def command_summary(command: AgentCommand) -> dict[str, Any]:
         summary["title"] = command.title
         summary["severity"] = command.severity
         summary["artifact_ids"] = list(command.artifact_ids)
+    elif isinstance(command, ProposeHypothesisCommand):
+        summary["title"] = command.title
+        if command.category:
+            summary["category"] = command.category
     elif isinstance(command, RecordImpactCommand):
         summary["finding_id"] = command.finding_id
         summary["level"] = command.level

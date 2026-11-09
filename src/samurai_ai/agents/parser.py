@@ -26,6 +26,7 @@ _COMMAND_TYPES = frozenset(
         "request_tool_run",
         "note",
         "propose_finding",
+        "propose_hypothesis",
         "record_impact",
         "ask_operator",
         "complete_task",

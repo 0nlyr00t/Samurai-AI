@@ -26,6 +26,8 @@ class AgentSpecialization(StrEnum):
     RECON = "recon"
     TESTING = "testing"
     ANALYSIS = "analysis"
+    STRATEGIST = "strategist"
+    RESEARCHER = "researcher"
 
 
 class SwarmStatus(StrEnum):
