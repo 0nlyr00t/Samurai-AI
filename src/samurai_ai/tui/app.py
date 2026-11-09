@@ -456,6 +456,8 @@ class SamuraiApp(
         self._sent_tokens: int = 0
         self._recv_tokens: int = 0
         self._running_tools: int = 0
+        #: set by the host when the reviewed catalogue is available
+        self.provisioner: Any = None
         self._round_approvals: dict[str, bool] = {}
         self._background_results: list[Any] = []
         self._auto_title: str | None = None

@@ -456,6 +456,22 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="provision_tool",
+            description=(
+                "Install a tool that is missing on this machine, from the reviewed "
+                "catalogue, then run it once more. Use it only when a run answered "
+                "that the binary is missing: a scope refusal, a bad parameter or a "
+                "timeout do not need an install. The plan is shown and approved "
+                "before anything changes."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"tool_id": {"type": "string", "maxLength": 64}},
+                "required": ["tool_id"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="set_relay",
             description=(
                 "Point this operation's network commands through a relay prefix "
@@ -639,6 +655,7 @@ class ChatController:
         "update_todo": "_run_update_todo_tool",
         "remember_secret": "_run_remember_secret_tool",
         "set_relay": "_run_set_relay_tool",
+        "provision_tool": "_run_provision_tool",
         "check_scope": "_run_check_scope_tool",
         "request_scope": "_run_request_scope_tool",
         "add_scope": "_run_request_scope_tool",
@@ -1968,6 +1985,80 @@ class ChatController:
             content=(
                 f"[tool set_relay] relay is now: {relay or 'off'}; write plain "
                 "far-side commands, the harness quotes them for the relay"
+            ),
+        )
+
+    async def _run_provision_tool(self, call: ToolCall) -> Message:
+        """The model asks for a missing tool; the operator sees the plan first."""
+        tool_id = str(call.arguments.get("tool_id", "") or "").strip()
+        if self.operation is None:
+            return Message(role="user", content="[tool provision_tool] no open operation")
+        provisioner = getattr(self, "provisioner", None)
+        if provisioner is None:
+            return Message(role="user", content="[tool provision_tool] provisioning is off")
+        from samurai_ai.domain.provision import ProvisionError, ProvisionLockedError
+        from samurai_ai.services.provisioner import Provisioner
+
+        try:
+            profile = await asyncio.to_thread(provisioner.detector.detect, refresh=True)
+            plan = provisioner.plan(tool_id, profile)
+        except ProvisionError as exc:
+            return Message(
+                role="user",
+                content=(
+                    f"[tool provision_tool] {tool_id} cannot be installed: {exc}"
+                    + (
+                        f" (manual: {getattr(exc, 'manual', '')})"
+                        if getattr(exc, "manual", "")
+                        else ""
+                    )
+                ),
+            )
+        journal = self.query_one("#journal", BlockJournal)
+        for line in Provisioner.describe(plan):
+            journal.write(Text(f"[scope] {line}", style=self.paint("accent")))
+        if provisioner.needs_decision(tool_id):
+            self._write_dim(self.translator.t("provision.retry"), process=False)
+        approval = self.kernel.request_approval(
+            self.operation.id,
+            f"provision {plan.tool_id} v{plan.recipe_version} via {plan.manager}",
+            RiskClass.R3,
+            reason="system package installation from the reviewed catalogue",
+            requested_by="agent",
+        )
+        allowed = await self.push_screen_wait(
+            AccessPromptScreen(
+                self.translator,
+                f"provision {plan.tool_id}: {' '.join(plan.commands[0]) if plan.commands else ''}",
+                f"r3 · {plan.platform}",
+                batch_items=[(" ".join(argv), "r3") for argv in plan.commands],
+            )
+        )
+        self.kernel.approve(approval.id, decided_by=("operator" if allowed else "operator"))
+        if not allowed:
+            return Message(role="user", content=f"[tool provision_tool] {tool_id} declined")
+        try:
+            result = await asyncio.to_thread(
+                provisioner.run, self.operation.id, tool_id, profile
+            )
+        except ProvisionLockedError as exc:
+            return Message(role="user", content=f"[tool provision_tool] {exc}")
+        except ProvisionError as exc:
+            return Message(role="user", content=f"[tool provision_tool] {tool_id}: {exc}")
+        if result.status.value != "ready":
+            self._write_line(f"[error] provision {tool_id}: {result.error}")
+            return Message(
+                role="user",
+                content=f"[tool provision_tool] {tool_id} failed: {result.error}",
+            )
+        version = provisioner.state(tool_id).installed_version
+        self._write_dim(self.translator.t("provision.ready", tool=tool_id), process=False)
+        self._refresh_chrome()
+        return Message(
+            role="user",
+            content=(
+                f"[tool provision_tool] {tool_id} installed and verified "
+                f"({version or 'ready'}); run it once more — do not provision again"
             ),
         )
 
