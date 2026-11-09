@@ -330,6 +330,8 @@ def _provision(args: argparse.Namespace, execution: ToolExecutionService) -> int
 
     if approval.status is not ApprovalStatus.APPROVED:
         execution.kernel.approve(approval.id, decided_by="operator")
+    if provisioner.needs_decision(args.tool_id):
+        print("[provision] the last attempt failed: this retries it on purpose", file=sys.stderr)
     try:
         run = provisioner.run(operation.id, args.tool_id, profile)
     except ProvisionError as exc:
