@@ -27,6 +27,8 @@ from samurai_ai.domain.models import (
 )
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.swarm import AgentSpecialization
+from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.models import ModelService
@@ -34,6 +36,7 @@ from samurai_ai.services.operations import OperationService
 from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.storage.agents import AgentRunRepository
+from samurai_ai.storage.ctf import CtfRepository
 from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.kernel import KernelRepository
@@ -131,7 +134,14 @@ def make_stack(
         provider_factory=lambda provider: fake,
     )
     runs = AgentRunRepository(database)
-    orchestrator = AgentOrchestrator(models, kernel, execution, operations, runs)
+    orchestrator = AgentOrchestrator(
+        models,
+        kernel,
+        execution,
+        operations,
+        runs,
+        ctf=CtfService(operations, kernel, CtfRepository(database), vault),
+    )
     return operations, kernel, models, orchestrator, fake
 
 
@@ -325,6 +335,80 @@ def test_propose_finding_with_real_artifact_creates_candidate(
     assert findings[0].status == FindingStatus.CANDIDATE
     assert findings[0].title == "real finding"
     assert artifact.id in findings[0].evidence_ids
+
+
+def test_propose_hypothesis_lands_on_the_hunt_board(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["strategize"]}',
+        '{"commands": ['
+        '{"type": "propose_hypothesis", "title": "ticket notes render via Go template", '
+        '"category": "web", "notes": "pdf preview reflects input verbatim"},'
+        '{"type": "complete_task", "no_finding": "scripted"}'
+        "]}",
+    )
+    run = orchestrator.run_task(
+        operation_id, "probe", [MODEL_ID], specialization=AgentSpecialization.STRATEGIST
+    )
+    assert run.status is AgentRunStatus.COMPLETED
+    hypotheses = orchestrator.ctf.list_hypotheses(operation_id)
+    assert len(hypotheses) == 1
+    assert hypotheses[0].title == "ticket notes render via Go template"
+    assert hypotheses[0].category is not None and hypotheses[0].category.value == "web"
+    events = service.events(operation_id)
+    assert any(e.event_type == "hypothesis.proposed" for e in events)
+
+
+def test_propose_hypothesis_with_unknown_category_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["strategize"]}',
+        '{"commands": ['
+        '{"type": "propose_hypothesis", "title": "bad category", "category": "mind-reading"},'
+        '{"type": "complete_task", "no_finding": "scripted"}'
+        "]}",
+    )
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    assert run.status is AgentRunStatus.COMPLETED
+    rejected = [
+        e for e in service.events(operation_id)
+        if e.event_type == "agent.command.rejected"
+    ]
+    assert len(rejected) == 1
+    assert "unknown hypothesis category" in rejected[0].payload["reason"]
+    assert orchestrator.ctf.list_hypotheses(operation_id) == []
+
+
+def test_propose_hypothesis_without_a_ctf_service_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    orchestrator.ctf = None
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["strategize"]}',
+        '{"commands": ['
+        '{"type": "propose_hypothesis", "title": "no host"},'
+        '{"type": "complete_task", "no_finding": "scripted"}'
+        "]}",
+    )
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    assert run.status is AgentRunStatus.COMPLETED
+    rejected = [
+        e for e in service.events(operation_id)
+        if e.event_type == "agent.command.rejected"
+    ]
+    assert len(rejected) == 1
+    assert "unavailable" in rejected[0].payload["reason"]
 
 
 def test_complete_task_without_required_artifact_rejected(
