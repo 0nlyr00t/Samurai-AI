@@ -510,7 +510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         headless_result = handle_headless_command(args, swarm_service)
         if headless_result is not None:
             return headless_result
-        eval_result = handle_eval_command(args)
+        eval_result = handle_eval_command(args, _SERVICES)
         if eval_result is not None:
             return eval_result
         if args.command == "operation":
@@ -911,6 +911,7 @@ def _make_services(
         SkillRepository(database), vault, SkillGapRepository(database)
     )
     questions = OperatorQuestionService(operations, QuestionRepository(database))
+    ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     agents = AgentOrchestrator(
         models,
         kernel,
@@ -923,13 +924,13 @@ def _make_services(
         genes=GeneService(GeneStore(genes_path())),
         impact=ImpactService(operations, kernel),
         questions=questions,
+        ctf=ctf,
     )
     playbooks = PlaybookService(operations, kernel, PlaybookRepository(database))
     reports = ReportService(
         operations, kernel, playbooks, ReportRepository(database), vault,
         impact=ImpactService(operations, kernel),
     )
-    ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     planning = PlanningService(operations, kernel, PlanningRepository(database), vault)
     swarm = SwarmService(operations, kernel, agents, SwarmRunRepository(database))
