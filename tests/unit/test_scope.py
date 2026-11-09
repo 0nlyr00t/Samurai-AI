@@ -249,3 +249,18 @@ def test_a_single_address_rule_does_not_cover_more_than_itself() -> None:
 
 def test_an_unparsable_target_is_not_covered() -> None:
     assert not ScopeContract(includes=("example.com",)).covers("not a target")
+
+
+def test_infra_hosts_pass_without_widening_the_contract() -> None:
+    """A resolver or the platform API is plumbing: allowed, and not a scope rule."""
+    contract = ScopeContract(includes=("10.10.0.0/24",)).with_infra(
+        frozenset({"1.1.1.1", ".hackthebox.com"})
+    )
+    for target in ("1.1.1.1", "api.hackthebox.com", "https://labs.hackthebox.com/x"):
+        decision = contract.evaluate(target)
+        assert decision.allowed, target
+        assert "service host" in decision.detail
+    # entries are suffixes, not the whole internet
+    assert not contract.evaluate("evil.example.org").allowed
+    # the includes are untouched — the board shows targets only
+    assert contract.includes == ("10.10.0.0/24",)

@@ -3,7 +3,7 @@
 import pytest
 
 from samurai_ai.domain.scope import ScopeContract
-from samurai_ai.domain.scope_guard import ScopeGuardError, guard
+from samurai_ai.domain.scope_guard import ScopeGuardError, guard, infra_hosts
 
 SCOPE = ScopeContract(includes=("10.10.0.0/24", "example.com", "*.example.com"))
 
@@ -52,3 +52,56 @@ def test_plain_words_and_numbers_are_not_hosts() -> None:
 def test_the_message_names_the_parameter() -> None:
     with pytest.raises(ScopeGuardError, match="parameter 'target'"):
         guard(SCOPE, {"target": "8.8.8.8"})
+
+
+def test_a_free_form_command_is_judged_per_token() -> None:
+    """`nmap … <ip>` used to slip through: the whole line is not a bare host."""
+    with pytest.raises(ScopeGuardError, match="8.8.8.8"):
+        guard(SCOPE, {"command": "nmap -Pn -p- --min-rate 2000 8.8.8.8"})
+    with pytest.raises(ScopeGuardError, match="8.8.8.8"):
+        guard(SCOPE, {"command": "bash -lc 'nmap -sV 8.8.8.8'"})
+    guard(SCOPE, {"command": "id; uname -a; cat /etc/hosts"})
+    guard(SCOPE, {"command": "ssh vm27 'hostname; id'"})
+
+
+def test_key_value_flags_are_judged_by_the_value() -> None:
+    with pytest.raises(ScopeGuardError, match="10.9.9.9"):
+        guard(SCOPE, {"command": "curl --resolve=example.com:443:10.9.9.9 https://example.com/"})
+
+
+def test_a_scheme_beats_the_path_heuristic() -> None:
+    """`curl https://host` has no path: suffix «.com» used to read as a local file."""
+    with pytest.raises(ScopeGuardError, match="outside.example.org"):
+        guard(SCOPE, {"command": "curl https://outside.example.org"})
+
+
+def test_infra_hosts_never_count_as_targets() -> None:
+    """Resolvers and the platform API are plumbing: refusing them cost a round."""
+    htb = SCOPE.with_infra(infra_hosts("ctf-htb"))
+    guard(htb, {"command": "curl -s https://api.hackthebox.com/api/v4/machine/active"})
+    guard(htb, {"command": "curl https://labs.hackthebox.com/x"})
+    guard(htb, {"command": "dig +short example.com @1.1.1.1"})
+    guard(htb, {"command": "curl https://1.1.1.1/dns-query"})
+    # the platform list is per mode: HTB infra is not BugBounty infra
+    with pytest.raises(ScopeGuardError, match="hackthebox"):
+        guard(SCOPE.with_infra(infra_hosts("bug-bounty")),
+              {"command": "curl https://api.hackthebox.com/x"})
+    # and a real outside target still fails with infra in play
+    with pytest.raises(ScopeGuardError, match="outside.example.org"):
+        guard(htb, {"command": "curl https://outside.example.org"})
+
+
+def test_a_file_suffix_beats_the_tld() -> None:
+    """`cat app.js` was refused: «.js» is a real TLD and the token looked like one."""
+    for command in (
+        "cat app.js",
+        "grep -n api app.js",
+        "head -50 notes.md",
+        "cat report.json",
+        "sed -n 1p /tmp/c.txt",
+        "ls -la exploit.py",
+    ):
+        guard(SCOPE, {"command": command})
+    # a URL is still judged as a URL, whatever its path looks like
+    with pytest.raises(ScopeGuardError, match="outside.example.org"):
+        guard(SCOPE, {"command": "curl https://outside.example.org/app.js"})
