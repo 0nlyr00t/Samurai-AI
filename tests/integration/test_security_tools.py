@@ -1066,12 +1066,19 @@ def test_a_forgotten_adapter_check_still_cannot_leave_the_scope(tmp_path: Path) 
         execution.run_tool(
             operation.id,
             "recon.httpx-probe",
-            {"targets": ["example.com", "8.8.8.8"]},
+            {"targets": ["example.com", "1.2.3.4"]},
             approval_id=approval_id,
         )
     # the refusal is still visible in the history
     assert [run for run in execution.list_runs(operation.id) if run.status.value == "failed"]
     assert not [call for call in manager.calls if call[:2] == ("docker", "run")]
+    # a public resolver is plumbing, not a target: it passes without widening
+    execution.run_tool(
+        operation.id,
+        "recon.httpx-probe",
+        {"targets": ["example.com", "8.8.8.8"]},
+        approval_id=approve(kernel, operation.id, "recon.httpx-probe", RiskClass.R2),
+    )
 
 
 def test_a_stored_vault_key_reaches_the_tool_without_a_parameter(tmp_path: Path) -> None:

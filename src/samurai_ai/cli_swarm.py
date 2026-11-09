@@ -47,7 +47,10 @@ def register_swarm_commands(
         dest="specs",
         default=[],
         metavar="TASK_ID:SPECIALIZATION",
-        help="Member specialization (general|recon|testing|analysis); repeatable",
+        help=(
+            "Member specialization (general|recon|testing|analysis|strategist|"
+            "researcher); repeatable"
+        ),
     )
     run.add_argument("--approval-id", dest="approval_id")
     run.add_argument(

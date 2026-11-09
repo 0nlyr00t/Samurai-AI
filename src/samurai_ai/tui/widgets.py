@@ -72,6 +72,26 @@ class StripItem(Static):
             opener(self.target)
 
 
+class SideBlock(Static):
+    """A side-panel list (SCOPE, LOOT); a click with overflow opens the full list."""
+
+    #: how many rows the panel shows before the rest fold behind «ещё N…»
+    LIMIT = 10
+
+    def __init__(self, target: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(*args, **kwargs)
+        self.target = target
+        #: every row as a plain line, for the full list behind the click
+        self.entries: list[str] = []
+
+    def on_click(self) -> None:
+        if len(self.entries) <= self.LIMIT:
+            return
+        opener = getattr(self.app, "_show_side_list", None)
+        if opener is not None:
+            opener(self.target, self.entries)
+
+
 class OperationTab(Static):
     """One open operation in the strip: click focuses it, right-click closes."""
 
