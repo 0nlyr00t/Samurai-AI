@@ -38,3 +38,22 @@ def test_provision_without_an_operation_says_so(tmp_path: Path, monkeypatch, cap
     code = main(["tool", "provision", "scan.nmap"])
     assert code == 2
     assert "no operation" in capsys.readouterr().err
+
+
+def test_the_provision_command_is_advertised_to_the_agent() -> None:
+    """The model learns the command and when not to use it."""
+    from samurai_ai.agents.orchestrator import AgentOrchestrator
+
+    text = AgentOrchestrator.__dict__
+    source = (Path("src/samurai_ai/agents/orchestrator.py")).read_text()
+    assert "request_tool_provision" in source
+    assert "missing" in source.split("request_tool_provision", 1)[1][:300]
+    assert text
+
+
+def test_the_chat_has_its_own_provision_tool() -> None:
+    from samurai_ai.tui import chat as chat_module
+
+    names = {spec.name for spec in chat_module.ChatController._CHAT_TOOL_SPECS}
+    assert "provision_tool" in names
+    assert "provision_tool" in chat_module.ChatController._CHAT_TOOL_HANDLERS
