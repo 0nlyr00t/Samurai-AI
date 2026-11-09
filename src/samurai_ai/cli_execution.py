@@ -27,6 +27,12 @@ def register_execution_commands(
 
     tool_commands.add_parser("list", help="List registered tool definitions")
 
+    capabilities = tool_commands.add_parser(
+        "capabilities",
+        help="What this machine can run right now (read-only, changes nothing)",
+    )
+    capabilities.add_argument("--json", action="store_true", dest="json_output")
+
     run = tool_commands.add_parser("run", help="Run a tool under governance")
     run.add_argument("operation_id")
     run.add_argument("tool_id")
@@ -96,6 +102,8 @@ def handle_execution_command(
 ) -> int | None:
     if args.command != "tool":
         return None
+    if args.tool_command == "capabilities":
+        return _capabilities(args)
     if args.tool_command == "list":
         definitions = execution.list_tools()
         if args.json_output:
@@ -174,6 +182,23 @@ def handle_execution_command(
         return 0 if result.run.exit_code == 0 else 1
     run = execution.get_run(args.run_id)
     _emit_run(run, args.json_output)
+    return 0
+
+
+def _capabilities(args: argparse.Namespace) -> int:
+    """Read-only: detection never installs, pulls or asks for a password."""
+    from samurai_ai.services.fabric import describe_capabilities
+
+    summary = describe_capabilities()
+    if getattr(args, "json_output", False):
+        _print_json(summary.model_dump(mode="json"))
+        return 0
+    print(f"os\t{summary.os_family} {summary.distro} {summary.arch}".strip())
+    for line in summary.tools:
+        print(f"{line.tool_id}\t{line.path or '-'}\t{line.version or '-'}")
+    if summary.notes:
+        for note in summary.notes:
+            print(f"note\t{note}")
     return 0
 
 
