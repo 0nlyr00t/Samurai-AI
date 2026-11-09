@@ -38,6 +38,15 @@ class RequestToolRunCommand(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class RequestToolProvisionCommand(BaseModel):
+    """Widen the machine, not the scope: the id is the only input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["request_tool_provision"]
+    tool_id: str = Field(min_length=1, max_length=64)
+
+
 class NoteCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -134,6 +143,7 @@ class FailCommand(BaseModel):
 
 AgentCommand = Annotated[
     RequestToolRunCommand
+    | RequestToolProvisionCommand
     | NoteCommand
     | ProposeFindingCommand
     | ProposeHypothesisCommand
