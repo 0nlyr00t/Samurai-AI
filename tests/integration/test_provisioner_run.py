@@ -204,3 +204,38 @@ def test_a_second_provision_of_a_working_tool_is_a_noop(
     # only the healthcheck ran: nothing was installed again
     assert [call[0].rsplit("/", 1)[-1] for call in manager.calls] == ["nmap"]
     assert "provision.skipped" in provisioner.operations.event_types()
+
+
+def test_a_ready_install_refreshes_the_registry_and_the_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool must work without restarting the app: paths and profile go stale."""
+    from samurai_ai.execution.registry import ToolRegistry
+
+    class _Adapter:
+        def __init__(self) -> None:
+            self._path: str | None = "/old/path"
+            self.recipe = type("R", (), {"id": "scan.nmap", "executable": "nmap"})()
+
+    adapter = _Adapter()
+    registry = ToolRegistry()
+    registry._native = {"scan.nmap": adapter}  # type: ignore[assignment]
+    provisioner, _manager = _provisioner(
+        tmp_path, {"apt-get": (0, "", ""), "nmap": (0, "Nmap 7.95", "")}
+    )
+    provisioner.watch(registry)
+    refreshes = {"n": 0}
+    real_detect = provisioner.detector.detect
+
+    def detect(refresh: bool = False):  # type: ignore[no-untyped-def]
+        if refresh:
+            refreshes["n"] += 1
+        return real_detect(refresh=refresh)
+
+    provisioner.detector.detect = detect  # type: ignore[method-assign]
+    monkeypatch.setattr("samurai_ai.services.fabric.which", lambda name: "")
+    run = provisioner.run("op_1", "scan.nmap", _profile())
+    assert run.status is ProvisionStatus.READY
+    assert refreshes["n"] >= 1
+    # a NativeTool's memoized path is dropped, so the new binary is seen
+    assert adapter._path is None

@@ -7384,6 +7384,123 @@ def test_the_scope_tab_excludes_and_restores_by_click(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_the_chat_can_ask_for_a_tool_and_the_plan_is_shown(tmp_path: Path) -> None:
+    """The model asks for a tool; the operator sees commands before consent."""
+    from samurai_ai.domain.environment import EnvironmentProfile
+    from samurai_ai.services.provisioner import Provisioner
+    from samurai_ai.tui.screens import AccessPromptScreen
+
+    profile = EnvironmentProfile.model_validate(
+        {
+            "os_family": "linux",
+            "distro": "kali",
+            "arch": "x86_64",
+            "package_managers": {"apt-get": "/usr/bin/apt-get"},
+            "sudo_noninteractive": True,
+        }
+    )
+    real = Provisioner(operations=None, kernel=None)  # type: ignore[arg-type]
+
+    class _Stub(Provisioner):
+        def __init__(self) -> None:  # noqa: D107 - a stub, not the real thing
+            self.states = {}
+            self.installed: list[str] = []
+            self.detector = type(
+                "D", (), {"detect": staticmethod(lambda refresh=False: profile)}
+            )()
+
+        def plan(self, tool_id: str, _profile: object) -> object:
+            return real.plan(tool_id, profile)
+
+        def run(self, operation_id: str, tool_id: str, profile_: object) -> object:
+            self.installed.append(tool_id)
+            run = type("Run", (), {})()
+            run.status = type("Status", (), {"value": "ready"})()
+            run.error = ""
+            return run
+
+        def state(self, tool_id: str) -> object:
+            return type("S", (), {"installed_version": "7.95"})()
+
+        def needs_decision(self, tool_id: str) -> bool:
+            return False
+
+    from samurai_ai.services.provisioner import Provisioner
+
+    class _Fake(Provisioner):
+        def __init__(self) -> None:  # noqa: D107 - a stub, not the real thing
+            self.states = {}
+            self.installed: list[str] = []
+            self.detector = type(
+                "D", (), {"detect": staticmethod(lambda refresh=False: profile)}
+            )()
+
+        def plan(self, tool_id: str, profile: object) -> object:
+            return self._real_plan(tool_id)
+
+    profile = EnvironmentProfile.model_validate(
+        {
+            "os_family": "linux",
+            "distro": "kali",
+            "arch": "x86_64",
+            "package_managers": {"apt-get": "/usr/bin/apt-get"},
+            "sudo_noninteractive": True,
+        }
+    )
+    real = Provisioner(operations=None, kernel=None)  # type: ignore[arg-type]
+
+    class _Stub(_Fake):
+        def _real_plan(self, tool_id: str) -> object:
+            return real.plan(tool_id, profile)
+
+        def run(self, operation_id: str, tool_id: str, profile: object) -> object:
+            self.installed.append(tool_id)
+            run = type("Run", (), {})()
+            run.status = type("Status", (), {"value": "ready"})()
+            run.error = ""
+            return run
+
+        def state(self, tool_id: str) -> object:
+            return type("S", (), {"installed_version": "7.95"})()
+
+        def needs_decision(self, tool_id: str) -> bool:
+            return False
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Prov lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        app.provisioner = _Stub()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            worker = app.run_worker(
+                app._run_chat_tool(
+                    ToolCall(id="p1", name="provision_tool", arguments={"tool_id": "scan.nmap"})
+                ),
+                exclusive=False,
+            )
+            for _ in range(80):
+                await pilot.pause()
+                if isinstance(app.screen, AccessPromptScreen):
+                    break
+            assert isinstance(app.screen, AccessPromptScreen), (
+                app.query_one("#journal", BlockJournal).text()[-400:]
+            )
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "apt-get install" in journal  # the commands are on screen
+            await pilot.press("a")
+            message = await worker.wait()
+            assert "installed and verified" in message.content
+            assert app.provisioner.installed == ["scan.nmap"]
+
+    asyncio.run(exercise())
+
+
 def test_the_attack_map_shows_once_two_hosts_have_access(tmp_path: Path) -> None:
     """Two hosts in confirmed facts → the map appears with levels."""
     stack = _minimal_stack(tmp_path)

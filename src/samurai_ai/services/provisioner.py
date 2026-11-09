@@ -89,7 +89,10 @@ class Provisioner:
         provisionable, reason, manual = resolver.can_provision(recipe)
         spec = recipe.package_for(platform_key(profile))
         if spec is None or not provisionable:
-            raise ProvisionRefusedError(reason.value, manual, manual)
+            # the resolver's text carries the manual command or the why; keep both
+            detail = manual or reason.value
+            command = manual if manual.startswith(("sudo", "brew")) else ""
+            raise ProvisionRefusedError(reason.value, detail, command)
         commands = self._commands(recipe, spec, profile)
         healthcheck = self._healthcheck_command(recipe)
         return ProvisionPlan(
@@ -381,14 +384,17 @@ class Provisioner:
         self._save_state()
         self._event(operation_id, run, "provision.failed", {"error": error})
 
+    def watch(self, registry: Any) -> None:
+        """Let a provision invalidate this registry's memoized native paths."""
+        if registry not in self._registries:
+            self._registries.append(registry)
+
     def refresh_registry(self) -> None:
         """Drop memoized executable paths so a new binary is seen at once."""
-        from samurai_ai.execution.native import NativeTool
-
         for registry in self._registries:
             for tool_id in list(getattr(registry, "_native", {})):
                 adapter = registry._native[tool_id]
-                if isinstance(adapter, NativeTool):
+                if hasattr(adapter, "_path"):
                     adapter._path = None
 
     def _plan_dict(self, run: ProvisionRun) -> dict[str, object]:

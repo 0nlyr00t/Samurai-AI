@@ -64,6 +64,8 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 
 **Network behind a relay.** When a target is only reachable from a VM or a jump host, `--relay "prlctl exec '<uuid>'"` sends the network tools there; no container, while scope and artifacts stay and the relay's own address joins the scope. `samurai doctor --relay "<prefix>"` says up front which tools the far side lacks.
 
+**Local tools.** On the operator's own machine `samurai` runs installed tools natively, without a shell: the executable and argv come from a reviewed catalogue recipe, while scope and approvals stay mandatory. `samurai tool capabilities` reports the environment and the binaries it finds without changing anything; a missing tool is installed from its recipe — `tool provision <id> --dry-run` prints the platform, package, commands, privilege and healthcheck and changes nothing, the install takes its own approval (`sudo -n`, no password through the model) and a tool is never ready without a passing healthcheck. A second install is a no-op, a failure needs a new run. The model only names a `tool_id`: no package names, no install commands. The relay stays the fallback transport. Details in [`md/local-tools.md`](md/local-tools.md).
+
 **Offline mode.** `--offline` on an operation refuses remote models and tools that need the internet; the refusal carries a reason and comes before the attempt, `offline check` lists what is refused.
 
 **Browser view.** `samurai web <op>` — summary, journal, plan, findings, report downloads. `127.0.0.1` only, one-off token in the link, no writes.
@@ -92,6 +94,8 @@ Implementation detail and limits: [`md/capabilities.md`](md/capabilities.md) and
 
 ## Documentation
 
+- [`md/local-tools.md`](md/local-tools.md) — local tools, installation and its limits.
+- [`md/optin-platform-checks.md`](md/optin-platform-checks.md) — manual checks on live platforms.
 - [`md/requirements.md`](md/requirements.md) — requirements.
 - [`md/development-plan.md`](md/development-plan.md) — stages, acceptance criteria, status.
 - [`md/threat-review-security-tools.md`](md/threat-review-security-tools.md) — per-tool review and residual risks.

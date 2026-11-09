@@ -952,6 +952,7 @@ def _make_services(
         templates=portability_scripts(),
     )
     agents.provisioner = provisioner
+    provisioner.watch(execution.registry)
     goals = GoalService(operations, GoalRepository(database))
     exports = IntegrationExportService(operations, kernel, redteam, planning, vault)
     access = AccessService(
