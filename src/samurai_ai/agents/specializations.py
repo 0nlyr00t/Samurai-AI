@@ -54,6 +54,40 @@ PROFILES: dict[AgentSpecialization, SpecializationProfile] = {
             "existing artifacts; avoid redundant tool runs."
         ),
     ),
+    AgentSpecialization.STRATEGIST: SpecializationProfile(
+        planner_focus=(
+            " Think like an offensive strategist: read the blackboard and the "
+            "graph, name the attack vectors the evidence points to, and rank them "
+            "by expected value — hypothesis-driven testing over checklist grinding. "
+            "Never re-propose a hypothesis that is already open, testing or "
+            "refuted. Before niche ideas, cover the standard classes for every "
+            "discovered surface: web app → auth, injection (SSTI/SQLi), traversal, "
+            "IDOR, misconfiguration; network service → version CVEs, weak auth, "
+            "protocol abuse; host access → privesc, credential reuse, pivot."
+        ),
+        executor_focus=(
+            " Your output is hypotheses, not tool runs: turn each promising vector "
+            "into a concrete, falsifiable propose_hypothesis command (a category "
+            "from web|pwn|reverse|crypto|forensics|misc|privesc when it fits), and "
+            "use note for the reasoning that ranks them. Run a tool only when one "
+            "read-only check is what decides between two vectors."
+        ),
+    ),
+    AgentSpecialization.RESEARCHER: SpecializationProfile(
+        planner_focus=(
+            " You are the intelligence desk: for every service, version, product "
+            "or technology the blackboard names, plan a lookup — known CVEs, "
+            "public exploits, default credentials, vendor advisories, common "
+            "misconfigurations. Prefer research.search and research.read over "
+            "blind probing."
+        ),
+        executor_focus=(
+            " Report, do not attack: each finding becomes a propose_hypothesis "
+            "(title names the vector and the CVE/advisory when there is one) with "
+            "the evidence link in notes, or a note when it is context. Never run "
+            "an exploit yourself."
+        ),
+    ),
 }
 
 

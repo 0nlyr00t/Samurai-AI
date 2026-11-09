@@ -9,6 +9,7 @@ from samurai_ai.agents.blackboard import Blackboard
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.domain.agents import AgentRun
 from samurai_ai.domain.execution import ApprovalRequiredError
+from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.questions import (
     Answer,
@@ -55,6 +56,13 @@ def register_agent_commands(
         default=[],
         metavar="SKILL_NAME",
         help="installed skill to inject into the executor prompt; repeatable",
+    )
+    run.add_argument(
+        "--specialization",
+        dest="specialization",
+        default="general",
+        choices=[item.value for item in AgentSpecialization],
+        help="prompt profile for the run (strategist proposes hypotheses)",
     )
 
     list_command = agent_commands.add_parser("list", help="List agent runs")
@@ -195,6 +203,7 @@ def handle_agent_command(
                 approval_resolver=(
                     _always_approve if args.auto_approve else None
                 ),
+                specialization=AgentSpecialization(args.specialization),
             )
         except ApprovalRequiredError as exc:
             print(

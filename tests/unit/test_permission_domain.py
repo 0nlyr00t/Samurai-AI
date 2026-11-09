@@ -1,8 +1,12 @@
 from samurai_ai.domain.permission import (
+    DEFAULT_WINDOW_SECONDS,
+    LONG_WINDOW_SECONDS,
+    QUICK_WINDOW_SECONDS,
     CommandRisk,
     PermissionMode,
     classify_argv,
     classify_command,
+    command_window,
     next_mode,
     parse_mode,
 )
@@ -97,3 +101,16 @@ def test_classify_argv_matches_command_classification() -> None:
     argv = ("bash", "-lc", "rm -rf .env")
     assert classify_argv(argv) == classify_command(" ".join(argv))
     assert isinstance(classify_argv(()), CommandRisk)
+
+
+def test_the_command_family_sets_the_window() -> None:
+    """A flat timeout killed every full-port scan and stalled every curl."""
+    assert command_window("nmap -Pn -p- 10.0.0.5") == LONG_WINDOW_SECONDS
+    assert command_window("cd /tmp && ffuf -u https://x/FUZZ") == LONG_WINDOW_SECONDS
+    assert command_window("sudo nuclei -u https://x") == LONG_WINDOW_SECONDS
+    curl = "curl -s -o /dev/null -w '%{http_code}' https://x"
+    assert command_window(curl) == QUICK_WINDOW_SECONDS
+    assert command_window("dig +short x.htb") == QUICK_WINDOW_SECONDS
+    assert command_window("id; uname -a") == DEFAULT_WINDOW_SECONDS
+    # the far side of a VPN answers on its own schedule
+    assert command_window("nmap -p- 10.0.0.5", relayed=True) == LONG_WINDOW_SECONDS * 2

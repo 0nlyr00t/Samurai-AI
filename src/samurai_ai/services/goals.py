@@ -136,7 +136,11 @@ class GoalService:
     # --- budget -----------------------------------------------------------
 
     def record_step(self, goal_id: str) -> Goal:
-        """Count one agent step against the active goal and enforce the budget."""
+        """Count one agent step against the active goal.
+
+        A spent budget is raised, not blocked: the strip must not claim the
+        goal stopped while the run it measures is still going.
+        """
         goal = self.get(goal_id)
         if goal.state is not GoalState.ACTIVE:
             return goal
@@ -144,8 +148,13 @@ class GoalService:
         self._accrue(goal)
         goal.record_step()
         if goal.exhausted:
-            goal.block(self._exhaustion_reason(goal))
-            return self._save(goal, expected, "goal.blocked", {"reason": goal.block_reason})
+            goal.extend_budget()
+            return self._save(
+                goal,
+                expected,
+                "goal.budget-extended",
+                {"budget_steps": goal.budget_steps, "budget_seconds": goal.budget_seconds},
+            )
         return self._save(goal, expected, "goal.step", {"spent_steps": goal.spent_steps})
 
     def restart_clock(self) -> None:
@@ -162,15 +171,6 @@ class GoalService:
         self._last_tick = self.clock()
         if elapsed > 0:
             goal.tick(elapsed)
-
-    @staticmethod
-    def _exhaustion_reason(goal: Goal) -> str:
-        limits = []
-        if goal.spent_steps >= goal.budget_steps:
-            limits.append(f"step budget {goal.budget_steps} spent")
-        if goal.spent_seconds >= goal.budget_seconds:
-            limits.append(f"time budget {goal.budget_seconds}s spent")
-        return "budget exhausted: " + ", ".join(limits)
 
     # --- internals --------------------------------------------------------
 

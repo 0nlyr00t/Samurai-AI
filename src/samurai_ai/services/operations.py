@@ -58,6 +58,12 @@ class OperationService:
     def latest(self) -> Operation | None:
         return self.repository.latest()
 
+    def delete(self, operation_id: str) -> None:
+        """Forget the operation entirely: its events, runs, artifacts, transcript."""
+        if self.repository.get(operation_id) is None:
+            raise OperationNotFoundError(f"operation not found: {operation_id}")
+        self.repository.delete(operation_id)
+
     def list_all(self) -> list[Operation]:
         return self.repository.list_all()
 

@@ -61,3 +61,16 @@ def test_findings_order_by_severity_then_newest_and_drop_the_dropped() -> None:
 def test_the_list_is_bounded() -> None:
     items = [finding(FindingSeverity.HIGH) for _ in range(20)]
     assert len(ranked(items)) == 8
+
+
+def test_hypothesis_score_priors_and_evidence_boost() -> None:
+    from samurai_ai.tui.hunt import hypothesis_score
+
+    strong = hypothesis_score("SSTI в заметках билета", [])
+    weak = hypothesis_score("что-то экзотическое", [])
+    assert strong > weak
+    boosted = hypothesis_score(
+        "SSTI в заметках билета", ["заметки билета рендерятся через Go template"]
+    )
+    assert boosted > strong
+    assert hypothesis_score("SSTI в заметках билета", ["факт"] * 100) <= 0.99

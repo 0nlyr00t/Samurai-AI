@@ -24,9 +24,10 @@ from samurai_ai.domain.execution import (
     ToolValidationError,
 )
 from samurai_ai.domain.kernel import RiskClass
+from samurai_ai.domain.permission import command_window
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.http import HttpEgressBroker
-from samurai_ai.execution.process import ProcessManager
+from samurai_ai.execution.process import DEFAULT_STALL_SECONDS, ProcessManager
 from samurai_ai.execution.relay import normalize_relayed
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 
@@ -354,11 +355,18 @@ class ShellExecTool:
         command = str(params["command"])
         if self.relay:
             command = normalize_relayed(self.relay, command)
+            # a relayed command's silence is the far side's pace, not a stall:
+            # the stall watchdog used to kill slow VPN runs and feed the breaker
+            self.manager.stall_seconds = 0.0
+        else:
+            self.manager.stall_seconds = DEFAULT_STALL_SECONDS
         shell = "bash" if shutil.which("bash") else "sh"
         result = asyncio.run(
             self.manager.run(
                 [shell, "-lc", command],
-                timeout_seconds=float(self._definition.timeout_seconds),
+                # a live sweep gets minutes, a banner grab seconds: one flat 120 s
+                # window killed every `nmap -p-` while stalling every `curl`
+                timeout_seconds=command_window(command, relayed=bool(self.relay)),
             )
         )
         stderr = result.stderr

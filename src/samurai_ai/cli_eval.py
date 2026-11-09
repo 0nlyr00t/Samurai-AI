@@ -13,6 +13,7 @@ import argparse
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from samurai_ai.domain.eval import compare_reports
 from samurai_ai.services.eval import EvalService, load_report, load_suite, report_to_json
@@ -60,11 +61,40 @@ def register_eval_commands(
         default=1.0,
         help="wall-time regression floor: baselines faster than this are never flagged",
     )
+    bench = eval_commands.add_parser(
+        "bench",
+        help="Live benchmark: the chat loop against a real host, with the public metric",
+    )
+    bench.add_argument("suite", type=Path, help="path to a benchmark suite JSON")
+    bench.add_argument(
+        "--host",
+        action="append",
+        default=[],
+        help="target host or address in scope (repeatable); required",
+    )
+    bench.add_argument(
+        "--relay",
+        default="",
+        help="relay prefix every command goes through, e.g. 'ssh -F conf vm'",
+    )
+    bench.add_argument("--model", default="", help="model id; the app default when omitted")
+    bench.add_argument(
+        "--only", action="append", default=[], help="run only this scenario id (repeatable)"
+    )
+    history = eval_commands.add_parser(
+        "history", help="Past benchmark runs, newest last"
+    )
+    history.add_argument("--limit", type=int, default=20)
+    bench.add_argument("--quiet", action="store_true", help="no progress lines on stderr")
 
 
-def handle_eval_command(args: argparse.Namespace) -> int | None:
+def handle_eval_command(args: argparse.Namespace, services: tuple[Any, ...] = ()) -> int | None:
     if args.command != "eval":
         return None
+    if args.eval_command == "bench":
+        return _handle_bench(args, services)
+    if args.eval_command == "history":
+        return _handle_history(args)
     service = EvalService()
     if args.eval_command == "run":
         suite = load_suite(args.suite)
@@ -100,3 +130,48 @@ def handle_eval_command(args: argparse.Namespace) -> int | None:
     for regression in comparison.regressions:
         print(f"regression: {regression}", file=sys.stderr)
     return 0 if comparison.passed else 1
+
+
+def _handle_bench(args: argparse.Namespace, services: tuple[Any, ...]) -> int:
+    from samurai_ai.domain.bench import BenchError
+    from samurai_ai.services.bench import BenchRunner, render_table, save_report
+
+    if not services:
+        print("bench needs the service stack", file=sys.stderr)
+        return 2
+    runner = BenchRunner(
+        services, progress=None if args.quiet else lambda line: print(line, file=sys.stderr)
+    )
+    try:
+        report = runner.run(
+            args.suite,
+            hosts=tuple(args.host),
+            relay=args.relay,
+            model_id=args.model,
+            only=tuple(args.only),
+        )
+    except BenchError as exc:
+        print(f"[bench] {exc}", file=sys.stderr)
+        return 2
+    print(render_table(report))
+    path = save_report(report)
+    print(f"report: {path}")
+    return 0 if report.passed else 1
+
+
+def _handle_history(args: argparse.Namespace) -> int:
+    from samurai_ai.services.bench import read_history
+
+    rows = read_history(args.limit)
+    if not rows:
+        print("no benchmark runs yet")
+        return 0
+    for row in rows:
+        verdicts = ", ".join(
+            f"{item['scenario']}={item['verdict']}" for item in row.get("results", [])
+        )
+        print(f"{row.get('at', '')[:19]} {row.get('suite')} {verdicts}")
+        for item in row.get("results", []):
+            for failure in item.get("failures", []):
+                print(f"    └ {item['scenario']}: {failure}")
+    return 0

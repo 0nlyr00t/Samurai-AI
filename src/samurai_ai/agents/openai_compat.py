@@ -219,8 +219,14 @@ class OpenAICompatProvider:
             )
             for index, (_, entry) in enumerate(sorted(tool_map.items()))
         )
+        text = "".join(text_parts)
+        if "DSML" in text:
+            # a degrading model inlines its calls as markup; the plain path
+            # salvages them, the stream must not strand them as prose
+            text, salvaged = _salvage_dsml(text)
+            calls = (*calls, *salvaged)
         return ChatResponse(
-            text="".join(text_parts),
+            text=text,
             tool_calls=calls,
             usage=usage,
             model_id=request.model_id,

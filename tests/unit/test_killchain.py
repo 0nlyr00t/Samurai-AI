@@ -91,12 +91,73 @@ def test_access_rows_ignore_facts_without_hosts() -> None:
     assert access_rows(["nothing useful here", ""]) == []
 
 
+def test_access_rows_skip_out_of_scope_mentions() -> None:
+    """A gateway or resolver quoted by a fact is not access — scope decides."""
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.tui.killchain import access_rows
+
+    facts = [
+        "IP цели верный: HTB API отдаёт DutyBound = 10.129.138.134, "
+        "lab-гейт 10.8.1.1, dns 1.1.1.1"
+    ]
+    scope = ScopeContract(includes=("10.129.138.134",))
+    rows = access_rows(facts, scope)
+    assert [row.host for row in rows] == ["10.129.138.134"]
+    # and without a scope the old behaviour stays
+    assert len(access_rows(facts)) == 3
+
+
+def test_open_intents_move_the_stage_too() -> None:
+    """The chat path writes its work as graph intents; the rail must see them."""
+    chain = phase_for(
+        OperationMode.CTF_HTB,
+        [],
+        intent_texts=["Собрать SSTI payload для заметок билета"],
+    )
+    assert chain.current == "foothold"
+    # and without them the same operation is still at recon
+    assert phase_for(OperationMode.CTF_HTB, []).current == "recon"
+
+
 def test_ctf_counter_reads_flags_and_not_verified_findings() -> None:
     """The counter follows the mode: flags only exist in CTF."""
     ctf = phase_for(OperationMode.CTF_HTB, [], flag_count=2, flag_total=2, verified_findings=9)
     bounty = phase_for(OperationMode.BUG_BOUNTY, [], verified_findings=9)
     assert (ctf.counter_label, ctf.counter_done) == ("flags", 2)
     assert (bounty.counter_label, bounty.counter_done) == ("verified", 9)
+
+
+def test_scope_rows_mark_touched_targets_and_keep_exclusions_last() -> None:
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.tui.killchain import scope_rows
+
+    scope = ScopeContract(
+        includes=("10.0.0.0/24", "*.example.com"),
+        excludes=("10.0.0.1",),
+        hosts={"flight.htb": "10.0.0.7"},
+    )
+    rows = scope_rows(scope, {"10.0.0.7", "other.htb"})
+    by_rule = {row.rule: row for row in rows}
+    # a touched host inside the network marks the include rule
+    assert by_rule["10.0.0.0/24"].hit is True
+    assert by_rule["*.example.com"].hit is False
+    # the alias is hit through the address it stands for, with the note
+    assert by_rule["flight.htb"].hit is True
+    assert by_rule["flight.htb"].note == "→ 10.0.0.7"
+    # exclusions trail the list and never count as hit
+    assert rows[-1].rule == "10.0.0.1" and rows[-1].excluded and not rows[-1].hit
+
+
+def test_scope_rows_resolve_a_touched_alias_into_its_rule() -> None:
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.tui.killchain import scope_rows
+
+    scope = ScopeContract(includes=("10.0.0.9",), hosts={"flight.htb": "10.0.0.9"})
+    rows = scope_rows(scope, {"flight.htb"})
+    by_rule = {row.rule: row for row in rows}
+    assert by_rule["flight.htb"].hit is True
+    # the alias name touched in a command also marks the rule its address means
+    assert by_rule["10.0.0.9"].hit is True
 
 
 def test_the_marker_table_covers_every_fallback_phase() -> None:
