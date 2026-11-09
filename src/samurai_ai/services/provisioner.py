@@ -14,6 +14,7 @@ a new decision.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from samurai_ai.domain.environment import EnvironmentProfile, OsFamily
+from samurai_ai.domain.environment import EnvironmentDetector, EnvironmentProfile, OsFamily
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.provision import (
     ProvisionError,
@@ -39,7 +40,7 @@ from samurai_ai.execution.process import (
     ProcessResult,
 )
 from samurai_ai.services.catalog import RecipeCatalog
-from samurai_ai.services.fabric import ToolResolver, platform_key
+from samurai_ai.services.fabric import ProvisionReason, ToolResolver, platform_key
 
 #: package-manager binaries the provisioner may spawn, and nothing else
 _SHELL_SAFE = frozenset({"apt-get", "brew", "python3", "sudo", "cp", "mkdir"})
@@ -58,6 +59,8 @@ class Provisioner:
         tools_dir: Path | None = None,
         templates: Path | None = None,
         runner: Callable[[list[str], float], ProcessResult] | None = None,
+        state_file: Path | None = None,
+        detector: EnvironmentDetector | None = None,
     ) -> None:
         self.operations = operations
         self.kernel = kernel
@@ -66,7 +69,16 @@ class Provisioner:
         self.tools_dir = tools_dir
         self.templates = templates
         self._runner = runner
+        #: the detector is shared so a provision can refresh what it changed
+        self.detector = detector or EnvironmentDetector()
         self.states: dict[str, ProvisionState] = {}
+        #: registries whose native paths this provisioner may invalidate
+        self._registries: list[Any] = []
+        default_state = (
+            self.tools_dir.parent / "provision-state.json" if self.tools_dir else None
+        )
+        self.state_file = state_file or default_state
+        self._load_state()
 
     # --- planning ---------------------------------------------------------
 
@@ -150,6 +162,45 @@ class Provisioner:
 
     # --- state and lock ---------------------------------------------------
 
+    def _load_state(self) -> None:
+        """Persisted per-tool state: the version that landed, not a promise."""
+        if self.state_file is None or not self.state_file.exists():
+            return
+        try:
+            payload = json.loads(self.state_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+        for entry in payload.get("tools", []):
+            try:
+                state = ProvisionState.model_validate(entry)
+            except Exception:  # noqa: BLE001 - a stale entry is not fatal
+                continue
+            # an interrupted install must not look locked forever
+            if state.locked:
+                state.status = ProvisionStatus.FAILED
+                state.error = state.error or "interrupted"
+            self.states[state.tool_id] = state
+
+    def _save_state(self) -> None:
+        if self.state_file is None:
+            return
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "tools": [
+                json.loads(state.model_dump_json())
+                for state in self.states.values()
+                if state.status is not ProvisionStatus.PLANNED
+            ],
+        }
+        self.state_file.write_text(json.dumps(payload, indent=2))
+
+    def needs_decision(self, tool_id: str) -> bool:
+        """A failed attempt is not retried on its own: it needs a new decision."""
+        state = self.states.get(tool_id)
+        return state is not None and state.status is ProvisionStatus.FAILED
+
+
     def state(self, tool_id: str) -> ProvisionState:
         return self.states.setdefault(tool_id, ProvisionState(tool_id=tool_id))
 
@@ -181,11 +232,46 @@ class Provisioner:
         state.recipe_version = plan.recipe_version
         if dry_run:
             return run
+        # an install in flight owns the tool: its result is not known yet
+        already = None if state.locked else self._already_installed(tool_id, profile)
+        if already is not None:
+            # a second provision of a working tool is a no-op, not a reinstall
+            state.status = ProvisionStatus.READY
+            state.installed_version = already
+            state.updated_at = datetime.now(UTC)
+            run.status = ProvisionStatus.READY
+            run.finished_at = datetime.now(UTC)
+            self._event(operation_id, run, "provision.skipped", {"reason": "already installed"})
+            return run
         if not approved:
             state.status = ProvisionStatus.AWAITING_APPROVAL
             raise ProvisionRefusedError("awaiting-approval", "the plan needs an approval")
         self._execute(operation_id, run, state)
         return run
+
+    def _already_installed(self, tool_id: str, profile: EnvironmentProfile) -> str | None:
+        """The version string when the tool already answers its healthcheck."""
+        recipe = self.catalog.get(tool_id)
+        if recipe is None:
+            return None
+        resolver = ToolResolver(profile, project_local_dir=self._scripts_dir())
+        resolution = resolver.resolve(tool_id, recipe)
+        if resolution.reason is not ProvisionReason.INSTALLED:
+            return None
+        if not resolution.path:
+            return None
+        output, healthy = self._healthcheck(
+            ProvisionPlan(
+                tool_id=tool_id,
+                recipe_version=recipe.version,
+                platform=platform_key(profile),
+                arch=profile.arch,
+                package="",
+                manager="",
+                healthcheck=self._healthcheck_command(recipe),
+            )
+        )
+        return output.strip().splitlines()[0][:200] if healthy and output.strip() else None
 
     def _execute(
         self, operation_id: str, run: ProvisionRun, state: ProvisionState
@@ -229,6 +315,11 @@ class Provisioner:
         state.updated_at = datetime.now(UTC)
         run.status = ProvisionStatus.READY
         run.finished_at = datetime.now(UTC)
+        self._save_state()
+        # the machine changed: the cached profile and any memoized binary path
+        # are stale, so the tool is usable without restarting the app
+        self.detector.detect(refresh=True)
+        self.refresh_registry()
         self._event(
             operation_id,
             run,
@@ -252,6 +343,13 @@ class Provisioner:
     ) -> ProcessResult:
         if self._runner is not None:
             return self._runner(list(argv), timeout)
+        # the healthcheck binary is whatever the recipe names: allow it, and only
+        # it, on top of the package managers, so argv stays fail-closed
+        name = Path(argv[0]).name
+        if name not in self.manager.allowed_executables:
+            self.manager.allowed_executables = frozenset(
+                {*self.manager.allowed_executables, name}
+            )
         try:
             return asyncio.run(
                 self.manager.run(list(argv), timeout_seconds=timeout, inherit_env=True)
@@ -280,7 +378,18 @@ class Provisioner:
         run.status = status
         run.error = error
         run.finished_at = datetime.now(UTC)
+        self._save_state()
         self._event(operation_id, run, "provision.failed", {"error": error})
+
+    def refresh_registry(self) -> None:
+        """Drop memoized executable paths so a new binary is seen at once."""
+        from samurai_ai.execution.native import NativeTool
+
+        for registry in self._registries:
+            for tool_id in list(getattr(registry, "_native", {})):
+                adapter = registry._native[tool_id]
+                if isinstance(adapter, NativeTool):
+                    adapter._path = None
 
     def _plan_dict(self, run: ProvisionRun) -> dict[str, object]:
         plan = run.plan

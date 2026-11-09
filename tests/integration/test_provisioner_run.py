@@ -155,6 +155,13 @@ _RESTORE: list[object] = []
 
 
 @pytest.fixture(autouse=True)
+def _no_binaries(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+    """Every test here starts on a machine without the tool; a test may override."""
+    monkeypatch.setattr("samurai_ai.services.fabric.which", lambda name: "")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _restore_which():  # type: ignore[no-untyped-def]
     yield
     import samurai_ai.services.provisioner as module
@@ -183,3 +190,17 @@ def test_the_logs_carry_no_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         for event in provisioner.operations.events
     ]
     assert all("super-secret-token" not in payload for payload in payloads)
+
+
+def test_a_second_provision_of_a_working_tool_is_a_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "samurai_ai.services.fabric.which", lambda name: "/usr/bin/nmap" if name == "nmap" else ""
+    )
+    provisioner, manager = _provisioner(tmp_path, {"nmap": (0, "Nmap version 7.95", "")})
+    run = provisioner.run("op_1", "scan.nmap", _profile())
+    assert run.status is ProvisionStatus.READY
+    # only the healthcheck ran: nothing was installed again
+    assert [call[0].rsplit("/", 1)[-1] for call in manager.calls] == ["nmap"]
+    assert "provision.skipped" in provisioner.operations.event_types()
