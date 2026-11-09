@@ -27,7 +27,7 @@ from samurai_ai.domain.permission import (
     decide,
     parse_mode,
 )
-from samurai_ai.domain.scope_guard import ScopeGuardError, guard
+from samurai_ai.domain.scope_guard import ScopeGuardError, guard, infra_hosts
 from samurai_ai.domain.vault import SecretNotFoundError, SecretScopeError, secret_references
 from samurai_ai.execution.registry import ToolOutput, ToolRegistry, default_registry
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
@@ -102,8 +102,14 @@ class ToolExecutionService:
         approval_id: str | None = None,
         tool_version: int | None = None,
         approval_resolver: Callable[[str], bool] | None = None,
+        on_started: Callable[[str], None] | None = None,
     ) -> ToolResult:
         operation = self.operations.get(operation_id)
+        # resolvers and the platform API are plumbing, not targets: the mode's
+        # infra rides on the contract so adapters and the central guard agree
+        operation = operation.model_copy(
+            update={"scope": operation.scope.with_infra(infra_hosts(str(operation.mode)))}
+        )
         adapter = self.registry.get(tool_id, tool_version)
         definition = adapter.definition
         if definition.risk_class is RiskClass.R4:
@@ -184,10 +190,19 @@ class ToolExecutionService:
         # second line of defence: adapters check their own targets too, but a forgotten
         # check must not become a hole — the guard sees every host-shaped literal. It
         # runs once the run row exists, so a refusal is still visible in the history.
+        guarded = validated
+        relay_prefix = getattr(adapter, "relay", "")
+        if relay_prefix and str(validated.get("command", "")).startswith(relay_prefix):
+            # the relay's own address is the transport, not a target: judge the
+            # command that remains after the prefix
+            guarded = {
+                **validated,
+                "command": str(validated["command"])[len(relay_prefix) :].strip(),
+            }
         try:
             guard(
                 operation.scope,
-                validated,
+                guarded,
                 exempt=tuple(getattr(adapter, "scope_exempt", ())),
             )
         except ScopeGuardError as exc:
@@ -213,6 +228,10 @@ class ToolExecutionService:
                 payload={"run_id": run.id, "tool_id": definition.id},
             ),
         )
+        if on_started is not None:
+            # the caller learns the run id the moment the command exists, so a
+            # long run can be handed back to the operator without waiting it out
+            on_started(run.id)
 
         try:
             resolved["_run_id"] = run.id
