@@ -10,11 +10,12 @@ Nothing here decides anything: it counts statuses the kernel already holds.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
-from samurai_ai.domain.graph import NodeKind
+from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import Finding, FindingStatus
 from samurai_ai.tui.journal import entity_span
 
@@ -84,6 +85,35 @@ def ranked(findings: list[Finding]) -> list[Finding]:
         key=lambda item: (SEVERITY_RANK.get(item.severity.value, 9), item.created_at.timestamp()),
         reverse=False,
     )[:FINDINGS_LIMIT]
+
+
+#: evidence-free priors by hypothesis class, strongest first
+_PRIOR: tuple[tuple[float, tuple[str, ...]], ...] = (
+    (0.85, ("ssti", "rce", "sql", "injec", "инъекц", "forg", "поддел", "auth bypass", "обход")),
+    (0.65, ("upload", "загрузк", "traversal", "idor", "template", "ssrf", "xxe", "deserial")),
+    (0.45, ("default", "дефолт", "weak", "brute", "брут", "spray", "перебор")),
+    (0.25, ("misconfig", "конфиг", "exposure", "утечк", "leak", "debug")),
+)
+
+
+def hypothesis_score(title: str, facts: list[str]) -> float:
+    """Probability that a hypothesis pays off: class prior × evidence so far.
+
+    Every confirmed fact that shares a content word with the title adds weight;
+    the score drives board order and the «most probable first» rule.
+    """
+    lowered = title.lower()
+    prior = next(
+        (score for score, markers in _PRIOR if any(m in lowered for m in markers)),
+        0.15,
+    )
+    words = {w for w in re.findall(r"[a-zа-я0-9]{5,}", lowered)}
+    boost = 0.0
+    for fact in facts:
+        fact_words = set(re.findall(r"[a-zа-я0-9]{5,}", fact.lower()))
+        if words & fact_words:
+            boost += 0.1
+    return min(0.99, prior + min(boost, 0.5))
 
 
 class HuntController:
@@ -190,18 +220,32 @@ class HuntController:
     }
 
     def _hypothesis_rows(self) -> list[tuple[str, str, str]]:
-        """Open and settled hypotheses, live ones first; the graph is the log."""
+        """Open and settled hypotheses, live ones first by expected payoff."""
         if self.operation is None:
             return []
-        intents = [
-            node
-            for node in self.graph.for_operation(self.operation.id)
-            if node.kind is NodeKind.INTENT
+        nodes = list(self.graph.for_operation(self.operation.id))
+        facts = [
+            str(node.payload.get("summary") or node.text())
+            for node in nodes
+            if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
         ]
+        intents = [node for node in nodes if node.kind is NodeKind.INTENT]
+        live = {"running", "open"}
+
+        def order_index(node: Any) -> int:
+            return (
+                self._HYPOTHESIS_ORDER.index(node.state.value)
+                if node.state.value in self._HYPOTHESIS_ORDER
+                else len(self._HYPOTHESIS_ORDER)
+            )
+
         intents.sort(
-            key=lambda node: self._HYPOTHESIS_ORDER.index(node.state.value)
-            if node.state.value in self._HYPOTHESIS_ORDER
-            else len(self._HYPOTHESIS_ORDER)
+            key=lambda node: (
+                0 if node.state.value in live else 1,
+                -hypothesis_score(node.text(), facts)
+                if node.state.value in live
+                else order_index(node),
+            )
         )
         rows: list[tuple[str, str, str]] = []
         for node in intents[:12]:
@@ -212,6 +256,9 @@ class HuntController:
                 or node.payload.get("reason")
                 or ""
             )
+            if node.state.value in live:
+                score = hypothesis_score(node.text(), facts)
+                outcome = outcome or f"~{int(score * 100)}%"
             rows.append((mark, node.text(), outcome))
         if not rows:
             return [("", self.translator.t("hunt.no-hypotheses"), "")]
