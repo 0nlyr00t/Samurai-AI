@@ -1,0 +1,72 @@
+{
+  "id": "fuzz.ffuf",
+  "version": 1,
+  "title": "ffuf path fuzzer (native)",
+  "description": "Native ffuf: same argv frame and JSON parser as the container run, executed on this machine.",
+  "image": "secsi/ffuf@sha256:ee0390afbb0471c18cb6c0407191b424d86dc4ab30c04fb93b3908751a33bc5e",
+  "executable": "ffuf",
+  "risk_class": "r2",
+  "network": "direct",
+  "read_only": true,
+  "capabilities": [
+    "fuzz",
+    "content-discovery"
+  ],
+  "execution": {
+    "native": true,
+    "container": true,
+    "relay_supported": true
+  },
+  "provision": {
+    "packages": {
+      "linux": {
+        "manager": "apt",
+        "package": "ffuf",
+        "sudo": true
+      },
+      "macos": {
+        "manager": "brew",
+        "package": "ffuf",
+        "sudo": false
+      }
+    },
+    "healthcheck": [
+      "-V"
+    ],
+    "requires_sudo": true,
+    "limitations": [
+      "the wordlist rides on stdin; the native path needs the bundled file"
+    ]
+  },
+  "params": {
+    "url": {
+      "type": "string",
+      "description": "URL containing the FUZZ keyword",
+      "required": true,
+      "max_length": 400
+    }
+  },
+  "targets": {
+    "param": "url",
+    "kind": "url-host",
+    "max": 1
+  },
+  "argv": [
+    "-u",
+    "{url}",
+    "-w",
+    "/dev/stdin:FUZZ",
+    "-mc",
+    "200-299,301,302,307,401,403,405,500",
+    "-ac",
+    "-of",
+    "json",
+    "-o",
+    "/dev/stdout"
+  ],
+  "parser": "jsonl",
+  "limits": {
+    "timeout_seconds": 900,
+    "memory_mb": 512
+  }
+}

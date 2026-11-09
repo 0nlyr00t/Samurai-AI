@@ -1,0 +1,73 @@
+{
+  "id": "scan.nmap",
+  "version": 1,
+  "title": "Nmap port scanner (native)",
+  "description": "Native nmap on the operator's own machine: the container image stays the default, native wins where raw sockets or speed matter.",
+  "image": "instrumentisto/nmap:7.95@sha256:9a2c5a6b6fbb0dc0d1b1ff6fbbd06b4a9b5f7e0b7c3f2c0a9f5d1c6b6b8e7a11",
+  "executable": "nmap",
+  "risk_class": "r2",
+  "network": "direct",
+  "read_only": true,
+  "capabilities": [
+    "ports",
+    "service-detect"
+  ],
+  "execution": {
+    "native": true,
+    "container": true,
+    "relay_supported": true
+  },
+  "provision": {
+    "packages": {
+      "linux": {
+        "manager": "apt",
+        "package": "nmap",
+        "sudo": true
+      },
+      "macos": {
+        "manager": "brew",
+        "package": "nmap",
+        "sudo": false
+      }
+    },
+    "healthcheck": [
+      "-V"
+    ],
+    "requires_sudo": true
+  },
+  "params": {
+    "targets": {
+      "type": "array",
+      "description": "Hosts or CIDR blocks",
+      "required": true,
+      "max_items": 10,
+      "items_enum": []
+    },
+    "ports": {
+      "type": "string",
+      "description": "Port list or range",
+      "pattern": "^[0-9,-]{1,40}$",
+      "default": "1-1000"
+    }
+  },
+  "targets": {
+    "param": "targets",
+    "kind": "host",
+    "max": 10
+  },
+  "argv": [
+    "-sT",
+    "-Pn",
+    "-n",
+    "--max-rate",
+    "300",
+    "-p",
+    "{ports}",
+    "{targets}"
+  ],
+  "parser": "xml-ports",
+  "limits": {
+    "timeout_seconds": 600,
+    "memory_mb": 512
+  }
+}

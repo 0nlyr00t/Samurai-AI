@@ -1,0 +1,98 @@
+{
+  "id": "scan.nuclei",
+  "version": 1,
+  "title": "nuclei template scanner (native)",
+  "description": "Native nuclei with the same JSONL parser as the sandboxed run; template updates stay off.",
+  "image": "projectdiscovery/nuclei@sha256:582d5546902e67052097cb2d07296c642d50a1afc5e44623cb038845df9a32eb",
+  "executable": "nuclei",
+  "risk_class": "r2",
+  "network": "direct",
+  "read_only": true,
+  "capabilities": [
+    "scan",
+    "vulnerability-scan"
+  ],
+  "execution": {
+    "native": true,
+    "container": true,
+    "relay_supported": true
+  },
+  "provision": {
+    "packages": {
+      "linux": {
+        "manager": "apt",
+        "package": "nuclei",
+        "sudo": true
+      },
+      "macos": {
+        "manager": "brew",
+        "package": "nuclei",
+        "sudo": false
+      }
+    },
+    "healthcheck": [
+      "-version"
+    ],
+    "requires_sudo": true,
+    "limitations": [
+      "needs its template tree: brew and apt ship one, a bare binary does not"
+    ]
+  },
+  "params": {
+    "targets": {
+      "type": "array",
+      "description": "In-scope hosts or URLs",
+      "required": true,
+      "max_items": 10
+    },
+    "severity": {
+      "type": "array",
+      "description": "Severities to run",
+      "items_enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "required": false,
+      "default": [
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "template_set": {
+      "type": "string",
+      "description": "Template tag",
+      "enum": [
+        "cves",
+        "exposures",
+        "misconfiguration"
+      ],
+      "required": false,
+      "default": "cves"
+    }
+  },
+  "targets": {
+    "param": "targets",
+    "kind": "url-host",
+    "max": 10
+  },
+  "argv": [
+    "-target",
+    "{targets}",
+    "-severity",
+    "{severity}",
+    "-tags",
+    "{template_set}",
+    "-update-templates=false",
+    "-no-color",
+    "-jsonl"
+  ],
+  "parser": "jsonl",
+  "limits": {
+    "timeout_seconds": 600,
+    "memory_mb": 768
+  }
+}
