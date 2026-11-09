@@ -378,13 +378,16 @@ def _minimal_stack(tmp_path: Path, provider_factory=None, trust_cwd: bool = True
         custom_models=custom_models,
     )
     playbooks = PlaybookService(service, kernel, PlaybookRepository(database))
+    ctf = CtfService(service, kernel, CtfRepository(database))
     return (
         service, kernel, settings, recovery, execution, vault,
         AgentRunRepository(database),
-        AgentOrchestrator(models, kernel, execution, service, AgentRunRepository(database)),
+        AgentOrchestrator(
+            models, kernel, execution, service, AgentRunRepository(database), ctf=ctf
+        ),
         playbooks,
         ReportService(service, kernel, playbooks, ReportRepository(database)),
-        CtfService(service, kernel, CtfRepository(database)),
+        ctf,
         RedTeamService(service, kernel, RedTeamRepository(database)),
         PlanningService(service, kernel, PlanningRepository(database)),
         SwarmRunRepository(database),
@@ -1195,7 +1198,8 @@ def test_ops_strip_shows_agents_todo_and_ctx_tokens(tmp_path: Path) -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
             status_bar = str(app.query_one("#status-bar", Static).render())
-            assert "ctx 5 tok" in status_bar  # 3 prompt + 2 completion
+            assert "Σ 5 tok" in status_bar  # 3 prompt + 2 completion
+            assert "⇈0k ⇊0k" in status_bar  # session totals ride next to it
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -1220,6 +1224,15 @@ class _ToolCallingProvider:
 
         self.calls += 1
         self.requests.append(request)
+        if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+            # the goal judge asks for one word; answer it without eating the script
+            return ChatResponse(
+                text="stop",
+                usage=Usage(prompt_tokens=1, completion_tokens=1),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=1,
+            )
         if self.calls == 1:
             return ChatResponse(
                 text="",
@@ -1277,7 +1290,7 @@ def test_chat_tool_loop_executes_shell_command(tmp_path: Path) -> None:
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 # round 1: tool call, round 2: final text answer
-                assert provider.calls == 2
+                assert provider.calls == 3  # +1: the goal judge vets a worked turn's completion
                 text = "\n".join(_message_text(m) for m in messages)
                 # output is folded under an arrow; the header names tool and command
                 blocks = _tool_blocks_text(journal)
@@ -1358,7 +1371,7 @@ def test_chat_tool_call_denied_by_operator(tmp_path: Path) -> None:
                 await pilot.pause()
                 # no governed run happened, the denial went back to the model
                 assert stack[4].list_runs(operation.id) == []
-                assert provider.calls == 2
+                assert provider.calls == 3  # +1: the goal judge vets a worked turn's completion
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "denied by operator" in text
             await pilot.press("ctrl+c")
@@ -1482,9 +1495,10 @@ def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
                 await pilot.press("enter")
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                # 4 tool rounds + 1 closing call without tools: the operator
+                # 4 tool rounds × 6 stretches + 6 settles (settle now runs even
+                # with an empty graph) + 5 judges + 1 closing: the operator
                 # always gets a final answer instead of silence
-                assert provider.calls == 4 * 6 + 5 + 1  # rounds, stretches, judges, closing
+                assert provider.calls == 4 * 6 + 6 + 5 + 1
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "final summary after the loop" in text
             await pilot.press("ctrl+c")
@@ -1659,6 +1673,15 @@ class _SequenceToolProvider:
 
         self.calls += 1
         self.requests.append(request)
+        if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+            # the goal judge asks for one word; answer it without eating the queue
+            return ChatResponse(
+                text="stop",
+                usage=Usage(prompt_tokens=1, completion_tokens=1),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=1,
+            )
         usage = Usage(prompt_tokens=3, completion_tokens=2)
         if self._owed or not self.commands:
             self._owed = False
@@ -1742,7 +1765,7 @@ def test_chat_ask_mode_reuses_an_approval_for_the_same_tool(tmp_path: Path) -> N
             await pilot.pause()
             assert not isinstance(app.screen, AccessPromptScreen)
             assert len(stack[4].list_runs(operation.id)) == 2
-            assert provider.calls == 4
+            assert provider.calls == 6  # +1: the goal judge vets a worked turn's completion
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -1806,6 +1829,23 @@ def test_restart_restores_the_transcript(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
 
     asyncio.run(restart())
+
+
+def test_a_bare_start_opens_no_operation(tmp_path: Path) -> None:
+    """Loading `latest()` resurrected every tab the operator had just closed."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[0].create("Old one", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",)))
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert app.operation is None
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
 
 
 def test_clear_wipes_the_transcript_here_and_in_the_database(tmp_path: Path) -> None:
@@ -1941,7 +1981,7 @@ def test_plan_mode_blocks_state_changing_calls(tmp_path: Path) -> None:
             await pilot.pause()
             # shell.exec changes state, so it is refused in plan mode
             assert stack[4].list_runs(operation.id) == []
-            assert provider.calls == 2
+            assert provider.calls == 3  # +1: the goal judge vets a worked turn's completion
             text = _message_text(provider.requests[1])
             assert "plan mode allows read-only" in text
             await pilot.press("ctrl+c")
@@ -3067,6 +3107,31 @@ def test_agent_spawn_tool_starts_a_child(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_agent_spawn_accepts_the_strategist_specialization(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="agent_spawn",
+                    arguments={"instruction": "map vectors", "specialization": "strategist"},
+                )
+            )
+            assert "started in the background" in message.content
+            runs = app.child_runs()
+            assert len(runs) == 1
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_subagent_hands_its_notes_back_to_the_chat(tmp_path: Path) -> None:
 
     stack, _provider, operation = _session_stack(tmp_path)
@@ -3487,8 +3552,140 @@ def test_exhausted_rounds_settle_the_graph_before_the_summary(tmp_path: Path) ->
             await app._settle(operation.id, "gpt/test-model@v1", None)
             app._request_chat_completion = original  # type: ignore[method-assign]
 
-            assert seen == [("record_fact", "close_intent", "propose_finding")]
+            assert seen == [("record_fact", "close_intent", "propose_finding", "memory_learn")]
             assert app.graph.get(intent.id).state.value == "open"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_settle_persists_state_even_when_the_graph_stayed_empty(tmp_path: Path) -> None:
+    """The turn that never opened the graph is exactly the one that must settle."""
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert not app._graph_used
+            seen: list[tuple[str, ...]] = []
+
+            async def fake_request(operation_id, model_id, reasoning, tools):  # type: ignore[no-untyped-def]
+                seen.append(tuple(spec.name for spec in tools))
+                return None
+
+            original = app._request_chat_completion
+            app._request_chat_completion = fake_request  # type: ignore[method-assign]
+            await app._settle(operation.id, "gpt/test-model@v1", None)
+            app._request_chat_completion = original  # type: ignore[method-assign]
+
+            assert seen == [("record_fact", "close_intent", "propose_finding", "memory_learn")]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_the_doctrine_rides_in_the_system_prompt_with_an_operation(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Doctrine lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            prompt = app._chat_system_prompt()
+            assert "register and log in" in prompt
+            assert "open_intent" in prompt
+            app.operation = None
+            assert "register and log in" not in app._chat_system_prompt()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_bare_shell_streak_nudges_toward_structure_once_a_turn(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Nudge lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            for _ in range(app._STRUCTURE_NUDGE_AT - 1):
+                app._note_unstructured_shell()
+            assert "nothing recorded" not in journal.text()
+            app._note_unstructured_shell()
+            text = journal.text()
+            assert "nothing recorded" in text
+            assert any("record_fact" in note for note in app._steer_queue)
+            # once per turn: more bare shells do not repeat the nudge
+            for _ in range(5):
+                app._note_unstructured_shell()
+            assert journal.text().count("nothing recorded") == 1
+            # a recorded fact re-arms the counter for the next streak
+            app._note_structure_written()
+            assert app._unstructured_shells == 0
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_local_drift_guard_fires_outside_the_workspace(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Drift lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            app._note_local_drift("cd /tmp && ls")
+            app._note_local_drift(f"cat {Path.cwd()}/README.md")
+            app._note_local_drift("cat /etc/hosts")
+            assert "not the target" not in journal.text()
+            app._note_local_drift("cd /Users/desh/Temp && ls")
+            app._note_local_drift("cat /Users/desh/Temp/operation-state.json")
+            text = journal.text()
+            assert "not the target" in text
+            assert any("in-scope work" in note for note in app._steer_queue)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_local_drift_guard_stays_silent_under_a_relay(tmp_path: Path) -> None:
+    """With a relay the paths belong to the far side, not to this host."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Relay drift lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.operation = app.service.set_relay(operation.id, "prlctl exec '{uuid}'")
+            for _ in range(5):
+                app._note_local_drift("cat /root/flag.txt")
+            journal = app.query_one("#journal", BlockJournal)
+            assert "not the target" not in journal.text()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -4895,6 +5092,15 @@ class _ToolCallChatProvider(_ChatProvider):
         from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
 
         self.calls += 1
+        if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+            # the goal judge asks for one word; answer it without joining the script
+            return ChatResponse(
+                text="stop",
+                usage=Usage(prompt_tokens=1, completion_tokens=1),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=1,
+            )
         if self.calls == 1:
             return ChatResponse(
                 text="",
@@ -4941,7 +5147,7 @@ def test_a_deny_rule_blocks_a_chat_tool_call(tmp_path: Path) -> None:
                 # no prompt at all; the refusal goes back to the model instead
                 assert not isinstance(app.screen, AccessPromptScreen)
                 assert any("denied" in m.plain for m in messages if isinstance(m, Text))
-                assert provider.calls == 2
+                assert provider.calls == 3  # +1: the goal judge vets a worked turn's completion
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -5270,11 +5476,25 @@ def test_a_click_on_the_journal_opens_the_folded_block(tmp_path: Path) -> None:
             app.query_one("#command-input", Input).value = "проверь вход"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
-            await pilot.pause()
+            # a loaded box folds late: wait for the fold instead of asserting on it
+            for _ in range(100):
+                if app._collapsed:
+                    break
+                await pilot.pause()
             before = len(app._collapsed)
             assert before
             oldest = app._collapsed[0]
-            await pilot.click(oldest.query_one(ToolHeader))
+            header = oldest.query_one(ToolHeader)
+            # a loaded box lays out late: clicking a zero-size header is a miss
+            for _ in range(100):
+                if header.region.width > 0:
+                    break
+                await pilot.pause()
+            # a coordinate click races late journal writes (the header moves a
+            # row); address the widget itself instead of its screen position
+            from textual import events
+
+            header.on_click(events.Click(header, 1, 0, 0, 0, 1, False, False, False))
             await pilot.pause()
             # one click opens that block, the rest stay folded
             assert oldest.expanded
@@ -5374,9 +5594,12 @@ def test_ctrl_shift_c_copies_and_says_so(tmp_path: Path) -> None:
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
+            await pilot.pause()
             await pilot.mouse_down(offset=(2, 1), widget=journal)
             await pilot.hover(journal, offset=(30, 4))
+            await pilot.pause()  # a drag under load needs the settle frame
             await pilot.mouse_up(offset=(30, 4), widget=journal)
+            await pilot.pause()
             await pilot.pause()
             with patch.object(app, "copy_to_clipboard", side_effect=copied.append):
                 app.action_copy_selection()
@@ -5995,6 +6218,61 @@ def test_the_stage_rail_follows_the_plan_and_names_the_mode_counter(tmp_path: Pa
     asyncio.run(exercise())
 
 
+def test_the_rail_shows_the_current_stage_exit_hint(tmp_path: Path) -> None:
+    """The current phase carries what must be proven to leave it."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hint lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            text = str(app.query_one("#killchain", Static).render())
+            assert "recon" in text and "map the surface" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_stalled_stage_gets_a_replan_nudge(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Stall lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._turn_started = time.monotonic()
+            goal = app.goals.create(operation.id, "get the flag")
+            goal.spent_steps = 1
+            app.goals.goals.save(goal, goal.version, OperationEvent(
+                operation_id=operation.id, event_type="goal.step", payload={},
+            ))
+            app._refresh_killchain()
+            # ten minutes pass and twenty steps burn without the stage moving
+            app._stage_since = time.monotonic() - 700
+            for _ in range(25):
+                app.goals.record_step(goal.id)
+            app._watch_stage_stall()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "has not moved" in journal
+            assert any("re-plan" in note or "перепланир" in note for note in app._steer_queue)
+            # once per stall: a second tick stays quiet until the stage moves
+            app._watch_stage_stall()
+            assert app.query_one("#journal", BlockJournal).text().count("has not moved") == 1
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_a_plain_operation_without_gates_falls_back_to_its_mode_chain(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
@@ -6384,8 +6662,8 @@ def test_operations_live_in_a_strip_and_switch_without_losing_state(tmp_path: Pa
     asyncio.run(exercise())
 
 
-def test_closing_a_tab_leaves_the_operation_alive(tmp_path: Path) -> None:
-    """Ctrl+W closes the tab; the operation stays in the store."""
+def test_closing_the_last_tab_deletes_the_operation(tmp_path: Path) -> None:
+    """Ctrl+W closes the tab and deletes the operation: restart stays empty."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     operation = stack[0].create(
@@ -6401,7 +6679,14 @@ def test_closing_a_tab_leaves_the_operation_alive(tmp_path: Path) -> None:
             app._close_operation()
             await pilot.pause()
             assert app.operation is None
-            assert stack[0].get(operation.id).name == "Closable"
+            assert stack[0].repository.get(operation.id) is None
+            # its events go with it, and the log is still append-only afterwards
+            with stack[0].repository.database.connect() as connection:
+                left = connection.execute(
+                    "SELECT COUNT(*) FROM operation_events WHERE operation_id = ?",
+                    (operation.id,),
+                ).fetchone()[0]
+            assert left == 0
 
     asyncio.run(exercise())
 
@@ -6438,6 +6723,50 @@ def test_a_busy_tab_carries_a_work_badge(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_a_real_right_click_on_a_tab_opens_its_menu(tmp_path: Path) -> None:
+    """Not a synthetic on_click call: App.on_event's own down/up → Click path."""
+    from textual.events import MouseDown, MouseUp
+    from textual.pilot import _get_mouse_message_arguments
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    first = stack[0].create(
+        "Left", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.a.example.com",))
+    )
+    second = stack[0].create(
+        "Right", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.b.example.com",))
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens.tab_menu import TabMenuScreen
+
+        app = SamuraiApp(*stack, first.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._open_tabs = [first.id, second.id]
+            app._refresh_operations_strip()
+            await pilot.pause()
+            strip = app.query_one("#operations-strip", Horizontal)
+            tab = next(
+                child for child in strip.children if child.operation_id == second.id
+            )
+            args = _get_mouse_message_arguments(tab, (1, 0), button=3)
+            await app.on_event(MouseDown(**args))
+            await app.on_event(MouseUp(**args))
+            await pilot.pause()
+            await pilot.pause()
+            assert isinstance(app.screen, TabMenuScreen)
+            listed = app.screen.query_one("#tabmenu-list", OptionList)
+            labels = [str(option.prompt) for option in listed.options]
+            assert any("Rename" in label for label in labels)
+            assert any("Close" in label for label in labels)
+            await pilot.press("escape")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_right_click_on_a_tab_closes_it(tmp_path: Path) -> None:
     """Right-click on the strip closes that tab; the operation stays."""
     stack = _minimal_stack(tmp_path)
@@ -6469,7 +6798,69 @@ def test_right_click_on_a_tab_closes_it(tmp_path: Path) -> None:
             await pilot.press("enter")
             await pilot.pause()
             assert second.id not in app._open_tabs
-            assert stack[0].get(second.id).name == "Right"
+            # closing deletes: the right-clicked operation is gone from the store
+            assert stack[0].repository.get(second.id) is None
+
+    asyncio.run(exercise())
+
+
+def test_ctrl_w_and_slash_close_close_the_current_tab(tmp_path: Path) -> None:
+    """The op_close binding finally has its handler; /close is the typed twin."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    first = stack[0].create(
+        "Left", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.a.example.com",))
+    )
+    second = stack[0].create(
+        "Right", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.b.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, first.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._open_tabs = [first.id, second.id]
+            app._open_operation(second.id)
+            await pilot.pause()
+            await pilot.press("ctrl+w")
+            await pilot.pause()
+            assert app._open_tabs == [first.id]
+            assert app.operation is not None and app.operation.id == first.id
+            app._handle_command("/close")
+            await pilot.pause()
+            assert app._open_tabs == []
+            assert app.operation is None
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_the_goal_strip_uses_the_window_width(tmp_path: Path) -> None:
+    """A long goal fills the strip to the window width instead of 60 chars."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Goal strip lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    goal = "На VM 10.211.55.27 (user:user) поднят VPN до машины HTB, " * 4
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(160, 30)) as pilot:
+            await pilot.pause()
+            app.service.set_goal(operation.id, goal)
+            app.operation = app.service.get(operation.id)
+            app._refresh_ops_strip()
+            await pilot.pause()
+            text = str(app.query_one("#strip-goal", Static).render())
+            # 160-wide window: far past the old 60-char cut, and still bounded
+            assert len(text.strip()) > 62
+            assert len(text.strip()) <= 102
+            assert text.endswith("…")
+            assert app.query_one("#strip-goal", Static).tooltip == goal.strip()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
 
@@ -6679,7 +7070,7 @@ def test_the_approval_prompt_offers_a_batch_approve(tmp_path: Path) -> None:
 
 
 def test_the_status_bar_shows_a_context_gauge(tmp_path: Path) -> None:
-    """ctx N tok alone is a number; Nk/Mk is a gauge."""
+    """The gauge fills with the context and the totals ride beside it."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     stack[2].set_value("model.default", "openai/gpt-4o@v1")
@@ -6689,10 +7080,306 @@ def test_the_status_bar_shows_a_context_gauge(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             app._ctx_tokens = 50_000
+            app._sent_tokens = 32_000
+            app._recv_tokens = 18_000
             app._refresh_chrome()
             await pilot.pause()
             bar = str(app.query_one("#status-bar", Static).render())
             assert "50k/128k" in bar
+            assert "▓" in bar and "░" in bar  # the gauge is drawn
+            assert "⇈32k ⇊18k" in bar
+
+    asyncio.run(exercise())
+
+
+def test_the_gauge_reads_the_window_instead_of_summing_it(tmp_path: Path) -> None:
+    """Prompt tokens already carry the history: adding them per call lied.
+
+    The live session showed 714k on a window whose real peak was 10k — every
+    turn counted the whole transcript again.
+    """
+    from samurai_ai.agents.provider import Usage
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "openai/gpt-4o@v1")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._count_usage(Usage(prompt_tokens=9_000, completion_tokens=400))
+            app._count_usage(Usage(prompt_tokens=9_300, completion_tokens=200))
+            # occupancy is the last call, not 18_300
+            assert app._ctx_tokens == 9_500
+            # spend keeps accumulating
+            assert app._sent_tokens == 18_300
+            app._refresh_chrome()
+            await pilot.pause()
+            assert "9k/128k" in str(app.query_one("#status-bar", Static).render())
+
+    asyncio.run(exercise())
+
+
+def test_clearing_the_chat_empties_the_gauge(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Clear lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._ctx_tokens = 40_000
+            app._clear_chat()
+            await pilot.pause()
+            assert app._ctx_tokens == 0
+
+    asyncio.run(exercise())
+
+
+def test_a_slow_command_goes_to_the_background_instead_of_holding_the_turn(
+    tmp_path: Path,
+) -> None:
+    """A ten-minute sweep used to freeze the whole turn behind one await."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Slow lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.0/24",))
+    )
+    execution = stack[4]
+    real_run = execution.run_tool
+
+    def slow_run(operation_id: str, tool_id: str, params, **kwargs):
+        time.sleep(0.6)
+        return real_run(operation_id, tool_id, params, **kwargs)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        app._FOREGROUND_WINDOW = 0.1
+        execution.run_tool = slow_run  # type: ignore[method-assign]
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_shell_tool(
+                ToolCall(id="c1", name="shell_exec", arguments={"command": "echo slow"})
+            )
+            assert "background" in message.content
+            assert app._running_tools == 1
+            # the run finishes off-turn and lands in the drain queue
+            for _ in range(60):
+                await pilot.pause()
+                if app._background_results:
+                    break
+            assert app._background_results
+            assert "(background)" in app._background_results[0].content
+            app._drain_background()
+            assert any("(background)" in str(m.content) for m in app._chat_history)
+
+    asyncio.run(exercise())
+
+
+def test_shell_calls_of_one_round_run_together(tmp_path: Path) -> None:
+    """Sequential awaits made four commands cost four commands' time."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Round lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.0/24",))
+    )
+    execution = stack[4]
+    real_run = execution.run_tool
+    calls_seen: list[str] = []
+    overlap = {"now": 0, "peak": 0}
+    guard = threading.Lock()
+
+    def slow_run(operation_id: str, tool_id: str, params, **kwargs):
+        calls_seen.append(str(params.get("command")))
+        with guard:
+            overlap["now"] += 1
+            overlap["peak"] = max(overlap["peak"], overlap["now"])
+        try:
+            time.sleep(0.4)
+            return real_run(operation_id, tool_id, params, **kwargs)
+        finally:
+            with guard:
+                overlap["now"] -= 1
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        app._FOREGROUND_WINDOW = 5.0
+        execution.run_tool = slow_run  # type: ignore[method-assign]
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            calls = [
+                ToolCall(id=f"c{i}", name="shell_exec", arguments={"command": f"echo {i}"})
+                for i in range(4)
+            ]
+            messages = await app._run_round(calls)
+            # all four were in flight at once: the serial path peaked at 1
+            assert overlap["peak"] == 4
+            # each command may be seen twice: the approval dance re-runs it
+            assert sorted(set(calls_seen)) == [f"echo {i}" for i in range(4)]
+            # results keep the call order even though they finish together
+            assert [m.content.split("\n")[1] for m in messages] == [
+                "stdout:",
+            ] * 4
+            assert ["hello" not in m.content for m in messages]
+            assert app._running_tools == 0
+
+    asyncio.run(exercise())
+
+
+def test_a_round_asks_for_all_its_commands_on_one_screen(tmp_path: Path) -> None:
+    """Four modals in a row was the cost of a four-command round."""
+    from samurai_ai.tui.screens import AccessPromptScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "0")  # ask mode
+    operation = stack[0].create(
+        "Ask round lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.0/24",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            calls = [
+                ToolCall(id=f"c{i}", name="shell_exec", arguments={"command": f"echo {i}"})
+                for i in range(3)
+            ]
+            worker = app.run_worker(app._run_round(calls), exclusive=False)
+            for _ in range(80):
+                await pilot.pause()
+                if isinstance(app.screen, AccessPromptScreen):
+                    break
+            assert isinstance(app.screen, AccessPromptScreen)
+            hint = app.screen.query_one("#access-batch", Static)
+            assert "3" in str(hint.render())
+            await pilot.press("a")  # one key approves the batch
+            messages = await worker.wait()
+            assert len(messages) == 3
+            assert all("exit=0" in message.content for message in messages)
+            # a single screen served the whole round: nothing is left asking
+            assert not isinstance(app.screen, AccessPromptScreen)
+
+    asyncio.run(exercise())
+
+
+def test_a_scope_refusal_offers_the_resource_and_retries(tmp_path: Path) -> None:
+    """A refusal is information: Enter turns it into a rule and runs the command."""
+    from samurai_ai.tui.screens.scope_ask import ScopeAskScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Ask lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            worker = app.run_worker(
+                app._run_shell_tool(
+                    ToolCall(
+                        id="c1",
+                        name="shell_exec",
+                        arguments={"command": "curl -s http://out.example.org/"},
+                    )
+                ),
+                exclusive=False,
+            )
+            for _ in range(60):
+                await pilot.pause()
+                if isinstance(app.screen, ScopeAskScreen):
+                    break
+            # a literal that looks like a host but is not a file tripwire
+            assert isinstance(app.screen, ScopeAskScreen), app.screen
+            assert "example.org" in str(
+                app.screen.query_one("#scope-ask-rule", Static).render()
+            )
+            await pilot.press("enter")  # add + retry
+            message = await worker.wait()
+            scope = app.service.get(operation.id).scope
+            assert "out.example.org" in scope.includes
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "[scope]" in journal  # the boundary reads as information
+            assert "error" not in message.content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_scope_refusal_can_be_skipped(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Skip lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            worker = app.run_worker(
+                app._run_shell_tool(
+                    ToolCall(id="c1", name="shell_exec", arguments={"command": "curl https://out.example.org/"})
+                ),
+                exclusive=False,
+            )
+            for _ in range(60):
+                await pilot.pause()
+                if app.screen.__class__.__name__ == "ScopeAskScreen":
+                    break
+            await pilot.press("s")
+            message = await worker.wait()
+            assert "skipped" in message.content
+            assert "out.example.org" not in app.service.get(operation.id).scope.includes
+
+    asyncio.run(exercise())
+
+
+def test_the_scope_tab_excludes_and_restores_by_click(tmp_path: Path) -> None:
+    """Click on the Scope tab moves a rule out of play, a second click brings it back."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Tab lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com", "10.0.0.0/24")),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._switch_view("view-scope")
+            await pilot.pause()
+            listed = app.query_one("#view-scope", OptionList)
+            labels = [str(option.prompt) for option in listed.options]
+            assert any("10.0.0.0/24" in label for label in labels)
+            index = next(i for i, label in enumerate(labels) if "10.0.0.0/24" in label)
+            listed.highlighted = index
+            await pilot.press("enter")
+            await pilot.pause()
+            scope = app.service.get(operation.id).scope
+            assert "10.0.0.0/24" in scope.excludes
+            listed = app.query_one("#view-scope", OptionList)
+            labels = [str(option.prompt) for option in listed.options]
+            assert any(label.startswith("+") for label in labels)  # marked excluded
+            listed.highlighted = next(
+                i for i, label in enumerate(labels) if "10.0.0.0/24" in label
+            )
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "10.0.0.0/24" not in app.service.get(operation.id).scope.excludes
 
     asyncio.run(exercise())
 
@@ -6702,7 +7389,8 @@ def test_the_attack_map_shows_once_two_hosts_have_access(tmp_path: Path) -> None
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     operation = stack[0].create(
-        "Map lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+        "Map lab", OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("10.0.0.0/24",)),
     )
 
     async def exercise() -> None:
@@ -6975,6 +7663,349 @@ def test_the_bounty_tab_calls_the_scope_scope(tmp_path: Path) -> None:
         asyncio.run(exercise())
 
 
+def test_task_targets_land_in_the_scope_without_a_popup(tmp_path: Path) -> None:
+    """Цели из текста задачи — в скоупе сразу, с журнальной строкой, без окна."""
+    from samurai_ai.tui.screens import PickerScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Scope offer lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await app._maybe_offer_scope("HTB Takeoff на 10.129.138.4 и takeoff.htb")
+            await pilot.pause()
+            assert not isinstance(app.screen, PickerScreen)
+            scope = app.service.get(operation.id).scope
+            assert "10.129.138.4" in scope.includes
+            assert "takeoff.htb" in scope.includes
+            text = app.query_one("#journal", BlockJournal).text()
+            assert "added" in text
+            # once per operation, and covered targets never repeat
+            await app._maybe_offer_scope("снова про 10.129.138.4 и takeoff.htb")
+            scope = app.service.get(operation.id).scope
+            assert list(scope.includes).count("10.129.138.4") == 1
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_many_targets_with_one_parent_fold_into_a_wildcard(tmp_path: Path) -> None:
+    """subfinder-scale recon becomes one wildcard rule, not 200 includes."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Wildcard lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("10.0.0.5",))
+    )
+    text = "нашёл a.example.com, b.example.com, c.example.com и d.example.com"
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await app._maybe_offer_scope(text)
+            await pilot.pause()
+            scope = app.service.get(operation.id).scope
+            assert "*.example.com" in scope.includes
+            assert "a.example.com" not in scope.includes
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_check_scope_tool_answers_membership(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Check lab", OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("10.0.0.0/24",), excludes=("10.0.0.1",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            in_scope = await app._run_chat_tool(
+                ToolCall(id="1", name="check_scope", arguments={"target": "10.0.0.9"})
+            )
+            assert "allowed" in in_scope.content
+            excluded = await app._run_chat_tool(
+                ToolCall(id="2", name="check_scope", arguments={"target": "10.0.0.1"})
+            )
+            assert "excluded" in excluded.content
+            outside = await app._run_chat_tool(
+                ToolCall(id="3", name="check_scope", arguments={"target": "example.com"})
+            )
+            assert "out-of-scope" in outside.content
+            network = await app._run_chat_tool(
+                ToolCall(id="4", name="check_scope", arguments={"target": "10.0.0.0/25"})
+            )
+            assert "allowed" in network.content
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_present_tense_announcement_is_also_a_promise(tmp_path: Path) -> None:
+    """«Читаю остальное: …» держало ход 80 минут — теперь это пинок, не финал."""
+    from samurai_ai.tui.chat import _PROMISE_RE
+
+    assert _PROMISE_RE.search("Читаю остальное: `cmds`, `ffuf.txt`")
+    assert _PROMISE_RE.search("Смотрю конфиг дальше")
+    assert _PROMISE_RE.search("Reading the rest of the log")
+    assert not _PROMISE_RE.search("Флаг найден: HTB{…}, цепочка закрыта")
+    assert not _PROMISE_RE.search("Готово: отчёт лежит в артефактах")
+
+
+def test_a_worked_turn_is_judged_before_it_may_complete(tmp_path: Path) -> None:
+    """A turn with tool calls and a goal ends only when the judge agrees."""
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _JudgeAwareProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.judge_calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            usage = Usage(prompt_tokens=3, completion_tokens=2)
+            if not request.tools:
+                self.judge_calls += 1
+                # first judge mumbles (an unclear verdict must not sign off a
+                # worked turn either); second agrees
+                verdict = "hmm, unclear" if self.judge_calls == 1 else "stop"
+                return ChatResponse(
+                    text=verdict, usage=usage, model_id=request.model_id,
+                    provider_id="gpt", latency_ms=1,
+                )
+            if self.calls in (1, 4):
+                return ChatResponse(
+                    text="",
+                    tool_calls=(
+                        ToolCall(id=f"c{self.calls}", name="shell_exec",
+                                 arguments={"command": "true"}),
+                    ),
+                    usage=usage, model_id=request.model_id, provider_id="gpt",
+                    latency_ms=1,
+                )
+            return ChatResponse(
+                text="done", usage=usage, model_id=request.model_id,
+                provider_id="gpt", latency_ms=1,
+            )
+
+    provider = _JudgeAwareProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/test-model")
+    stack[2].set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Judge lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.service.set_goal(operation.id, "get both flags")
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "work the box"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            # two tool bursts: the first «done» was refused by the judge
+            assert len(stack[4].list_runs(operation.id)) == 2
+            assert provider.judge_calls == 2
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "not met" in journal
+            assert "condition holds" in journal
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_scope_add_and_rm_edit_the_contract_from_the_chat(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Edit lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._handle_command("/scope add 10.0.0.9 10.0.0.10")
+            await pilot.pause()
+            scope = app.service.get(operation.id).scope
+            assert "10.0.0.9" in scope.includes and "10.0.0.10" in scope.includes
+            app._handle_command("/scope rm 10.0.0.9")
+            await pilot.pause()
+            scope = app.service.get(operation.id).scope
+            assert "10.0.0.9" not in scope.includes and "10.0.0.10" in scope.includes
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_fresh_operation_takes_the_task_targets_into_scope(tmp_path: Path) -> None:
+    """No picker when the message itself spawned the operation."""
+    from samurai_ai.tui.screens import PickerScreen
+
+    provider = _ChatProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/test-model")
+    stack[2].set_value("model.default", "gpt/test-model@v1")
+    # note: no operation exists; the first message creates it
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "HTB Takeoff на 10.129.138.134, флаги user и root"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not isinstance(app.screen, PickerScreen)
+            assert app.operation is not None
+            scope = app.service.get(app.operation.id).scope
+            assert "10.129.138.134" in scope.includes
+            text = app.query_one("#journal", BlockJournal).text()
+            assert "added" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_add_scope_extends_the_contract_and_journals_it(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ToolCall
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Ask lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_chat_tool(
+                ToolCall(id="1", name="add_scope",
+                         arguments={"targets": ["10.0.0.9", "10.0.0.5"]})
+            )
+            assert "added" in message.content
+            scope = app.service.get(operation.id).scope
+            assert "10.0.0.9" in scope.includes
+            assert list(scope.includes).count("10.0.0.5") == 1  # no duplicate
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "added" in journal
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_the_adopted_goal_shows_in_the_strip(tmp_path: Path) -> None:
+    """The adoption writes both goals: the condition and the strip's counter."""
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._adopt_goal("take both flags on the box")
+            assert app.service.get(operation.id).goal == "take both flags on the box"
+            current = app._current_goal()
+            assert current is not None and current.objective == "take both flags on the box"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_captured_flag_shows_in_the_loot_block(tmp_path: Path) -> None:
+    """In CTF the flag itself is the loot — it belongs on the board."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Flag lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    stack[10].init_ctf(operation.id, "Takeoff", "misc")  # type: ignore[arg-type]
+    stack[10].record_flag(
+        operation.id, "user", "HTB{us3r_fl4g}"
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            creds = str(app.query_one("#side-creds", Static).render())
+            assert "HTB{us3r_fl4g}" in creds
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_confirmed_fact_spawns_the_strategist_once_per_turn(tmp_path: Path) -> None:
+    """fact.confirmed → the strategist reviews the vector map in background."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Strat lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        from unittest.mock import AsyncMock
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            spawned = AsyncMock(return_value="run_strat1")
+            app.spawn_subagent = spawned  # type: ignore[method-assign]
+            app._turn_facts = ["notes render {{7*7}} as 49"]
+            app._schedule_strategist_review()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert spawned.call_count == 1
+            kwargs = spawned.call_args.kwargs
+            assert kwargs["specialization"] is AgentSpecialization.STRATEGIST
+            # a second scheduling is one review, not a respawn
+            app._schedule_strategist_review()
+            await app.workers.wait_for_complete()
+            assert spawned.call_count == 1
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_a_big_paste_collapses_to_a_marker_and_expands_on_send(tmp_path: Path) -> None:
     """The field shows a marker; the model receives the whole text."""
     from textual import events
@@ -7086,8 +8117,8 @@ def test_choosing_a_key_row_saves_the_key_and_reopens_the_picker(tmp_path: Path)
     asyncio.run(exercise())
 
 
-def test_the_side_panels_use_scope_and_loot_headings(tmp_path: Path) -> None:
-    """The panel speaks the trade's words, in either locale."""
+def test_the_side_panels_use_targets_and_loot_headings(tmp_path: Path) -> None:
+    """The side block is about targets now; the scope contract has its own tab."""
     for locale in ("en", "ru"):
         stack = _minimal_stack(tmp_path / locale if False else tmp_path)
         stack[2].set_locale(locale)
@@ -7103,8 +8134,11 @@ def test_the_side_panels_use_scope_and_loot_headings(tmp_path: Path) -> None:
                 await pilot.pause()
                 access = str(app.query_one("#side-access", Static).render())
                 creds = str(app.query_one("#side-creds", Static).render())
-                assert "SCOPE" in access
+                assert "TARGETS" in access or "ЦЕЛИ" in access
                 assert "LOOT" in creds
+                assert "Scope" in str(app.query_one("#tab-scope", Tab).label) or (
+                    "Скоуп" in str(app.query_one("#tab-scope", Tab).label)
+                )
 
         asyncio.run(exercise())
 
@@ -7424,6 +8458,7 @@ def test_the_goal_is_adopted_from_the_task_when_none_is_set(tmp_path: Path) -> N
             await pilot.pause()
             app.query_one("#command-input", Input).value = "take user.txt on 10.0.0.5"
             await pilot.press("enter")
+            # the task's target lands in the scope by itself, no popup
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert stack[0].get(operation.id).goal == "take user.txt on 10.0.0.5"
@@ -7514,5 +8549,126 @@ def test_a_failed_run_without_a_relay_hints_at_it(tmp_path: Path) -> None:
             app._write_tool_block("⚙ exec · nc …", 1, "", "no route")
             text = app.query_one("#journal", BlockJournal).text()
             assert "relay" in text
+
+    asyncio.run(exercise())
+
+
+def test_set_relay_tool_lets_the_model_fix_the_transport(tmp_path: Path) -> None:
+    """The model sets the relay itself instead of hand-rolling prefixes."""
+    from samurai_ai.agents.provider import ToolCall
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Tool relay lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            with patch.object(app, "_relay_canary", lambda relay: None):
+                message = await app._run_chat_tool(
+                    ToolCall(id="1", name="set_relay",
+                             arguments={"prefix": "prlctl exec '{uuid}'"})
+                )
+            assert "prlctl exec" in message.content
+            assert app.service.get(operation.id).relay == "prlctl exec '{uuid}'"
+            with patch.object(app, "_relay_canary", lambda relay: None):
+                cleared = await app._run_chat_tool(
+                    ToolCall(id="2", name="set_relay", arguments={"prefix": ""})
+                )
+            assert "off" in cleared.content
+            assert app.service.get(operation.id).relay == ""
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_system_prompt_offers_set_relay_only_for_a_remote_scope(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    remote = stack[0].create(
+        "Remote lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    local = stack[0].create(
+        "Local lab", OperationMode.CTF_HTB, ScopeContract(includes=("127.0.0.1/32",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, remote.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert "set_relay" in app._chat_system_prompt()
+            app.operation = stack[0].get(local.id)
+            assert "set_relay" not in app._chat_system_prompt()
+            app.operation = app.service.set_relay(remote.id, "prlctl exec '{uuid}'")
+            prompt = app._chat_system_prompt()
+            assert "prlctl exec '{uuid}'" in prompt and "set_relay tool" not in prompt
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_task_naming_a_relay_offers_to_adopt_it(tmp_path: Path) -> None:
+    """«общайся через prlctl exec '{uuid}'» — один Enter, и релей в операции."""
+    from samurai_ai.tui.screens import PickerScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Offer lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            with patch.object(app, "_relay_canary", lambda relay: None):
+                worker = app.run_worker(
+                    app._maybe_offer_relay(
+                        "VPN в VM, общайся через prlctl exec '{1381d6d4}' — флаги"
+                    ),
+                    exclusive=False,
+                )
+                await pilot.pause()
+                assert isinstance(app.screen, PickerScreen)
+                await pilot.press("enter")
+                await worker.wait()
+            assert app.service.get(operation.id).relay == "prlctl exec '{1381d6d4}'"
+            # once per operation: a second mention stays silent
+            await app._maybe_offer_relay("prlctl exec '{1381d6d}' снова")
+            await pilot.pause()
+            assert not isinstance(app.screen, PickerScreen)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_bare_relay_mention_only_nudges(tmp_path: Path) -> None:
+    """«prlctl exec» без uuid — нечего выставлять: подсказка вместо пикера."""
+    from samurai_ai.tui.screens import PickerScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Bare lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await app._maybe_offer_relay("с виртуалкой общайся через prlctl exec")
+            await pilot.pause()
+            assert not isinstance(app.screen, PickerScreen)
+            assert app.service.get(operation.id).relay == ""
+            text = app.query_one("#journal", BlockJournal).text()
+            assert "prlctl list" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
 
     asyncio.run(exercise())

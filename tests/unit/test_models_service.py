@@ -78,6 +78,44 @@ def test_streaming_completion_arrives_token_by_token(tmp_path: Path) -> None:
     assert response.tool_calls[0].arguments["command"] == "echo hi"
 
 
+def test_streaming_salvages_dsml_markup_into_tool_calls(tmp_path: Path) -> None:
+    """A model that inlines DSML calls into streamed text must not lose them."""
+    import asyncio
+
+    from samurai_ai.agents.openai_compat import OpenAICompatProvider
+    from samurai_ai.agents.provider import ChatRequest, Message
+    from samurai_ai.domain.models import ProviderDefinition
+
+    dsml = (
+        'Смотрю цель.\n\n<｜DSML｜ calls>\n<｜DSML｜ invoke name="shell_exec">\n'
+        '<｜DSML｜ parameter name="command" string="true">id</｜DSML｜ parameter>\n'
+        "</｜DSML｜ invoke>\n</｜DSML｜ calls>"
+    )
+
+    class _DsmlBroker:
+        def fetch_stream(self, url, *, method="POST", body=None, headers=None, timeout=60.0):
+            import json as _json
+
+            yield f'data: {_json.dumps({"choices": [{"delta": {"content": dsml}}]})}\n'.encode()
+            yield b"data: [DONE]\n"
+
+    provider_def = ProviderDefinition(
+        id="fake", name="fake", base_url="http://fake", api_family="openai-compatible"
+    )
+    provider = OpenAICompatProvider(provider_def, None, broker=_DsmlBroker())  # type: ignore[arg-type]
+    response = asyncio.run(
+        provider.complete_stream(
+            ChatRequest(
+                model_id="fake/m@v1", messages=(Message(role="user", content="hi"),), tools=()
+            ),
+            lambda _t: None,
+        )
+    )
+    assert response.text == "Смотрю цель."
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].arguments == {"command": "id"}
+
+
 def test_streaming_falls_back_to_a_plain_call_without_sse(tmp_path: Path) -> None:
     """A gateway that rejects stream=true must still answer."""
     import asyncio

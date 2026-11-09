@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -22,7 +23,11 @@ from textual.widgets import Input, Static
 
 from samurai_ai import __version__
 from samurai_ai.agents.provider import ChatResponse, ImagePart, Message, ToolCall, ToolSpec
-from samurai_ai.domain.execution import ApprovalRequiredError, SecretRedactor
+from samurai_ai.domain.execution import (
+    ApprovalRequiredError,
+    SecretRedactor,
+    ToolScopeError,
+)
 from samurai_ai.domain.graph import (
     GraphError,
     GraphInvariantError,
@@ -53,7 +58,7 @@ from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.tui.journal import BlockJournal, ToolBlock, entity_span
 from samurai_ai.tui.progress import Stagnation, TerminalReason
-from samurai_ai.tui.screens import AccessPromptScreen
+from samurai_ai.tui.screens import AccessPromptScreen, PickerScreen
 
 if TYPE_CHECKING:
     from samurai_ai.services.execution import ToolExecutionService
@@ -78,13 +83,20 @@ _IMAGE_TYPES = {
 
 _PROMISE_RE = re.compile(
     r"(?:проверю|проверим|сделаю|попробую|запущу|выполню|начну\b|далее\b|теперь\b"
-    r"|i(?:'| wi)?ll\b|let me\b|going to\b|now i\b|next,? i\b)",
+    # present-tense announcements die as often as future promises:
+    # «Читаю остальное: …» ended an HTB turn mid-work for 80 minutes
+    r"|читаю\b|смотрю\b|разбираю\b|собираю\b|изучаю\b|качаю\b|забираю\b|перечисляю\b"
+    r"|i(?:'| wi)?ll\b|let me\b|going to\b|now i\b|next,? i\b"
+    r"|reading\b|checking\b|looking\b|fetching\b|downloading\b|examining\b|reviewing\b)",
     re.IGNORECASE,
 )
 # A turn that ends on a promise of action is a broken turn: nudge the model to
 # actually make the call instead of closing "completed". Bounded so a chatty
 # model cannot spend the whole budget on promises.
 _MAX_PROMISE_NUDGES = 2
+#: a worked turn (tool calls happened) that claims to be done while a goal
+#: exists gets judged before it may end; this many times per turn at most
+_MAX_COMPLETION_JUDGES = 2
 
 
 def _resolve_image(raw: str, cwd: Path) -> Path:
@@ -162,6 +174,11 @@ class ChatController:
         _run_cost: float
         _shell_background: bool
         _ctx_tokens: int
+        _sent_tokens: int
+        _recv_tokens: int
+        _running_tools: int
+        _round_approvals: dict[str, bool]
+        _background_results: list[Message]
         _process_block: list[str]
         _DIM_STYLE: str
         _last_ai_text: str | None
@@ -203,6 +220,15 @@ class ChatController:
         def _count_goal_step(self) -> None: ...
         def run_worker(self, *args: Any, **kwargs: Any) -> Any: ...
         def push_screen_wait(self, screen: Any) -> Any: ...
+        _relay_offered: set[str]
+        _scope_offered: set[str]
+        _fresh_task_text: str | None
+        _unstructured_shells: int
+        _structure_nudged: bool
+        _drift_nudged: bool
+        _drift_marks: Any
+        _strategist_spawned_turn: bool
+        def _relay_canary(self, relay: str) -> None: ...
 
     def action_steer(self) -> None:
         """Ctrl-S: inject into the running turn, or send when nothing runs."""
@@ -221,12 +247,23 @@ class ChatController:
 
     _CHAT_MAX_TOOL_ROUNDS = 200  # default; the setting tui.max_tool_rounds wins
     _AUTO_CONTINUES = 5
+    #: bare shell calls before the turn is told to write its state down
+    _STRUCTURE_NUDGE_AT = 8
+    #: out-of-workspace reads inside the last 8 commands that mean drift
+    _DRIFT_NUDGE_AT = 3
+    #: scratch and toolchain roots are not drift; everything else outside
+    #: the workspace during an operation is
+    _DRIFT_ALLOWED = ("/tmp", "/var", "/usr", "/bin", "/sbin", "/opt", "/System", "/Library")
     _TOOL_ROUNDS_MIN = 4
     _TOOL_ROUNDS_MAX = 600
     _CHAT_HISTORY_LIMIT = 40
     _TOOL_OUTPUT_FEEDBACK_LIMIT = 4000
     _MODEL_RETRY_ATTEMPTS = 5
     _MODEL_RETRY_DELAY = 3.0
+    #: how long a command may hold the turn before it becomes a background run
+    _FOREGROUND_WINDOW = 25.0
+    #: how many calls of one answer run at the same time
+    _PARALLEL_LIMIT = 8
 
     _CHAT_TOOL_SPECS: tuple[ToolSpec, ...] = (
         ToolSpec(
@@ -268,7 +305,10 @@ class ChatController:
                     },
                     "specialization": {
                         "type": "string",
-                        "enum": ["general", "recon", "testing", "analysis"],
+                        "enum": [
+                            "general", "recon", "testing",
+                            "analysis", "strategist", "researcher",
+                        ],
                     },
                     "task": {
                         "type": "string",
@@ -416,6 +456,64 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="set_relay",
+            description=(
+                "Point this operation's network commands through a relay prefix "
+                "(e.g. prlctl exec '<vm-uuid>' or ssh -J jump) when the target is "
+                "only reachable from another host or VM. After it is set, write "
+                "plain far-side commands — the harness rewrites and quotes them "
+                "for the relay itself. An empty prefix clears the relay."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prefix": {"type": "string", "maxLength": 400},
+                },
+                "required": ["prefix"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            name="check_scope",
+            description=(
+                "Check whether a target (IP, domain, URL or network) is inside "
+                "this operation's scope before touching it. Answers allowed, "
+                "excluded or out-of-scope with the matching rule. Ask before "
+                "working a host the SCOPE board does not show."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "minLength": 1, "maxLength": 300},
+                },
+                "required": ["target"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            name="add_scope",
+            description=(
+                "Widen this operation's scope with targets discovered mid-run "
+                "(subdomains, pivot hosts, an alias a vhost answers to). Each "
+                "addition is journaled and the operator can revert it with "
+                "/scope rm. Targets already covered are skipped silently. "
+                "Prefer one wildcard rule (*.example.com) over many subdomains."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "targets": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 50,
+                    },
+                },
+                "required": ["targets"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="remember_secret",
             description=(
                 "Store a credential found during the work (password, token, key, "
@@ -515,6 +613,19 @@ class ChatController:
     #: Chat tool name → registry tool id, for the ones that are real adapters.
     _CHAT_TOOL_IDS = {"shell_exec": "shell.exec"}
 
+    #: Relay shapes a task text can mention; the first with a concrete target wins.
+    _RELAY_CANDIDATE_RES = (
+        re.compile(r"\bprlctl\s+exec\s+('[^']+'|\"[^\"]+\"|[\w.{}-]+)"),
+        re.compile(r"\bssh\s+-J\s+\S+"),
+        re.compile(r"\butmctl\s+exec\s+\S+"),
+        re.compile(r"\blimactl\s+shell\s+\S+"),
+    )
+    #: the same tools named without a target — the operator must fill it in
+    _BARE_RELAY_RE = re.compile(r"\b(?:prlctl\s+exec|utmctl\s+exec|limactl\s+shell)\b")
+
+    #: networks a task text can name; the bare IP part is already in _HOST_RE
+    _CIDR_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}\b")
+
     _CHAT_TOOL_HANDLERS = {
         "shell_exec": "_run_shell_tool",
         "agent_spawn": "_run_spawn_tool",
@@ -527,6 +638,10 @@ class ChatController:
         "record_traffic": "_run_record_traffic_tool",
         "update_todo": "_run_update_todo_tool",
         "remember_secret": "_run_remember_secret_tool",
+        "set_relay": "_run_set_relay_tool",
+        "check_scope": "_run_check_scope_tool",
+        "request_scope": "_run_request_scope_tool",
+        "add_scope": "_run_request_scope_tool",
         "propose_plan": "_run_propose_plan_tool",
     }
 
@@ -569,6 +684,10 @@ class ChatController:
         )
         prompt = self._append_constraints(prompt)
         prompt = self._append_frontier(prompt)
+        if self.operation is not None:
+            # the operator doctrine: generic «you have a shell» prompts produced
+            # crawler behaviour (HTB Takeoff never registered an account)
+            prompt += "\n\n" + self.translator.t("chat.doctrine")
         goal = self._operation_goal(self.operation.id) if self.operation else ""
         if goal:
             prompt += "\n\n" + self.translator.t("chat.goal-hint", goal=goal)
@@ -576,6 +695,8 @@ class ChatController:
         if relay:
             # hand the relay to the model as-is so it never invents a helper
             prompt += "\n\n" + self.translator.t("chat.relay-hint", relay=relay)
+        elif self._remote_scope():
+            prompt += "\n\n" + self.translator.t("chat.relay-absent")
         try:
             digest, _ids = self.memory.digest(self._memory_workspace())
         except Exception:  # noqa: BLE001 - memory must not break a turn
@@ -641,6 +762,19 @@ class ChatController:
         except Exception:  # noqa: BLE001 - a count must never break a turn
             return 0
 
+    def _count_usage(self, usage: Any) -> None:
+        """One place that sees every model answer: context gauge and totals.
+
+        A prompt already carries the whole conversation sent with it, so the
+        window fill is a *reading* of the last call, not a running sum — summing
+        it reported the same history once per call and showed 714k on a session
+        whose real window peaked at 10k. The ⇈/⇊/Σ totals stay cumulative on
+        purpose: they are spend, not occupancy.
+        """
+        self._ctx_tokens = usage.prompt_tokens + usage.completion_tokens
+        self._sent_tokens += usage.prompt_tokens
+        self._recv_tokens += usage.completion_tokens
+
     def _note_stagnation(self) -> None:
         """Tell the model and the operator about a direction that stopped paying."""
         shape = self._progress.last_stuck
@@ -651,6 +785,85 @@ class ChatController:
         self._remember(
             Message(role="user", content=self.translator.t("chat.stagnant-note", direction=shape))
         )
+
+    async def _maybe_spawn_strategist(self, fact_summary: str) -> None:
+        """fact.confirmed → the strategist re-reads the map and proposes vectors."""
+        if self.operation is None or self._strategist_spawned_turn:
+            return
+        self._strategist_spawned_turn = True
+        instruction = self.translator.t("strategist.review-task", fact=fact_summary[:200])
+        run_id = await self.spawn_subagent(
+            instruction, specialization=AgentSpecialization.STRATEGIST
+        )
+        if run_id is not None:
+            self._write_dim(self.translator.t("strategist.spawned", run=run_id))
+
+    def _schedule_strategist_review(self) -> None:
+        """Between turns: one strategist run for everything the turn proved."""
+        if not self._turn_facts or self._strategist_spawned_turn:
+            return
+        facts = "; ".join(self._turn_facts[-5:])
+        self.run_worker(self._maybe_spawn_strategist(facts), exclusive=False)
+
+    def _note_unstructured_shell(self) -> None:
+        """Shell calls with nothing recorded are a crawler, not an operation.
+
+        HTB Takeoff burned a whole turn that way: the state died with the
+        context because no fact, intent or finding was ever written.
+        """
+        if self.operation is None or self._structure_nudged:
+            return
+        self._unstructured_shells += 1
+        if self._unstructured_shells < self._STRUCTURE_NUDGE_AT:
+            return
+        self._structure_nudged = True
+        self._write_dim(
+            self.translator.t("chat.structure-nudge", count=self._unstructured_shells)
+        )
+        self._steer_queue.append(self.translator.t("chat.structure-note"))
+
+    def _note_structure_written(self) -> None:
+        """A fact, intent or finding re-arms the bare-shell counter."""
+        self._unstructured_shells = 0
+
+    def _note_local_drift(self, command: str) -> None:
+        """Repeated reads of local paths outside the workspace are drift."""
+        if self.operation is None or self._drift_nudged:
+            return
+        if self.operation.relay:
+            # with a relay set the command runs on the far side: its paths
+            # belong to the target, not to this host
+            return
+        self._drift_marks.append(bool(self._drift_paths(command)))
+        if sum(self._drift_marks) < self._DRIFT_NUDGE_AT:
+            return
+        self._drift_nudged = True
+        self._write_dim(self.translator.t("chat.drift-nudge"))
+        self._steer_queue.append(self.translator.t("chat.drift-note"))
+
+    def _drift_paths(self, command: str) -> list[str]:
+        """Absolute local paths a command reads outside the workspace."""
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            tokens = command.split()
+        home = str(Path.home())
+        cwd = str(self._cwd)
+        hits: list[str] = []
+        for token in tokens:
+            if "://" in token or token.startswith("-"):
+                continue
+            bare = token.strip("'\"")
+            if bare.startswith("~/"):
+                bare = home + bare[1:]
+            if not bare.startswith("/"):
+                continue
+            if bare.startswith(cwd) or bare.startswith(self._DRIFT_ALLOWED):
+                continue
+            if bare.startswith(home + "/.config/samurai"):
+                continue
+            hits.append(bare)
+        return hits
 
     def _carry_previous_reason(self) -> None:
         """A failed previous turn tells the next one what to do differently."""
@@ -762,6 +975,7 @@ class ChatController:
             return
         removed = self.chat_history.clear(self.operation.id)
         self._chat_history.clear()
+        self._ctx_tokens = 0
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
         self._write_dim(self.translator.t("chat.cleared", count=removed))
@@ -818,6 +1032,9 @@ class ChatController:
                 OperationMode.BUG_BOUNTY,
                 ScopeContract(includes=("127.0.0.1/32",)),
             )
+            # the targets in the task text are the operator's own words — they
+            # become the scope without a confirmation picker
+            self._fresh_task_text = text
         if self._auto_title is None:
             # The tab names itself from the task at hand
             self._auto_title = title
@@ -910,6 +1127,15 @@ class ChatController:
                     {"command": command},
                     approval_id=approval_id,
                 )
+        except ToolScopeError as exc:
+            # the guard working as designed is information, not an error
+            journal = self.query_one("#journal", BlockJournal)
+            journal.write(Text(f"[scope] {exc}", style=self.paint("accent")))
+            self._remember(
+                Message(role="user", content=f"[shell !{command}] out of scope: {exc}")
+            )
+            self._shell_running = ""
+            return
         except Exception as exc:  # noqa: BLE001 - surfaced to the operator
             self._write_line(f"[error] {exc}")
             self._remember(Message(role="user", content=f"[shell !{command}] error: {exc}"))
@@ -918,6 +1144,8 @@ class ChatController:
         prefix = "[bg] " if self._shell_background else ""
         if not self._graph_used:
             self._progress.last_stuck = self._progress.record(command)
+            self._note_unstructured_shell()
+        self._note_local_drift(command)
         self._write_tool_block(
             prefix
             + self.translator.t(
@@ -977,6 +1205,7 @@ class ChatController:
             self._shell_running = ""
             self._shell_background = False
             self._thinking_stop()
+            self._schedule_strategist_review()
             self._refresh_chrome()
             focus = getattr(self, "focus_command_input", None)
             if focus is not None:
@@ -1056,6 +1285,12 @@ class ChatController:
     async def _chat_loop(self, text: str, model_id: str, approval_id: str | None) -> TerminalReason:
         del approval_id  # approvals are handled per call inside the loop
         self._progress.reset()
+        self._unstructured_shells = 0
+        self._structure_nudged = False
+        self._drift_marks.clear()
+        self._drift_nudged = False
+        self._strategist_spawned_turn = False
+        self._turn_facts: list[str] = []
         findings_before = self._finding_count()
         self._carry_previous_reason()
         self._log_shadow_lessons()
@@ -1069,12 +1304,16 @@ class ChatController:
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
         self._last_user_text = text
         self._adopt_goal(text)
+        await self._maybe_offer_relay(text)
+        await self._maybe_offer_scope(text)
         recall = self._recall_for(text)
         if recall:
             self._remember(Message(role="system", content=recall))
         rounds_left = self._max_tool_rounds()
         stretches_used = 0
         promise_nudges = 0
+        completion_judges = 0
+        tool_calls_made = 0
         self._remember(Message(role="user", content=text))
         self._begin_live_answer()
         while True:
@@ -1108,6 +1347,7 @@ class ChatController:
                 continue
             rounds_left -= 1
             self._drain_steering()
+            self._drain_background()
             self._count_goal_step()
             try:
                 response = await self._request_chat_completion(
@@ -1147,7 +1387,7 @@ class ChatController:
                 return TerminalReason.MODEL_ERROR
             if response is None:
                 return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
-            self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
+            self._count_usage(response.usage)
             self._add_cost(model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
             if not response.tool_calls:
                 self._remember(Message(role="assistant", content=response.text))
@@ -1173,6 +1413,30 @@ class ChatController:
                         )
                     )
                     continue
+                if (
+                    tool_calls_made
+                    and completion_judges < _MAX_COMPLETION_JUDGES
+                    and self._operation_goal(operation_id)
+                ):
+                    # work happened and the model says it is done: only the goal
+                    # judge may agree, otherwise the turn ends on a promise
+                    completion_judges += 1
+                    verdict = await self._judge_goal(operation_id, model_id)
+                    if verdict == goal_judge.STOP:
+                        self._write_dim(self.translator.t("chat.goal-met"))
+                        return TerminalReason.COMPLETED
+                    if verdict is None:
+                        # a broken judge never stalls a run: fall back to accepting
+                        return TerminalReason.COMPLETED
+                    # CONTINUE or unclear: no sign-off without a clear STOP
+                    self._write_dim(self.translator.t("chat.goal-not-met"))
+                    self._remember(
+                        Message(
+                            role="user",
+                            content=self.translator.t("chat.goal-not-met-note"),
+                        )
+                    )
+                    continue
                 return TerminalReason.COMPLETED
             if response.text.strip():
                 self._remember(Message(role="assistant", content=response.text))
@@ -1182,8 +1446,9 @@ class ChatController:
                 self._write_dim(response.text.strip(), process=True)
             # every call of the round runs even when stopping: a stop is worth
             # nothing until the results are in and checked
-            for call in response.tool_calls:
-                self._remember(await self._run_chat_tool(call))
+            for message in await self._run_round(list(response.tool_calls)):
+                tool_calls_made += 1
+                self._remember(message)
             self._trim_chat_history()
             if self._stop_requested and not self._stop_note_sent:
                 self._stop_note_sent = True
@@ -1200,7 +1465,7 @@ class ChatController:
             return TerminalReason.MODEL_ERROR
         if final is None:
             return TerminalReason.DENIED
-        self._ctx_tokens += final.usage.prompt_tokens + final.usage.completion_tokens
+        self._count_usage(final.usage)
         self._add_cost(model_id, final.usage.prompt_tokens, final.usage.completion_tokens)
         self._remember(Message(role="assistant", content=final.text))
         self._trim_chat_history()
@@ -1226,6 +1491,10 @@ class ChatController:
             return
         self.operation = self.service.set_goal(self.operation.id, derived, automatic=True)
         self._write_dim(self.translator.t("goal.adopted", goal=derived))
+        if self.goals.current(self.operation.id) is None:
+            # the strip reads the goal service, not the operation field: without
+            # a mirrored goal the adopted condition stays invisible
+            self.goals.create(self.operation.id, derived)
 
     def _operation_goal(self, operation_id: str) -> str:
         """The goal from the store — the in-memory copy can be stale."""
@@ -1255,16 +1524,19 @@ class ChatController:
         if answer is None:
             self._write_dim(self.translator.t("chat.goal-judge-failed"))
             return None
-        return goal_judge.parse_verdict(answer.text)
+        # a mumbled answer is not a sign-off: report it apart from "unavailable"
+        return goal_judge.parse_verdict(answer.text) or "unclear"
 
     async def _settle(self, operation_id: str, model_id: str, reasoning: str | None) -> None:
-        """One write-only round: persist what the turn found, without new exploration."""
-        if not self._graph_used:
-            return
+        """One write-only round: persist what the turn found, without new exploration.
+
+        Runs even when the graph stayed empty — that is exactly the turn whose
+        findings would otherwise die with the context window.
+        """
         tools = tuple(
             spec
             for spec in self._CHAT_TOOL_SPECS
-            if spec.name in ("record_fact", "close_intent", "propose_finding")
+            if spec.name in ("record_fact", "close_intent", "propose_finding", "memory_learn")
         )
         self._remember(Message(role="user", content=self.translator.t("chat.settle-prompt")))
         try:
@@ -1273,9 +1545,9 @@ class ChatController:
             return
         if response is None:
             return
-        self._ctx_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
-        for call in response.tool_calls:
-            self._remember(await self._run_chat_tool(call))
+        self._count_usage(response.usage)
+        for message in await self._run_round(list(response.tool_calls)):
+            self._remember(message)
         if response.text.strip():
             self._remember(Message(role="assistant", content=response.text))
 
@@ -1323,6 +1595,75 @@ class ChatController:
     def _chat_tool_read_only(self, name: str) -> bool:
         tool_id = self._CHAT_TOOL_IDS.get(name)
         return tool_id is not None and self._tool_is_read_only(tool_id)
+
+    async def _preapprove(self, calls: list[ToolCall]) -> dict[str, bool]:
+        """One approval screen for the whole round, not one modal per command.
+
+        The commands of a single model answer share risk and shape, so they are
+        approved together; a denied one is remembered as False and answers as
+        denied without stopping its siblings.
+        """
+        self._round_approvals.clear()
+        asking: list[tuple[str, str]] = []
+        batched: list[str] = []
+        first: str = ""
+        first_risk: str = ""
+        allowed_by_id: dict[str, bool] = {}
+        mode = self._permission_mode
+        for call in calls:
+            tool_id = self._CHAT_TOOL_IDS.get(call.name)
+            command = str(call.arguments.get("command", "")).strip()
+            blocked_by_plan = self._plan_mode and not self._tool_is_read_only(tool_id or "")
+            if tool_id is None or not command or blocked_by_plan:
+                continue
+            risk = classify_command(command, str(self._cwd))
+            decision = decide(
+                self.settings.permission_rules(),
+                tool_id,
+                command,
+                mode,
+                risk,
+                reusable=self._reusable_approval(tool_id),
+            )
+            if decision.is_denied:
+                allowed_by_id[call.id] = False
+                continue
+            if decision.action == "ask":
+                asking.append((_short_tool(tool_id, command), f"r3 · {risk.label()}"))
+                batched.append(call.id)
+                if first == "":
+                    # the screen still names one command in full, and «v» reveals it
+                    first, first_risk = f"{tool_id}: {command}", f"r3 · {risk.label()}"
+                continue
+            allowed_by_id[call.id] = True
+        if not asking:
+            self._round_approvals.update(allowed_by_id)
+            return allowed_by_id
+        allowed = bool(
+            await self.push_screen_wait(
+                AccessPromptScreen(self.translator, first, first_risk, batch_items=asking)
+            )
+        )
+        for call_id in batched:
+            allowed_by_id[call_id] = allowed
+        self._round_approvals.update(allowed_by_id)
+        return allowed_by_id
+
+    async def _run_round(self, calls: list[ToolCall]) -> list[Message]:
+        """Independent calls of one answer run together, capped and ordered.
+
+        Sequential awaits made a four-command round cost four commands' time.
+        Results are collected in call order so the model reads a deterministic
+        transcript whatever order they finish in.
+        """
+        await self._preapprove(calls)
+        gate = asyncio.Semaphore(self._PARALLEL_LIMIT)
+
+        async def one(call: ToolCall) -> Message:
+            async with gate:
+                return await self._run_chat_tool(call)
+
+        return list(await asyncio.gather(*(one(call) for call in calls)))
 
     async def _run_chat_tool(self, call: ToolCall) -> Message:
         handler = self._CHAT_TOOL_HANDLERS.get(call.name)
@@ -1384,6 +1725,252 @@ class ChatController:
             ),
         )
 
+    async def _maybe_offer_relay(self, text: str) -> None:
+        """A task that names a relay deserves one operator tap to adopt it.
+
+        Once per operation: without this, the model hand-builds the prefix into
+        every command and loses the session to quoting (HTB Takeoff, 37 failed
+        calls).
+        """
+        if self.operation is None or self.operation.relay:
+            return
+        if self.operation.id in self._relay_offered:
+            return
+        candidate = None
+        for pattern in self._RELAY_CANDIDATE_RES:
+            match = pattern.search(text)
+            if match:
+                candidate = match.group(0)
+                break
+        if candidate is None:
+            if self._BARE_RELAY_RE.search(text):
+                self._relay_offered.add(self.operation.id)
+                self._write_dim(self.translator.t("relay.detected-bare"), process=False)
+            return
+        self._relay_offered.add(self.operation.id)
+        choice = await self.push_screen_wait(
+            PickerScreen(
+                self.translator,
+                "relay.detected",
+                "relay.detected-hint",
+                "side.list-empty",
+                [
+                    ("use", self.translator.t("relay.use", relay=candidate), ""),
+                    ("skip", self.translator.t("relay.skip"), ""),
+                ],
+            )
+        )
+        if choice != "use" or self.operation is None:
+            return
+        try:
+            self.operation = self.service.set_relay(self.operation.id, candidate)
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            self._write_line(f"[relay] {exc}")
+            return
+        self._write_dim(self.translator.t("relay.set", relay=candidate), process=False)
+        self._relay_canary(candidate)
+        self._refresh_chrome()
+
+    def _remote_scope(self) -> bool:
+        """True when the scope names a target loopback cannot explain."""
+        if self.operation is None:
+            return False
+        from ipaddress import ip_address
+
+        for rule in self.operation.scope.includes:
+            host = rule.split("/", 1)[0].lstrip("*.")
+            if "://" in rule:
+                host = rule.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+            try:
+                if ip_address(host).is_loopback:
+                    continue
+            except ValueError:
+                pass
+            return True
+        return False
+
+    def _task_targets(self, text: str) -> list[str]:
+        """Hosts and networks the task names that the scope does not cover yet."""
+        from samurai_ai.tui.killchain import hosts_mentioned
+
+        assert self.operation is not None
+        scope = self.operation.scope
+        cidrs = list(dict.fromkeys(self._CIDR_RE.findall(text)))
+        net_addresses = {cidr.split("/")[0] for cidr in cidrs}
+        targets: list[str] = []
+        for host in hosts_mentioned(text):
+            if host in net_addresses:
+                continue  # the CIDR spelling is the fuller statement
+            targets.append(host)
+        targets.extend(cidrs)
+        return [
+            target
+            for target in targets
+            if target not in scope.hosts
+            and not scope.covers(target)
+            and not self._is_loopback(target)
+        ]
+
+    @staticmethod
+    def _is_loopback(target: str) -> bool:
+        from ipaddress import ip_address
+
+        try:
+            return ip_address(target.split("/")[0]).is_loopback
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _wildcard_offer(targets: list[str]) -> tuple[str, int] | None:
+        """A shared parent covering 3+ hosts deserves one wildcard rule instead."""
+        from collections import Counter
+
+        parents = Counter(
+            ".".join(target.split(".")[-2:])
+            for target in targets
+            if not target[0].isdigit() and "." in target
+        )
+        if not parents:
+            return None
+        parent, count = parents.most_common(1)[0]
+        return (f"*.{parent}", count) if count >= 3 else None
+
+    async def _maybe_offer_scope(self, text: str) -> None:
+        """Targets named in the task land in the scope without a popup.
+
+        The operator wrote them into the task — that is the authorization; a
+        picker in the way of the first turn only got dismissed unread. Three or
+        more targets under one parent domain fold into a wildcard rule, so a
+        subfinder-scale text does not bloat the contract.
+        """
+        if self.operation is None or self.operation.id in self._scope_offered:
+            return
+        if len(self._chat_history) > 2:
+            # only the task message earns the extension; a host named
+            # mid-conversation is a mention, not a widening request
+            return
+        targets = self._task_targets(text)
+        if not targets:
+            return
+        self._scope_offered.add(self.operation.id)
+        self._fresh_task_text = None
+        wildcard = self._wildcard_offer(targets)
+        if wildcard is not None:
+            rule, _count = wildcard
+            covered = {
+                target
+                for target in targets
+                if not target[0].isdigit() and "." in target
+                and (target == rule[2:] or target.endswith(rule[1:]))
+            }
+            rest = [target for target in targets if target not in covered]
+            self._extend_scope([rule, *rest])
+            return
+        self._extend_scope(targets)
+
+    def _extend_scope(self, added: list[str]) -> None:
+        """Widen the contract and say what landed; invalid entries are skipped."""
+        assert self.operation is not None
+        scope = self.operation.scope
+        valid: list[str] = []
+        for target in added:
+            try:
+                ScopeContract(includes=(target,))  # parse and normalize one rule
+            except Exception:  # noqa: BLE001 - an unparseable name is skipped, not fatal
+                continue
+            valid.append(target)
+        if not valid:
+            return
+        scope = self.operation.scope
+        updated = ScopeContract(
+            includes=(*scope.includes, *valid), excludes=scope.excludes, hosts=scope.hosts
+        )
+        self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._write_dim(
+            self.translator.t("scope.extended", rules=", ".join(valid)), process=False
+        )
+        self._refresh_chrome()
+
+    async def _run_check_scope_tool(self, call: ToolCall) -> Message:
+        """The model asks before touching: is this resource inside the scope?"""
+        target = str(call.arguments.get("target", "") or "").strip()
+        if self.operation is None:
+            return Message(role="user", content="[tool check_scope] no open operation")
+        if not target:
+            return Message(role="user", content="[tool check_scope] empty target")
+        scope = self.operation.scope
+        if "/" in target and "://" not in target:
+            decision = scope.evaluate_network(target)
+        else:
+            decision = scope.evaluate(target)
+        rule = f" (rule {decision.matched_rule})" if decision.matched_rule else ""
+        return Message(
+            role="user",
+            content=(
+                f"[tool check_scope] {target}: {decision.reason.value}{rule} — "
+                f"{decision.detail}"
+            ),
+        )
+
+    async def _run_request_scope_tool(self, call: ToolCall) -> Message:
+        """Mid-run widening: the agent extends the scope itself, journaled."""
+        if self.operation is None:
+            return Message(role="user", content="[tool add_scope] no open operation")
+        raw = call.arguments.get("targets") or []
+        targets = [str(item).strip() for item in raw if str(item).strip()][:50]
+        if not targets:
+            return Message(role="user", content="[tool add_scope] no targets given")
+        fresh = [target for target in targets if not self.operation.scope.covers(target)]
+        if not fresh:
+            return Message(
+                role="user", content="[tool add_scope] all targets already in scope"
+            )
+        wildcard = self._wildcard_offer(fresh)
+        if wildcard is not None:
+            rule, _count = wildcard
+            covered = {
+                target
+                for target in fresh
+                if not target[0].isdigit() and "." in target
+                and (target == rule[2:] or target.endswith(rule[1:]))
+            }
+            rest = [target for target in fresh if target not in covered]
+            added = [rule, *rest]
+        else:
+            added = fresh
+        self._extend_scope(added)
+        return Message(
+            role="user",
+            content=(
+                f"[tool add_scope] added: {', '.join(added)} — the operator can "
+                "revert any rule with /scope rm"
+            ),
+        )
+
+    async def _run_set_relay_tool(self, call: ToolCall) -> Message:
+        """The model fixes its own transport instead of hand-rolling prefixes."""
+        prefix = str(call.arguments.get("prefix", "") or "").strip()
+        if self.operation is None:
+            return Message(role="user", content="[tool set_relay] no open operation")
+        try:
+            self.operation = self.service.set_relay(self.operation.id, prefix)
+        except Exception as exc:  # noqa: BLE001 - the model gets the reason
+            return Message(role="user", content=f"[tool set_relay] rejected: {exc}")
+        relay = self.operation.relay
+        if relay:
+            self._write_dim(self.translator.t("relay.set", relay=relay), process=False)
+            self._relay_canary(relay)
+        else:
+            self._write_dim(self.translator.t("relay.cleared"), process=False)
+        self._refresh_chrome()
+        return Message(
+            role="user",
+            content=(
+                f"[tool set_relay] relay is now: {relay or 'off'}; write plain "
+                "far-side commands, the harness quotes them for the relay"
+            ),
+        )
+
     # --- open exploration graph -------------------------------------------
 
     def _graph_task(self, title: str) -> str:
@@ -1424,6 +2011,7 @@ class ChatController:
         except GraphError as exc:
             return Message(role="user", content=f"[tool open_intent] {exc}")
         self._graph_used = True
+        self._note_structure_written()
         self._progress.last_stuck = self._progress.record_shape(" ".join(title.lower().split()))
         self._write_dim(self.translator.t("graph.intent-opened", title=intent.text()))
         return Message(
@@ -1452,6 +2040,10 @@ class ChatController:
                 self._write_dim(self.translator.t("graph.fact-bare"))
         except GraphError as exc:
             return Message(role="user", content=f"[tool record_fact] {exc}")
+        self._note_structure_written()
+        # a confirmed fact changes the vector map: collected here, the
+        # strategist reviews them once the turn is over (never mid-turn)
+        self._turn_facts.append(summary)
         if artifacts:
             self._progress.finding_seen()
         artifact_ids = cast("list[str]", fact.payload.get("artifact_ids") or [])
@@ -1655,6 +2247,7 @@ class ChatController:
         except (GraphError, KernelError) as exc:
             return Message(role="user", content=f"[tool propose_finding] {exc}")
         self._progress.finding_seen()
+        self._note_structure_written()
         self._write_entity_line(
             "◆ " + self.translator.t("graph.finding", finding=finding.id, title=finding.title),
             "finding",
@@ -1848,6 +2441,13 @@ class ChatController:
         return slug or "workspace"
 
     async def _run_shell_tool(self, call: ToolCall) -> Message:
+        """Run one shell tool, handing it back to the operator when it drags.
+
+        A sweep that legitimately takes ten minutes used to freeze the whole
+        turn behind a blocking await. Past the foreground window the run is
+        parked: the model is told it is still working, the loop carries on, and
+        the result is delivered when it lands.
+        """
         tool_id = self._CHAT_TOOL_IDS.get(call.name)
         command = str(call.arguments.get("command", "")).strip()
         # The model still writes `prlctl exec <uuid> -- bash -c '...'` by hand
@@ -1873,30 +2473,31 @@ class ChatController:
         # the running command lives in the status bar; the finished one becomes
         # its own one-line block, so a repeat in the buffer is noise
         self._current_tool = _short_tool(tool_id, command) + badge
-        # A tool already approved for this operation is not asked again, except
-        # for a sensitive path or a destructive shape, which stay worth a look.
         mode = self._permission_mode
-        decision = decide(
-            self.settings.permission_rules(),
-            tool_id,
-            command,
-            mode,
-            risk,
-            reusable=self._reusable_approval(tool_id),
-        )
-        if decision.is_denied:
-            self._write_dim(self.translator.t("chat.tool-denied", command=command), process=False)
-            return Message(role="user", content=f"[tool {call.name}] denied by rule")
-        ask = decision.action == "ask"
-        if ask:
-            allowed = await self.push_screen_wait(
+        # A round approves all of its commands on one screen; a call made on its
+        # own (a test, a retry) still asks for itself here.
+        hint = self._round_approvals.pop(call.id, None)
+        if hint is None:
+            decision = decide(
+                self.settings.permission_rules(),
+                tool_id,
+                command,
+                mode,
+                risk,
+                reusable=self._reusable_approval(tool_id),
+            )
+            if decision.is_denied:
+                self._write_dim(
+                    self.translator.t("chat.tool-denied", command=command), process=False
+                )
+                return Message(role="user", content=f"[tool {call.name}] denied by rule")
+            if decision.action == "ask" and not await self.push_screen_wait(
                 AccessPromptScreen(
                     self.translator,
                     f"{tool_id}: {command}",
                     f"r3{badge}" if risk.empty else f"r3 · {risk.label()}",
                 )
-            )
-            if not allowed:
+            ):
                 self._write_dim(
                     self.translator.t("chat.tool-denied", command=command), process=False
                 )
@@ -1904,34 +2505,184 @@ class ChatController:
                     role="user",
                     content=f"[tool {call.name}] denied by the operator",
                 )
+            hint = True
+        if not hint:
+            self._write_dim(self.translator.t("chat.tool-denied", command=command), process=False)
+            return Message(role="user", content=f"[tool {call.name}] denied by the operator")
+        call_label = f"{call.name}: {_short_tool(tool_id, command)}"
+        # the id is written from the worker thread, so it travels in a plain box
+        holder: dict[str, str] = {}
+        self._running_tools += 1
+        task = asyncio.ensure_future(
+            self._execute_shell(call.name, tool_id, command, mode, holder)
+        )
+        task.add_done_callback(self._tool_finished)
+        try:
+            result, approval_id = await asyncio.wait_for(
+                asyncio.shield(task), self._FOREGROUND_WINDOW
+            )
+        except ToolScopeError as exc:
+            return await self._offer_scope(exc, call, tool_id, command, mode)
+        except TimeoutError:
+            run_id = holder.get("run", "")
+            self._park(task, call_label)
+            handle = f" run={run_id}" if run_id else ""
+            self._write_dim(self.translator.t("chat.tool-background", command=call_label))
+            return Message(
+                role="user",
+                content=(
+                    f"[tool {call.name}] still running in the background{handle}: "
+                    "the result arrives as another tool result later. Keep working; "
+                    "do not re-run the same command."
+                ),
+            )
+        return self._shell_result_message(call.name, tool_id, command, result, approval_id)
+
+    async def _offer_scope(
+        self,
+        exc: ToolScopeError,
+        call: ToolCall,
+        tool_id: str,
+        command: str,
+        mode: Any,
+    ) -> Message:
+        """The guard refused: show what it was doing, offer it, retry once.
+
+        A refusal is the boundary working, so it reads as information — and the
+        operator gets one key to authorize the resource instead of paying a
+        model round trip to retype it.
+        """
+        journal = self.query_one("#journal", BlockJournal)
+        journal.write(Text(f"[scope] {exc}", style=self.paint("accent")))
+        literal = getattr(exc, "literal", "")
+        if not literal:
+            return Message(role="user", content=f"[tool {call.name}] out of scope: {exc}")
+        from samurai_ai.tui.screens.scope_ask import ScopeAskScreen
+
+        allowed = await self.push_screen_wait(
+            ScopeAskScreen(self.translator, literal, getattr(exc, "detail", ""))
+        )
+        if not allowed:
+            return Message(
+                role="user",
+                content=f"[tool {call.name}] out of scope (operator skipped): {exc}",
+            )
+        self._extend_scope([literal.split("://")[-1].split("/")[0]])
+        holder: dict[str, str] = {}
+        retry = asyncio.ensure_future(
+            self._execute_shell(call.name, tool_id, command, mode, holder)
+        )
+        retry.add_done_callback(self._tool_finished)
+        self._running_tools += 1
+        try:
+            result, approval_id = await asyncio.wait_for(
+                asyncio.shield(retry), self._FOREGROUND_WINDOW
+            )
+        except TimeoutError:
+            run_id = holder.get("run", "")
+            self._park(retry, f"{call.name}: {_short_tool(tool_id, command)}")
+            handle = f" run={run_id}" if run_id else ""
+            return Message(
+                role="user",
+                content=(
+                    f"[tool {call.name}] added to the scope and still running in the "
+                    f"background{handle}: the result arrives later."
+                ),
+            )
+        except ToolScopeError as again:
+            return Message(role="user", content=f"[tool {call.name}] out of scope: {again}")
+        except Exception as again:  # noqa: BLE001 - fed back to the model
+            self._write_line(f"[error] {again}")
+            return Message(role="user", content=f"[tool {call.name}] error: {again}")
+        return self._shell_result_message(call.name, tool_id, command, result, approval_id)
+
+    async def _execute_shell(
+        self,
+        name: str,
+        tool_id: str,
+        command: str,
+        mode: Any,
+        holder: dict[str, str],
+    ) -> tuple[Any, str | None]:
+        """The blocking call, plus its approval dance, off the event loop."""
         approval_id: str | None = None
+
+        def note(run_id: str) -> None:
+            holder["run"] = run_id
+
         try:
             result = await asyncio.to_thread(
                 self.execution.run_tool,
                 self.operation.id if self.operation else "",
                 tool_id,
                 {"command": command},
+                on_started=note,
             )
         except ApprovalRequiredError as exc:
-            self.kernel.approve(
-                exc.approval_id,
-                decided_by=("operator" if mode.prompts_for_tools and ask else mode.value),
-            )
+            self.kernel.approve(exc.approval_id, decided_by=mode.value)
             approval_id = exc.approval_id
+            result = await asyncio.to_thread(
+                self.execution.run_tool,
+                self.operation.id if self.operation else "",
+                tool_id,
+                {"command": command},
+                approval_id=approval_id,
+                on_started=note,
+            )
+        return result, approval_id
+
+    def _tool_finished(self, _task: asyncio.Future[Any]) -> None:
+        self._running_tools = max(0, self._running_tools - 1)
+
+    def _park(self, task: asyncio.Future[Any], label: str) -> None:
+        """Collect a still-running tool into the background queue when it lands."""
+
+        def _deliver(done: asyncio.Future[Any]) -> None:
             try:
-                result = await asyncio.to_thread(
-                    self.execution.run_tool,
-                    self.operation.id if self.operation else "",
-                    tool_id,
-                    {"command": command},
-                    approval_id=approval_id,
+                result, approval_id = done.result()
+            except ToolScopeError as exc:
+                journal = self.query_one("#journal", BlockJournal)
+                journal.write(Text(f"[scope] {exc}", style=self.paint("accent")))
+                self._background_results.append(
+                    Message(role="user", content=f"[tool {label}] out of scope: {exc}")
                 )
-            except Exception as exc:  # noqa: BLE001 - fed back to the model
+                return
+            except Exception as exc:  # noqa: BLE001 - one tool must not lose the turn
                 self._write_line(f"[error] {exc}")
-                return Message(role="user", content=f"[tool {call.name}] error: {exc}")
-        except Exception as exc:  # noqa: BLE001 - fed back to the model
-            self._write_line(f"[error] {exc}")
-            return Message(role="user", content=f"[tool {call.name}] error: {exc}")
+                self._background_results.append(
+                    Message(role="user", content=f"[tool {label}] error: {exc}")
+                )
+                return
+            tool_name, _, short = label.partition(": ")
+            tool_id = self._CHAT_TOOL_IDS.get(tool_name, tool_name)
+            self._background_results.append(
+                self._shell_result_message(
+                    tool_name, tool_id, short, result, approval_id, background=True
+                )
+            )
+
+        task.add_done_callback(_deliver)
+
+    def _drain_background(self) -> None:
+        """Finished background runs land before the next model call, in order."""
+        while self._background_results:
+            message = self._background_results.pop(0)
+            self._remember(message)
+            self._write_dim(
+                self.translator.t("chat.tool-background-done", command=message.content[:60])
+            )
+
+    def _shell_result_message(
+        self,
+        name: str,
+        tool_id: str,
+        command: str,
+        result: Any,
+        approval_id: str | None,
+        *,
+        background: bool = False,
+    ) -> Message:
+        """The journal block and the model-facing result of a finished run."""
         exit_code = result.run.exit_code
         self._progress.last_stuck = None if self._graph_used else self._progress.record(command)
         # The run lands as a collapsible block; a failure opens on its own.
@@ -1950,10 +2701,11 @@ class ChatController:
         )
         stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
         stderr = result.stderr[:1000]
+        mark = " (background)" if background else ""
         return Message(
             role="user",
             content=(
-                f"[tool result {call.name} exit={exit_code}]\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                f"[tool result {name} exit={exit_code}]{mark}\nstdout:\n{stdout}\nstderr:\n{stderr}"
             ),
         )
 

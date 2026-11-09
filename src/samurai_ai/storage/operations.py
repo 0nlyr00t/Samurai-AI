@@ -13,6 +13,23 @@ class OperationConflictError(RuntimeError):
     pass
 
 
+#: re-armed after a delete; the event log stays append-only
+_EVENTS_NO_UPDATE = """
+CREATE TRIGGER IF NOT EXISTS operation_events_no_update
+BEFORE UPDATE ON operation_events
+BEGIN
+    SELECT RAISE(ABORT, 'operation events are append-only');
+END
+"""
+_EVENTS_NO_DELETE = """
+CREATE TRIGGER IF NOT EXISTS operation_events_no_delete
+BEFORE DELETE ON operation_events
+BEGIN
+    SELECT RAISE(ABORT, 'operation events are append-only');
+END
+"""
+
+
 class OperationRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -147,3 +164,25 @@ class OperationRepository:
                 event.created_at.isoformat(),
             ),
         )
+    def delete(self, operation_id: str) -> bool:
+        """Drop the operation and everything hanging off it.
+
+        Every owned table carries ON DELETE CASCADE, so the operation row takes
+        its events, runs, artifacts and findings with it. Two holdsouts: vault
+        entries scoped to the operation (no FK, and meaningless once the
+        operation is gone) are removed by hand, and the row itself last, so a
+        failure leaves an operation that is still readable.
+        """
+        with self.database.transaction() as connection:
+            # the event log refuses UPDATE and DELETE by trigger, so the cascade
+            # from `operations` would abort; the triggers step aside and come back
+            # inside the same transaction (SQLite rolls DDL back with the rest)
+            connection.execute("DROP TRIGGER IF EXISTS operation_events_no_delete")
+            connection.execute("DROP TRIGGER IF EXISTS operation_events_no_update")
+            connection.execute(
+                "DELETE FROM secret_entries WHERE operation_id = ?", (operation_id,)
+            )
+            cursor = connection.execute("DELETE FROM operations WHERE id = ?", (operation_id,))
+            connection.execute(_EVENTS_NO_UPDATE)
+            connection.execute(_EVENTS_NO_DELETE)
+        return cursor.rowcount > 0

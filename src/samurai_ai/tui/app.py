@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, cast
 
@@ -257,6 +258,13 @@ class SamuraiApp(
         padding: 0 1;
         background: $panel;
     }
+    #operations-strip {
+        height: 1;
+    }
+    #operations-strip OperationTab {
+        width: auto;
+        padding: 0 1;
+    }
     .strip-item {
         width: auto;
         padding: 0 1;
@@ -303,6 +311,7 @@ class SamuraiApp(
         "tab-ops": "view-ops",
         "tab-bounty": "view-bounty",
         "tab-hunt": "view-hunt",
+        "tab-scope": "view-scope",
     }
     _TAB_BY_VIEW = {pane: tab for tab, pane in _VIEW_BY_TAB.items()}
 
@@ -429,9 +438,26 @@ class SamuraiApp(
         self._tab_states: dict[str, dict[str, Any]] = {}
         self._pastes: dict[int, str] = {}
         self._relay_warned = False
+        self._relay_offered: set[str] = set()
+        self._scope_offered: set[str] = set()
+        self._unstructured_shells = 0
+        self._structure_nudged = False
+        self._drift_marks: deque[bool] = deque(maxlen=8)
+        self._drift_nudged = False
+        self._strategist_spawned_turn = False
+        self._turn_facts: list[str] = []
+        self._stage_label = ""
+        self._stage_since = 0.0
+        self._stage_steps = 0
+        self._stage_nudged = False
         self._projects: list[str] = []
         self._proposed_plan: tuple[str, list[dict[str, object]]] | None = None
         self._ctx_tokens: int = 0
+        self._sent_tokens: int = 0
+        self._recv_tokens: int = 0
+        self._running_tools: int = 0
+        self._round_approvals: dict[str, bool] = {}
+        self._background_results: list[Any] = []
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
         self._selection_copy_timer: Timer | None = None
@@ -633,6 +659,8 @@ class SamuraiApp(
         journal.write(Text(header, style=self.paint(self._DIM_STYLE)))
         journal.write(Markdown(response.text))
         self._run_tokens += response.usage.prompt_tokens + response.usage.completion_tokens
+        self._sent_tokens += response.usage.prompt_tokens
+        self._recv_tokens += response.usage.completion_tokens
         self._last_ai_text = response.text
         self._last_ai_code = _first_code_block(response.text)
 
@@ -643,6 +671,7 @@ class SamuraiApp(
                 Tab(self.translator.t("tabs.ops"), id="tab-ops"),
                 Tab(self.translator.t("tabs.bounty"), id="tab-bounty"),
                 Tab(self.translator.t("tabs.hunt"), id="tab-hunt"),
+                Tab(self.translator.t("tabs.scope"), id="tab-scope"),
                 id="view-tabs",
                 active="",
             )
@@ -659,6 +688,7 @@ class SamuraiApp(
                 yield BlockJournal(id="view-ops")
                 yield BlockJournal(id="view-bounty")
                 yield BlockJournal(id="view-hunt")
+                yield OptionList(id="view-scope")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
                 yield Static(id="side-swarm")
@@ -688,7 +718,9 @@ class SamuraiApp(
             if self.requested_operation_id:
                 self.operation = self.service.get(self.requested_operation_id)
             else:
-                self.operation = self.service.latest()
+                # closed means closed: a bare start shows the welcome and the
+                # operator picks. Loading `latest()` resurrected every closed tab.
+                self.operation = None
         except OperationNotFoundError:
             # Fresh install or empty base: the first chat message will spawn
             # its own operation tab, so there is nothing to load yet.
@@ -732,6 +764,7 @@ class SamuraiApp(
             ("tab-ops", "tabs.ops"),
             ("tab-bounty", "tabs.bounty"),
             ("tab-hunt", "tabs.hunt"),
+            ("tab-scope", "tabs.scope"),
         ):
             tab = tabs.query_one(f"#{tab_id}", Tab)
             tab.label = self.translator.t(key)
@@ -987,6 +1020,7 @@ class SamuraiApp(
         panes = [pane for pane, tab in (
             ("journal", "tab-chat"), ("view-ops", "tab-ops"),
             ("view-bounty", "tab-bounty"), ("view-hunt", "tab-hunt"),
+            ("view-scope", "tab-scope"),
         ) if pane == "journal" or self.query_one(f"#{tab}", Tab).display]
         current = self.query_one("#views", ContentSwitcher).current or "journal"
         index = panes.index(current) if current in panes else 0
@@ -1101,6 +1135,10 @@ class SamuraiApp(
         self.query_one("#views", ContentSwitcher).current = pane
         if pane != "journal":
             self._render_view(pane)
+        if pane == "view-scope":
+            # the scope tab is clicked and keyed, not typed into
+            self.query_one("#view-scope", OptionList).focus()
+            return
         self.focus_command_input(force=True)
 
     def _cmd_new_operation(self) -> None:
@@ -1184,7 +1222,50 @@ class SamuraiApp(
             self._write_line(f"[relay] {exc}")
             return
         self._write_dim(self.translator.t("relay.set", relay=self.operation.relay))
+        self._relay_canary(self.operation.relay)
         self._refresh_chrome()
+
+    def _relay_canary(self, relay: str) -> None:
+        """One probe through the fresh relay, so a bad prefix fails before the run."""
+        if not relay.strip():
+            return
+
+        def probe() -> None:
+            import os
+            import signal
+
+            proc: subprocess.Popen[str] | None = None
+            try:
+                # DEVNULL: a relay that asks (host key, password) must not
+                # steal the terminal's stdin from the TUI and look like a freeze;
+                # start_new_session so the timeout kills the relay's children too
+                proc = subprocess.Popen(
+                    ["bash", "-lc", f"{relay} id"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    start_new_session=True,
+                )
+                try:
+                    out, err = proc.communicate(timeout=25)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.communicate()
+                    ok, detail = False, "no answer within 25s"
+                else:
+                    output = out.strip() or err.strip()
+                    ok = proc.returncode == 0 and "uid=" in out
+                    detail = (
+                        output.splitlines()[-1][:160] if output else f"exit {proc.returncode}"
+                    )
+            except Exception as exc:  # noqa: BLE001 - reported, not raised
+                ok, detail = False, str(exc)[:160]
+            key = "relay.canary-ok" if ok else "relay.canary-fail"
+            text = self.translator.t(key, detail=detail)
+            self.call_from_thread(self._write_dim, text)
+
+        threading.Thread(target=probe, daemon=True).start()
 
     def _goal_command(self, argument: str) -> None:
         """`/goal <condition>` sets it; bare `/goal` shows it; `clear` drops it."""
@@ -1255,6 +1336,10 @@ class SamuraiApp(
     def action_op_previous(self) -> None:
         self._cycle_operation(-1)
 
+    def action_op_close(self) -> None:
+        """The binding existed from the start; the handler did not."""
+        self._close_operation()
+
     def _cycle_operation(self, step: int) -> None:
         if len(self._open_tabs) < 2:
             return
@@ -1291,14 +1376,27 @@ class SamuraiApp(
         self._refresh_chrome()
 
     def _close_operation(self) -> None:
-        """Close the current tab; the operation itself stays in the store."""
+        """Close the tab and delete the operation: Ctrl+W means gone.
+
+        Closing used to only hide the tab, so the next start loaded the same
+        operation back from `latest()` and the operator had to close it again.
+        The operation row takes its events, runs and transcript with it.
+        """
         if self.operation is None:
             return
-        self._store_tab_state()
+        if self._chat_busy:
+            self._write_dim(self.translator.t("chat.close-busy"))
+            return
         closed = self.operation.id
+        self._tab_states.pop(closed, None)
+        try:
+            self.service.delete(closed)
+        except OperationNotFoundError:
+            pass
         self._open_tabs = [op for op in self._open_tabs if op != closed]
         if self._open_tabs:
             self._open_operation(self._open_tabs[-1])
+            self._write_dim(self.translator.t("chat.closed", name=closed), process=False)
             return
         self.operation = None
         self._auto_title = None
@@ -1311,6 +1409,7 @@ class SamuraiApp(
         self._killchain_phase = ""
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
+        self._write_dim(self.translator.t("chat.closed", name=closed), process=False)
         self._switch_view("journal")
         self._refresh_chrome()
 
@@ -1389,6 +1488,9 @@ class SamuraiApp(
         self._refresh_chrome()
 
     def _render_view(self, pane: str) -> None:
+        if pane == "view-scope":
+            self._render_scope_view()
+            return
         log = self.query_one(f"#{pane}", BlockJournal)
         log.set_lines(
             [
@@ -1406,12 +1508,79 @@ class SamuraiApp(
             return self._hunt_lines()
         return []
 
+    def _toggle_scope_rule(self, rule: str) -> None:
+        """Click on the Scope tab: exclude the rule, or let it back in.
+
+        The contract keeps its includes and grows an exclusion, so the rule
+        stays visible (marked «+») and a second click restores it — nothing is
+        lost by an accidental click.
+        """
+        if not rule or self.operation is None:
+            return
+        scope = self.operation.scope
+        if rule in scope.excludes:
+            updated = ScopeContract(
+                includes=scope.includes,
+                excludes=tuple(item for item in scope.excludes if item != rule),
+                hosts=scope.hosts,
+            )
+            note = self.translator.t("scope.rule-back", rule=rule)
+        else:
+            updated = ScopeContract(
+                includes=scope.includes,
+                excludes=(*scope.excludes, rule),
+                hosts=scope.hosts,
+            )
+            note = self.translator.t("scope.rule-excluded", rule=rule)
+        self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._write_dim(note, process=False)
+        self._refresh_chrome()
+
+    def _scope_options(self) -> list[Option]:
+        """One option per include rule: ●/○ hit status, «+» for excluded rules."""
+        from samurai_ai.tui.killchain import hosts_in, scope_rows
+
+        if self.operation is None:
+            return []
+        touched = hosts_in(
+            str(run.parameters.get("command", ""))
+            for run in self.execution.list_runs(self.operation.id)[-40:]
+            if run.exit_code == 0
+        )
+        scope = self.operation.scope
+        options: list[Option] = []
+        for row in scope_rows(scope, touched):
+            excluded = row.rule in scope.excludes
+            if row.excluded and row.rule in scope.includes:
+                continue  # the include row already carries the exclusion mark
+            if excluded:
+                label = f"+ {row.rule}  {self.translator.t('scope.tab-excluded')}"
+            else:
+                label = f"{'●' if row.hit else '○'} {row.rule}"
+            if row.note:
+                label += f"  {row.note}"
+            options.append(Option(label, id=row.rule))
+        return options
+
+    def _render_scope_view(self) -> None:
+        listed = self.query_one("#view-scope", OptionList)
+        options = self._scope_options()
+        listed.clear_options()
+        if not options:
+            listed.add_option(Option(self.translator.t("scope.tab-empty"), id=""))
+            return
+        listed.add_options(options)
+
     _TASK_COLORS = {
         "done": "success",
         "skipped": "text-dim",
         "in-progress": "warning",
         "blocked": "danger",
     }
+
+    #: stage watchdog: a stage that old with this many steps burned means stall
+    _STAGE_STALL_SECONDS = 600
+    _STAGE_STALL_STEPS = 20
 
     _STEP_COLORS = {
         "executed": "success",
@@ -1578,6 +1747,9 @@ class SamuraiApp(
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option is None:
+            return
+        if event.option_list.id == "view-scope":
+            self._toggle_scope_rule(str(event.option.id or ""))
             return
         if event.option_list.id != "command-suggestions":
             return
@@ -2804,11 +2976,48 @@ class SamuraiApp(
             excludes = ", ".join(scope.excludes) or self.translator.t("scope.none")
             self._write_line("[scope] " + self.translator.t("scope.excludes", rules=excludes))
             return
+        verb, _, rest = target.partition(" ")
+        if verb == "add" and rest.strip():
+            self._scope_edit(add=rest.split())
+            return
+        if verb in ("rm", "remove") and rest.strip():
+            self._scope_edit(remove=rest.split())
+            return
         decision = scope.evaluate(target)
         level = "allow" if decision.allowed else "deny"
         self._write_line(
             f"[{level}] {decision.target}: {decision.reason.value} — {decision.detail}"
         )
+
+    def _scope_edit(
+        self, *, add: list[str] | None = None, remove: list[str] | None = None
+    ) -> None:
+        """`/scope add …` and `/scope rm …`: the operator edits the contract inline."""
+        assert self.operation is not None
+        scope = self.operation.scope
+        includes = list(scope.includes)
+        for rule in add or []:
+            if rule not in includes:
+                includes.append(rule)
+        for rule in remove or []:
+            if rule in includes:
+                includes.remove(rule)
+        try:
+            updated = ScopeContract(
+                includes=tuple(includes), excludes=scope.excludes, hosts=scope.hosts
+            )
+        except Exception as exc:  # noqa: BLE001 - a bad rule is reported, not crashed
+            self._write_line(f"[scope] {exc}")
+            return
+        self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._write_dim(
+            self.translator.t(
+                "scope.edited",
+                added=", ".join(add or []) or "—",
+                removed=", ".join(remove or []) or "—",
+            )
+        )
+        self._refresh_chrome()
 
     def _plan_lines(self) -> list[str]:
         if not self.operation:
@@ -3527,19 +3736,26 @@ class SamuraiApp(
             for meta in self.vault.list_metadata(self.operation.id)
             if not self._is_service_key(meta.name)
         ]
-        loot_block.entries = names
+        # captured flags are loot too — and in CTF they are the point
+        flags: list[str] = []
+        if self.operation.mode is OperationMode.CTF_HTB:
+            flags = [flag.value for flag in self.ctf.list_flags(self.operation.id)]
+        loot_block.entries = [*flags, *names]
         secrets = Text()
         secrets.append(self.translator.t("side.creds") + "\n", style=self.paint("dim accent"))
-        if not names:
+        if not names and not flags:
             secrets.append(
                 self.translator.t("side.creds-empty"), style=self.paint("dim text-faint")
             )
-        for name in names[: SideBlock.LIMIT]:
+        for value in flags[: SideBlock.LIMIT]:
+            secrets.append("⚑ ", style=self.paint("success"))
+            secrets.append(value + "\n", style=self.paint("bold $text"))
+        for name in names[: max(0, SideBlock.LIMIT - len(flags))]:
             secrets.append("· ", style=self.paint("dim"))
             secrets.append(name + "\n", style=self.paint("text"))
-        if len(names) > SideBlock.LIMIT:
+        if len(loot_block.entries) > SideBlock.LIMIT:
             secrets.append(
-                self.translator.t("side.more", left=len(names) - SideBlock.LIMIT),
+                self.translator.t("side.more", left=len(loot_block.entries) - SideBlock.LIMIT),
                 style=self.paint("accent"),
             )
         loot_block.update(secrets)
@@ -3570,11 +3786,18 @@ class SamuraiApp(
         challenge = self._challenge_flag_total()
         facts = nodes_to_payloads(self.graph.for_operation(self.operation.id))
         levels = self._impact_levels(self.operation.id)
+        intent_texts = [
+            node.text()
+            for node in self.graph.for_operation(self.operation.id)
+            if node.kind is NodeKind.INTENT
+            and node.state in (NodeState.OPEN, NodeState.RUNNING)
+        ]
         return phase_for(
             self.operation.mode,
             tasks,
             fact_payloads=facts,
             impact_levels=levels,
+            intent_texts=intent_texts,
             flag_count=len(flags),
             flag_total=challenge,
             verified_findings=verified,
@@ -3616,7 +3839,7 @@ class SamuraiApp(
             for node in self.graph.for_operation(self.operation.id)
             if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
         ]
-        rows = access_rows(facts)
+        rows = access_rows(facts, self.operation.scope)
         if len(rows) < 2:
             panel.display = False
             return
@@ -3697,12 +3920,17 @@ class SamuraiApp(
             strip.mount(tab)
 
     def _close_operation_by_id(self, operation_id: str) -> None:
-        """Right-click on the strip closes that tab; the operation stays."""
+        """Right-click close deletes the operation, whichever tab it is."""
         if self.operation is not None and self.operation.id == operation_id:
             self._close_operation()
             return
         self._open_tabs = [op for op in self._open_tabs if op != operation_id]
         self._tab_states.pop(operation_id, None)
+        try:
+            self.service.delete(operation_id)
+        except OperationNotFoundError:
+            pass
+        self._write_dim(self.translator.t("chat.closed", name=operation_id), process=False)
         self._refresh_operations_strip()
 
     def _refresh_killchain(self) -> None:
@@ -3712,11 +3940,21 @@ class SamuraiApp(
             widget.display = False
             return
         widget.display = True
+        current_phase = chain.current
+        if current_phase != self._stage_label:
+            self._stage_label = current_phase
+            self._stage_since = time.monotonic()
+            goal = self._current_goal()
+            self._stage_steps = goal.spent_steps if goal is not None else 0
+            self._stage_nudged = False
         line = Text()
         for phase in chain.phases:
             if phase == chain.current:
                 line.append(f"▶ {self._phase_label(phase)} ",
                             style=self.paint("bold risk-mid"))
+                hint = self.translator.t(f"killchain.exit.{phase}")
+                if hint != f"killchain.exit.{phase}":
+                    line.append(f"· {hint} ", style=self.paint("dim text-faint"))
             else:
                 done = chain.phases.index(phase) < chain.phases.index(chain.current)
                 mark = "✓" if done else "·"
@@ -3834,22 +4072,33 @@ class SamuraiApp(
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
-        bar.append(f" | ctx {self._ctx_tokens} tok")
+        bar.append(" | ")
         limit = self._context_limit()
         if limit:
             ratio = self._ctx_tokens / limit
             token = "success" if ratio < 0.6 else ("risk-mid" if ratio < 0.85 else "danger")
+            filled = min(10, round(ratio * 10))
             bar.append(
-                f" {self._ctx_tokens // 1000}k/{limit // 1000}k",
+                "▓" * filled + "░" * (10 - filled)
+                + f" {self._ctx_tokens // 1000}k/{limit // 1000}k",
                 style=self.paint(token),
             )
-        bar.append(f" | Σ {self._run_tokens} tok")
+        else:
+            bar.append(f"ctx {self._ctx_tokens} tok")
+        bar.append(
+            f" | ⇈{self._sent_tokens // 1000}k ⇊{self._recv_tokens // 1000}k"
+            f" · Σ {self._run_tokens} tok",
+            style=self.paint("dim $text-dim"),
+        )
         if getattr(self, "_run_cost", 0.0):
             bar.append(f" | ${self._run_cost:.4f}")
         if self._turn_started is not None:
             elapsed = int(time.monotonic() - self._turn_started)
             bar.append(f" | ⏱ {elapsed // 60}:{elapsed % 60:02d}", style=self.paint("$accent"))
-            if self._current_tool:
+            if self._running_tools > 1:
+                # several commands of one round run together: count them
+                bar.append(f" | ▶ {self._running_tools}∥", style=self.paint("dim $text-dim"))
+            elif self._current_tool:
                 bar.append(
                     f" | ▶ {self._current_tool[:32]}", style=self.paint("dim $text-dim")
                 )
@@ -3866,12 +4115,36 @@ class SamuraiApp(
         """While a turn runs the bar shows elapsed time and the current tool."""
         if self._turn_started is not None:
             self._refresh_chrome()
+            self._watch_stage_stall()
+
+    def _watch_stage_stall(self) -> None:
+        """A stage that does not move while steps burn needs a re-plan, not patience."""
+        if self._stage_nudged or not self._stage_label or self._stage_since == 0:
+            return
+        if time.monotonic() - self._stage_since < self._STAGE_STALL_SECONDS:
+            return
+        goal = self._current_goal()
+        if goal is None or goal.spent_steps - self._stage_steps < self._STAGE_STALL_STEPS:
+            return
+        self._stage_nudged = True
+        minutes = int((time.monotonic() - self._stage_since) / 60)
+        self._write_dim(
+            self.translator.t(
+                "killchain.stalled", stage=self._stage_label, minutes=minutes,
+                steps=goal.spent_steps - self._stage_steps,
+            )
+        )
+        self._steer_queue.append(
+            self.translator.t("killchain.stalled-note", stage=self._stage_label)
+        )
 
     def _refresh_hunt_tab(self) -> None:
         """The progress tab exists for every operation: findings and hypotheses
         live there even when no brute-force/fuzz task is in the plan."""
         tab = self.query_one("#tab-hunt", Tab)
         tab.display = self.operation is not None
+        # the scope tab edits the contract, so it only shows with an operation
+        self.query_one("#tab-scope", Tab).display = self.operation is not None
 
     def _refresh_goal_strip(self, item: Static) -> None:
         goal = self._current_goal()
@@ -3910,10 +4183,19 @@ class SamuraiApp(
         return str(self.translator.t("strip.agent-now", tool=runs[-1].tool_id))
 
     def _context_limit(self) -> int:
-        """The active model's context window, or 0 when unknown."""
+        """The active model's context window, or 0 when unknown.
+
+        An operator override wins: a registered limit can lag behind the real
+        deployment (a 65k entry on a 1M model)."""
         model_id = self.models.default_model()
         if not model_id:
             return 0
+        override = self.settings.get_value(f"model.context_limit.{model_id}")
+        if override:
+            try:
+                return max(0, int(override))
+            except ValueError:
+                pass
         try:
             model, _ = self.models.resolve_model(model_id)
         except Exception:  # noqa: BLE001 - an unknown model has no gauge
@@ -3930,9 +4212,11 @@ class SamuraiApp(
                 item.display = False
             return
         if self.operation.goal:
-            goal_item.update(
-                Text("◎ " + self.operation.goal[:60], style=self.paint("$accent"))
-            )
+            # the goal fills what the other strip items left, not a fixed 60
+            limit = max(30, self.size.width - 60)
+            goal_text = self.operation.goal
+            shown = goal_text if len(goal_text) <= limit else goal_text[: limit - 1] + "…"
+            goal_item.update(Text("◎ " + shown, style=self.paint("$accent")))
             goal_item.tooltip = self.operation.goal
             goal_item.display = True
         else:

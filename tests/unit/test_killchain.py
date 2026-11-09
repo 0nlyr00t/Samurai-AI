@@ -91,6 +91,34 @@ def test_access_rows_ignore_facts_without_hosts() -> None:
     assert access_rows(["nothing useful here", ""]) == []
 
 
+def test_access_rows_skip_out_of_scope_mentions() -> None:
+    """A gateway or resolver quoted by a fact is not access — scope decides."""
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.tui.killchain import access_rows
+
+    facts = [
+        "IP цели верный: HTB API отдаёт DutyBound = 10.129.138.134, "
+        "lab-гейт 10.8.1.1, dns 1.1.1.1"
+    ]
+    scope = ScopeContract(includes=("10.129.138.134",))
+    rows = access_rows(facts, scope)
+    assert [row.host for row in rows] == ["10.129.138.134"]
+    # and without a scope the old behaviour stays
+    assert len(access_rows(facts)) == 3
+
+
+def test_open_intents_move_the_stage_too() -> None:
+    """The chat path writes its work as graph intents; the rail must see them."""
+    chain = phase_for(
+        OperationMode.CTF_HTB,
+        [],
+        intent_texts=["Собрать SSTI payload для заметок билета"],
+    )
+    assert chain.current == "foothold"
+    # and without them the same operation is still at recon
+    assert phase_for(OperationMode.CTF_HTB, []).current == "recon"
+
+
 def test_ctf_counter_reads_flags_and_not_verified_findings() -> None:
     """The counter follows the mode: flags only exist in CTF."""
     ctf = phase_for(OperationMode.CTF_HTB, [], flag_count=2, flag_total=2, verified_findings=9)

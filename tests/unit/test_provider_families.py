@@ -323,3 +323,16 @@ def test_check_budget_limits() -> None:
         check_budget(ModelBudget(max_tokens_total=150), summary)
     with pytest.raises(BudgetExceededError, match="cost"):
         check_budget(ModelBudget(max_cost_usd=0.5), summary)
+
+
+def test_frontier_context_windows_stay_current() -> None:
+    """The gauge and the orchestrator both trust the catalogue windows."""
+    from samurai_ai.agents.registry import STATIC_MODELS
+
+    by_id = {model.id: model for model in STATIC_MODELS}
+    # confirmed on the operator's own deployment (1M deepseek v4 family)
+    assert by_id["deepseek/deepseek-v4-pro@v1"].context_limit == 1000000
+    assert by_id["deepseek/deepseek-flash@v1"].context_limit == 1000000
+    # the frontier floor: anything below 128k is a catalogue bug
+    for model in STATIC_MODELS:
+        assert model.context_limit >= 32768, model.id

@@ -256,3 +256,44 @@ def decide(
     if reusable and risk.empty:
         return Decision(action="silent")
     return Decision(action="ask")
+
+
+#: Families that finish in seconds: a resolver answer, a banner, a page.
+_QUICK_COMMANDS = frozenset(
+    {"curl", "dig", "host", "nslookup", "whois", "ping", "nc", "ncat", "wget", "openssl"}
+)
+#: Families that legitimately run for minutes: port sweeps, brute force, enumeration.
+_LONG_COMMANDS = frozenset(
+    {
+        "nmap", "masscan", "rustscan", "ffuf", "feroxbuster", "gobuster", "dirb",
+        "dirsearch", "wfuzz", "nikto", "hydra", "medusa", "sqlmap", "nuclei",
+        "subfinder", "amass", "testssl.sh", "enum4linux",
+    }
+)
+#: Short leash for quick families, long for sweeps; a relayed run doubles both
+#: because the far side of a VPN answers on its own schedule.
+DEFAULT_WINDOW_SECONDS = 120.0
+QUICK_WINDOW_SECONDS = 25.0
+LONG_WINDOW_SECONDS = 900.0
+
+
+def command_window(command: str, *, relayed: bool = False) -> float:
+    """How long to give a command before it is a timeout rather than work.
+
+    A flat 120 s killed every `nmap -p-` after two minutes of real scanning (six
+    such timeouts in one live run) while making a `curl` wait two minutes for a
+    dead port. The family decides, not one number for everything.
+    """
+    # every token, not just the first: «cd /tmp && ffuf …» is still a sweep
+    names = {
+        token.rsplit("/", 1)[-1].lower()
+        for token in command.replace(";", " ").split()
+        if token and not token.startswith("-")
+    }
+    if names & _LONG_COMMANDS:
+        window = LONG_WINDOW_SECONDS
+    elif names & _QUICK_COMMANDS:
+        window = QUICK_WINDOW_SECONDS
+    else:
+        window = DEFAULT_WINDOW_SECONDS
+    return window * (2 if relayed else 1)
