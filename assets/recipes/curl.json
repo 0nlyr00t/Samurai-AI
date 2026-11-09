@@ -8,21 +8,59 @@
   "risk_class": "r2",
   "network": "direct",
   "read_only": true,
-  "capabilities": ["http"],
-  "execution": {"native": true, "container": false, "relay_supported": true},
+  "capabilities": [
+    "http"
+  ],
+  "execution": {
+    "native": true,
+    "container": false,
+    "relay_supported": true,
+    "native_preferred": false
+  },
   "provision": {
     "packages": {
-      "linux": {"manager": "apt", "package": "curl", "sudo": true},
-      "macos": {"manager": "brew", "package": "curl", "sudo": false}
+      "linux": {
+        "manager": "apt",
+        "package": "curl",
+        "sudo": true
+      },
+      "macos": {
+        "manager": "brew",
+        "package": "curl",
+        "sudo": false
+      }
     },
-    "healthcheck": ["-V"],
-    "limitations": ["scope is checked by the adapter only: a native curl bypasses the egress proxy"]
+    "healthcheck": [
+      "-V"
+    ],
+    "limitations": [
+      "scope is checked by the adapter only: a native curl bypasses the egress proxy"
+    ]
   },
   "params": {
-    "url": {"type": "string", "description": "In-scope http(s) URL", "required": true, "max_length": 400}
+    "url": {
+      "type": "string",
+      "description": "In-scope http(s) URL",
+      "required": true,
+      "max_length": 400
+    }
   },
-  "targets": {"param": "url", "kind": "url-host", "max": 1},
-  "argv": ["-sS", "--max-time", "30", "-D", "-", "{url}"],
+  "targets": {
+    "param": "url",
+    "kind": "url-host",
+    "max": 1
+  },
+  "argv": [
+    "-sS",
+    "--max-time",
+    "30",
+    "-D",
+    "-",
+    "{url}"
+  ],
   "parser": "text-lines",
-  "limits": {"timeout_seconds": 45, "memory_mb": 128}
+  "limits": {
+    "timeout_seconds": 45,
+    "memory_mb": 128
+  }
 }
