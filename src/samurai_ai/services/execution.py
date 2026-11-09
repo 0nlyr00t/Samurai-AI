@@ -250,6 +250,8 @@ class ToolExecutionService:
 
         if getattr(adapter, "relay_supported", False):
             adapter.relay = operation.relay.strip()
+        if getattr(adapter, "is_native", False):
+            return  # a native adapter builds the prefix into its own argv
         if not hasattr(adapter, "_runner"):
             return
         relay = operation.relay.strip()

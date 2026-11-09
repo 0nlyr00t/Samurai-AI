@@ -138,6 +138,9 @@ class ManifestExecution(BaseModel):
 
     #: argv without the executable: the same template for native and container
     native: bool = False
+    #: false keeps the typed adapter in front (the HTTP broker pins DNS and
+    #: revalidates scope; a native curl would lose that for a small speed win)
+    native_preferred: bool = True
     project_local: bool = False
     container: bool = True
     relay_supported: bool = False

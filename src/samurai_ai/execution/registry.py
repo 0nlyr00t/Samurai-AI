@@ -64,9 +64,33 @@ class ToolRegistry:
         dynamic_resolver: DynamicToolResolver | None = None,
     ) -> None:
         self._adapters: dict[tuple[str, int], ToolAdapter] = {}
+        #: native variants by tool id: same definition, a run on this machine
+        self._native: dict[str, ToolAdapter] = {}
         self._dynamic_resolver = dynamic_resolver
         for adapter in adapters:
             self.register(adapter)
+
+    def register_native(self, adapter: ToolAdapter, *, standalone: bool = False) -> None:
+        """A native path for a registered tool, or the only path for a new one."""
+        tool_id = adapter.definition.id
+        known = any(registered == tool_id for registered, _ in self._adapters)
+        if not known:
+            if not standalone:
+                raise ToolValidationError(
+                    f"native adapter {tool_id} has no registered definition to stand for"
+                )
+            self.register(adapter)
+        self._native[tool_id] = adapter
+
+    def native_for(self, tool_id: str) -> ToolAdapter | None:
+        """The native variant, when this machine can actually run it."""
+        adapter = self._native.get(tool_id)
+        if adapter is None:
+            return None
+        available = getattr(adapter, "resolved_available", None)
+        if callable(available) and not available():
+            return None
+        return adapter
 
     def register(self, adapter: ToolAdapter) -> None:
         definition = adapter.definition
@@ -91,12 +115,17 @@ class ToolRegistry:
         if not versions:
             raise ToolNotFoundError(f"tool not found: {tool_id}")
         resolved = version if version is not None else versions[-1]
+        if version is None:
+            native = self.native_for(tool_id)
+            if native is not None:
+                return native
         adapter = self._adapters.get((tool_id, resolved))
         if adapter is None:
             raise ToolNotFoundError(f"tool not found: {tool_id} v{resolved}")
         return adapter
 
     def definitions(self) -> list[ToolDefinition]:
+        # native variants share the definition of their container sibling
         static = [
             adapter.definition
             for _, adapter in sorted(self._adapters.items(), key=lambda item: item[0])
@@ -582,7 +611,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
     )
     from samurai_ai.execution.virtualization import VmControlTool, VmDiskTool
 
-    return ToolRegistry(
+    registry = ToolRegistry(
         adapters=(
             LocalEchoTool(),
             ProcessExecTool(),
@@ -611,6 +640,35 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
         ),
         dynamic_resolver=dynamic_resolver,
     )
+    for adapter, standalone in _native_tools(registry):
+        registry.register_native(adapter, standalone=standalone)
+    return registry
+
+
+def _native_tools(registry: ToolRegistry) -> tuple[Any, ...]:
+    """Native variants from the reviewed catalogue, bound to their own definition.
+
+    A recipe only becomes usable when the machine has the binary and the adapter
+    it describes is registered, so the parameter schema stays the adapter's.
+    """
+    from samurai_ai.execution.native import NativeTool
+    from samurai_ai.services.catalog import RecipeCatalog, recipes_directory
+
+    tools: list[Any] = []
+    for tool_id, recipe in RecipeCatalog(recipes_directory()).load_all().items():
+        if not (recipe.execution.native or recipe.execution.project_local):
+            continue
+        if not recipe.execution.native_preferred:
+            continue
+        standalone = recipe.execution.project_local
+        try:
+            definition = registry.get(tool_id).definition
+        except ToolNotFoundError:
+            # a tool with no typed adapter yet is native-only: its own definition
+            definition = recipe.definition()
+            standalone = True
+        tools.append((NativeTool(recipe, definition), standalone))
+    return tuple(tools)
 
 
 __all__ = [
