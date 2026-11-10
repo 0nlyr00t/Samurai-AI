@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -43,9 +44,36 @@ from samurai_ai.services.catalog import RecipeCatalog
 from samurai_ai.services.fabric import ProvisionReason, ToolResolver, platform_key
 
 #: package-manager binaries the provisioner may spawn, and nothing else
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+#: log levels a tool prefixes its own output with
+_NOISE_PREFIXES = ("[ERR", "[WRN", "[WAR", "[DBG")
+_VERSIONISH = re.compile(r"version|\bv\d|\d+\.\d+", re.I)
+
 _SHELL_SAFE = frozenset({"apt-get", "brew", "python3", "sudo", "cp", "mkdir"})
 _INSTALL_TIMEOUT = 600.0
 _HEALTHCHECK_TIMEOUT = 30.0
+
+
+def strip_ansi(text: str) -> str:
+    return _ANSI.sub("", text)
+
+
+def version_line(text: str) -> str:
+    """The line that reports a version, not the tool's warning noise.
+
+    Tools prefix output with their own levels (`[ERR]`, `[INF]`); taking the
+    first line recorded a colour-escaped error as the version.
+    """
+    lines = [line.strip() for line in strip_ansi(text).splitlines() if line.strip()]
+    for line in lines:
+        if line.startswith(_NOISE_PREFIXES):
+            continue
+        if _VERSIONISH.search(line):
+            return line[:200]
+    for line in lines:
+        if not line.startswith(_NOISE_PREFIXES):
+            return line[:200]
+    return lines[0][:200] if lines else ""
 
 
 class Provisioner:
@@ -274,7 +302,7 @@ class Provisioner:
                 healthcheck=self._healthcheck_command(recipe),
             )
         )
-        return output.strip().splitlines()[0][:200] if healthy and output.strip() else None
+        return version_line(output) if healthy and output.strip() else None
 
     def _execute(
         self, operation_id: str, run: ProvisionRun, state: ProvisionState
@@ -311,7 +339,7 @@ class Provisioner:
             return
         state.status = ProvisionStatus.READY
         state.error = ""
-        state.installed_version = output.strip().splitlines()[0][:200] if output.strip() else ""
+        state.installed_version = version_line(output)
         state.resolved_path = (
             shutil.which(run.plan.healthcheck[0]) if run.plan.healthcheck else ""
         ) or ""

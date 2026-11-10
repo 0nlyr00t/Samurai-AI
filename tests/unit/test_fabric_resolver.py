@@ -7,12 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from samurai_ai.assets import assets_root
 from samurai_ai.domain.environment import Arch, EnvironmentDetector, OsFamily
 from samurai_ai.domain.tool_manifest import ToolManifest
 from samurai_ai.services.catalog import RecipeCatalog
 from samurai_ai.services.fabric import ProvisionReason, ToolResolver, platform_key
 
-RECIPES = Path("assets/recipes")
+RECIPES = assets_root("recipes")
 
 
 def _profile(**overrides: object):  # type: ignore[no-untyped-def]

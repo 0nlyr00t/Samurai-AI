@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/samurai-logo.jpg" width="880" alt="Samurai AI — самурай с катаной в красном росчерке-кольце и вордмарк SAMURAI-AI">
+  <img src="src/samurai_ai/assets/samurai-logo.jpg" width="880" alt="Samurai AI — самурай с катаной в красном росчерке-кольце и вордмарк SAMURAI-AI">
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
 TUI и CLI, состояние на машине оператора, секреты в локальном vault. Инструменты исполняются в контейнерах с закреплённым digest; выход за scope и опасные действия проходят через политику, а не через доверие к модели.
 
 <p align="center">
-  <img src="assets/samurai-tui.ru.png" width="1080" alt="TUI Samurai AI: журнал операции с шагами агента, находкой и ожидающим одобрением, план 1/3">
+  <img src="src/samurai_ai/assets/samurai-tui.ru.png" width="1080" alt="TUI Samurai AI: журнал операции с шагами агента, находкой и ожидающим одобрением, план 1/3">
 </p>
 
 ## Установка

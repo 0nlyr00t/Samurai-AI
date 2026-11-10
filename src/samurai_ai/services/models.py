@@ -359,6 +359,9 @@ class ModelService:
                 response.usage.completion_tokens,
             ),
         }
+        if response.usage.cached_tokens:
+            # only when the gateway actually cached: a zero is noise in the log
+            payload["cached_tokens"] = response.usage.cached_tokens
         if extra_payload:
             payload.update(extra_payload)
         self.operations.repository.append_event(
