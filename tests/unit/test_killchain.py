@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from samurai_ai.domain.kernel import PlanTask, RiskClass, TaskStatus
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.tui.killchain import KillChain, phase_for
@@ -169,3 +171,95 @@ def test_the_marker_table_covers_every_fallback_phase() -> None:
         missing = set(chain[1:]) - reachable
         assert not missing, f"{mode} has unreachable stages: {missing}"
 
+
+
+def _chain(current: str = "recon") -> object:
+    from samurai_ai.tui.killchain import KillChain
+
+    return KillChain(("recon", "foothold", "privesc"), current, "flags", 0, 2)
+
+
+def _task(title: str, status: str, required: tuple[str, ...] = ()) -> object:
+    from samurai_ai.domain.kernel import PlanTask
+
+    return PlanTask(id=title.split()[0], title=title, status=status, required_artifacts=required)
+
+
+def test_a_phase_is_complete_only_behind_the_current_one() -> None:
+    from samurai_ai.tui.killchain import PhaseState, phase_views
+
+    views = phase_views(_chain("foothold"), [_task("recon scan", "done")])  # type: ignore[arg-type]
+    assert [view.state for view in views] == [
+        PhaseState.COMPLETE,
+        PhaseState.READY,
+        PhaseState.NOT_STARTED,
+    ]
+
+
+def test_a_blocked_task_blocks_the_phase_and_names_itself() -> None:
+    from samurai_ai.tui.killchain import PhaseState, phase_views
+
+    views = phase_views(
+        _chain("foothold"),  # type: ignore[arg-type]
+        [_task("foothold shell access", "blocked")],
+    )
+    assert views[1].state is PhaseState.BLOCKED
+    assert views[1].reason == "foothold shell access"
+
+
+def test_a_failed_gate_blocks_the_phase_it_names() -> None:
+    from samurai_ai.tui.killchain import PhaseState, phase_views
+
+    views = phase_views(
+        _chain("recon"),  # type: ignore[arg-type]
+        [_task("recon scan", "done")],
+        gates=[("recon gate", "failed")],
+    )
+    assert views[0].state is PhaseState.BLOCKED
+    assert views[0].reason == "recon gate"
+
+
+def test_a_missing_artifact_is_an_unmet_criterion_not_a_guess() -> None:
+    from samurai_ai.tui.killchain import PhaseState, phase_views
+
+    task = _task("recon scan", "done", ("scan-output",))
+    blocked = phase_views(_chain("recon"), [task], artifacts=[])  # type: ignore[arg-type]
+    assert blocked[0].state is PhaseState.BLOCKED
+    assert blocked[0].missing == ("scan-output",)
+    ready = phase_views(_chain("recon"), [task], artifacts=["scan-output"])  # type: ignore[arg-type]
+    assert ready[0].state is PhaseState.READY
+
+
+def test_an_override_needs_a_known_phase_and_a_reason(tmp_path: object) -> None:
+    from samurai_ai.domain.operations import OperationMode, ScopeContract
+    from samurai_ai.services.kernel import KernelService
+    from samurai_ai.services.killchain import KillchainService, PhaseOverrideError
+    from samurai_ai.services.operations import OperationService
+    from samurai_ai.storage.database import Database
+    from samurai_ai.storage.kernel import KernelRepository
+    from samurai_ai.storage.operations import OperationRepository
+
+    database = Database(Path(str(tmp_path)) / "k.sqlite")
+    operations = OperationService(OperationRepository(database))
+    kernel = KernelService(operations, KernelRepository(database))
+    service = KillchainService(operations, kernel)
+    operation = operations.create("K", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.1",)))
+
+    service.override(operation.id, "loot", "flag captured by hand")
+    assert service.active(operation.id) == ("loot", "flag captured by hand")
+    service.clear(operation.id)
+    assert service.active(operation.id) is None
+
+    try:
+        service.override(operation.id, "impact", "wrong chain")
+    except PhaseOverrideError as exc:
+        assert "impact" in str(exc)
+    else:  # pragma: no cover - the chain has no impact phase in CTF
+        raise AssertionError("an unknown phase must be refused")
+
+    try:
+        service.override(operation.id, "loot", "   ")
+    except PhaseOverrideError as exc:
+        assert "reason" in str(exc)
+    else:  # pragma: no cover - an override without a reason is noise
+        raise AssertionError("a reasonless override must be refused")
