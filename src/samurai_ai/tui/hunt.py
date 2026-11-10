@@ -11,6 +11,7 @@ Nothing here decides anything: it counts statuses the kernel already holds.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
@@ -94,6 +95,18 @@ _PRIOR: tuple[tuple[float, tuple[str, ...]], ...] = (
     (0.45, ("default", "дефолт", "weak", "brute", "брут", "spray", "перебор")),
     (0.25, ("misconfig", "конфиг", "exposure", "утечк", "leak", "debug")),
 )
+
+
+def _age_of(node: Any) -> str:
+    """How long the hypothesis has been open, coarse enough to scan."""
+    created = getattr(node, "created_at", None)
+    if created is None:
+        return ""
+    minutes = max(0, int((datetime.now(UTC) - created).total_seconds() // 60))
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    return f"{hours}h" if hours < 24 else f"{hours // 24}d"
 
 
 def hypothesis_score(title: str, facts: list[str]) -> float:
@@ -192,14 +205,14 @@ class HuntController:
         lines.append(
             Text(self.translator.t("hunt.title-hypotheses"), style=self.paint("bold $accent"))
         )
-        for state_mark, title, outcome in self._hypothesis_rows():
-            lines.append(
-                Text.assemble(
-                    (f"{state_mark} ", self.paint("$text")),
-                    (title, self.paint("$text")),
-                    (f"  — {outcome}", self.paint("dim text-dim")) if outcome else ("", ""),
-                )
-            )
+        for row in self._hypothesis_rows():
+            line = Text()
+            for part in row:
+                line.append_text(part)
+            lines.append(line)
+        if not self._hypothesis_rows():
+            lines.append(Text(self.translator.t("hunt.no-hypotheses"),
+                              style=self.paint("dim text-faint")))
         lines.append(Text())
         lines.append(
             Text(
@@ -219,16 +232,29 @@ class HuntController:
         "exhausted": "✗",
     }
 
-    def _hypothesis_rows(self) -> list[tuple[str, str, str]]:
-        """Open and settled hypotheses, live ones first by expected payoff."""
+    #: what a hypothesis's evidence says about it, worst case first
+    _QUALITY = (
+        ("refuted", "hunt.quality.refuted", "danger"),
+        ("doubtful", "hunt.quality.doubtful", "risk-mid"),
+        ("supported", "hunt.quality.supported", "success"),
+    )
+
+    def _hypothesis_rows(self) -> list[list[Text]]:
+        """Live hypotheses first, each with its evidence, next test and age.
+
+        The order still uses the class prior × evidence score, but the label is
+        qualitative: a percentage from a prior nobody can check reads as more
+        certainty than there is.
+        """
         if self.operation is None:
             return []
         nodes = list(self.graph.for_operation(self.operation.id))
         facts = [
-            str(node.payload.get("summary") or node.text())
+            node
             for node in nodes
             if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
         ]
+        fact_texts = [str(node.payload.get("summary") or node.text()) for node in facts]
         intents = [node for node in nodes if node.kind is NodeKind.INTENT]
         live = {"running", "open"}
 
@@ -242,27 +268,91 @@ class HuntController:
         intents.sort(
             key=lambda node: (
                 0 if node.state.value in live else 1,
-                -hypothesis_score(node.text(), facts)
+                -hypothesis_score(node.text(), fact_texts)
                 if node.state.value in live
                 else order_index(node),
             )
         )
-        rows: list[tuple[str, str, str]] = []
+        rows: list[list[Text]] = []
         for node in intents[:12]:
-            mark = self._HYPOTHESIS_MARKS.get(node.state.value, "?")
-            outcome = str(
-                node.payload.get("outcome")
-                or node.blocked_reason
-                or node.payload.get("reason")
-                or ""
-            )
-            if node.state.value in live:
-                score = hypothesis_score(node.text(), facts)
-                outcome = outcome or f"~{int(score * 100)}%"
-            rows.append((mark, node.text(), outcome))
-        if not rows:
-            return [("", self.translator.t("hunt.no-hypotheses"), "")]
+            rows.append(self._hypothesis_line(node, facts))
         return rows
+
+    def _hypothesis_line(self, node: Any, facts: list[Any]) -> list[Text]:
+        """One hypothesis: mark, title, evidence counts, plan and age."""
+        support, refute = self._evidence_for(node, facts)
+        mark = self._HYPOTHESIS_MARKS.get(node.state.value, "?")
+        live = node.state.value in ("running", "open")
+        quality = self._quality(support, refute) if live else None
+        line = [
+            Text(f"{mark} ", style=self.paint("$text")),
+            Text(node.text(), style=self.paint("$text")),
+        ]
+        if quality is not None:
+            line.append(Text(f"  {self.translator.t(quality[1])}", style=self.paint(quality[2])))
+        if support or refute:
+            line.append(
+                Text(f"  +{support}/−{refute}", style=self.paint("dim text-dim"))
+            )
+            for fact in self._evidence_links(node, facts)[:3]:
+                line.append(Text(" "))
+                line.append(entity_span(fact[0][:6], "node", fact[1],
+                                       base_style=self.paint("dim text-dim")))
+        next_test = str(node.payload.get("next_test") or "")
+        if next_test:
+            line.append(Text(f"  → {next_test}", style=self.paint("dim text-dim")))
+        stop = str(node.payload.get("stop_condition") or "")
+        if stop:
+            line.append(Text(f"  ⊘ {stop}", style=self.paint("dim text-faint")))
+        age = _age_of(node)
+        if age:
+            stalled = live and node.state.value == "running" and not support and not refute
+            line.append(
+                Text(
+                    f"  {self.translator.t('hunt.stalled' if stalled else 'hunt.age', age=age)}",
+                    style=self.paint("warning" if stalled else "dim text-faint"),
+                )
+            )
+        outcome = str(
+            node.payload.get("outcome")
+            or node.blocked_reason
+            or node.payload.get("reason")
+            or ""
+        )
+        if outcome and not live:
+            line.append(Text(f"  — {outcome}", style=self.paint("dim text-dim")))
+        return line
+
+    def _evidence_links(self, node: Any, facts: list[Any]) -> list[tuple[str, str]]:
+        """(label, node id) of the facts behind the hypothesis, for the jump."""
+        yielded = {item.id for item in self.graph.facts_of(node.id)}
+        links: list[tuple[str, str]] = []
+        for fact in facts:
+            if fact.id in yielded:
+                links.append((fact.text()[:24], fact.id))
+        return links
+
+    def _quality(self, support: int, refute: int) -> tuple[str, str, str]:
+        if not support and not refute:
+            return ("doubtful", "hunt.quality.untested", "dim text-dim")
+        if refute > support:
+            return self._QUALITY[0]
+        if support > refute:
+            return self._QUALITY[2]
+        return self._QUALITY[1]
+
+    def _evidence_for(self, node: Any, facts: list[Any]) -> tuple[int, int]:
+        """Confirmed facts the hypothesis produced, split by polarity."""
+        yielded = {item.id for item in self.graph.facts_of(node.id)}
+        support = refute = 0
+        for fact in facts:
+            if fact.id not in yielded:
+                continue
+            if str(fact.payload.get("result") or "") == "negative":
+                refute += 1
+            else:
+                support += 1
+        return support, refute
 
     def refresh_hunt(self) -> None:
         """Re-render the tab if it is the visible pane."""
