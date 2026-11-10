@@ -178,7 +178,8 @@ class ChatController:
         _turn_started: float | None
         _current_tool: str
         _run_tokens: int
-        _run_cost: float
+        _run_costs: dict[str, float]
+        _run_cost_unknown: set[str]
         _shell_background: bool
         _ctx_tokens: int
         _sent_tokens: int
@@ -1497,7 +1498,12 @@ class ChatController:
             if response is None:
                 return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
             self._count_usage(response.usage)
-            self._add_cost(model_id, response.usage.prompt_tokens, response.usage.completion_tokens)
+            self._add_cost(
+                model_id,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+                response.usage.cached_tokens,
+            )
             if not response.tool_calls:
                 self._remember(Message(role="assistant", content=response.text))
                 self._trim_chat_history()
@@ -1575,7 +1581,12 @@ class ChatController:
         if final is None:
             return TerminalReason.DENIED
         self._count_usage(final.usage)
-        self._add_cost(model_id, final.usage.prompt_tokens, final.usage.completion_tokens)
+        self._add_cost(
+            model_id,
+            final.usage.prompt_tokens,
+            final.usage.completion_tokens,
+            final.usage.cached_tokens,
+        )
         self._remember(Message(role="assistant", content=final.text))
         self._trim_chat_history()
         if final.text.strip():
@@ -1663,13 +1674,30 @@ class ChatController:
         if response.text.strip():
             self._remember(Message(role="assistant", content=response.text))
 
-    def _add_cost(self, model_id: str, prompt_tokens: int, completion_tokens: int) -> None:
-        """Accumulate the run's spend; free models simply add nothing."""
+    def _add_cost(
+        self,
+        model_id: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cached_tokens: int = 0,
+    ) -> None:
+        """Accumulate the run's spend per model; an unknown tariff stays unknown.
+
+        Cached prompt tokens are billed at a discount the provider does not
+        disclose, so they are counted at zero rather than at full price: the
+        ⚡ share in the bar says how much of the prompt that was.
+        """
+        self._run_costs.setdefault(model_id, 0.0)
         try:
             model, _provider = self.models.resolve_model(model_id)
         except Exception:  # noqa: BLE001 - an unpriced model is not an error
+            self._run_cost_unknown.add(model_id)
             return
-        self._run_cost += model.estimate_cost(prompt_tokens, completion_tokens)
+        if not model.price_known:
+            self._run_cost_unknown.add(model_id)
+            return
+        billed_prompt = max(0, prompt_tokens - cached_tokens)
+        self._run_costs[model_id] += model.estimate_cost(billed_prompt, completion_tokens)
 
     def _max_tool_rounds(self) -> int:
         """Tool rounds per turn: the operator's setting, bounded, default 32.

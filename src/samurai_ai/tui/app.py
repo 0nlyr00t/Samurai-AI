@@ -531,7 +531,10 @@ class SamuraiApp(
         self._shell_background = False
         # live status: what the running turn is doing right now
         self._run_tokens = 0
-        self._run_cost = 0.0
+        #: spend per model id: routes differ and so do their tariffs
+        self._run_costs: dict[str, float] = {}
+        #: models whose tariff is not on file — their share is `n/a`, not zero
+        self._run_cost_unknown: set[str] = set()
         self._turn_started: float | None = None
         self._current_tool = ""
         self._expandable: list[tuple[str, int | None, str, str]] = []
@@ -4411,6 +4414,18 @@ class SamuraiApp(
         self._relay_warned = True
         self._write_dim(self.translator.t("relay.hint"), process=False)
 
+    def _cost_text(self) -> str:
+        """Spend per model; a route with no tariff on file shows `n/a`."""
+        parts = [
+            f"{model_id.split('/')[-1].split('@')[0]} ${amount:.4f}"
+            for model_id, amount in self._run_costs.items()
+            if amount or model_id not in self._run_cost_unknown
+        ]
+        for model_id in sorted(self._run_cost_unknown):
+            name = model_id.split("/")[-1].split("@")[0]
+            parts.append(f"{name} n/a")
+        return " · ".join(parts)
+
     def _refresh_chrome(self) -> None:
         self._refresh_hint_bar()
         self._refresh_attack_map()
@@ -4469,8 +4484,8 @@ class SamuraiApp(
             f" · Σ {self._run_tokens} tok",
             style=self.paint("dim $text-dim"),
         )
-        if getattr(self, "_run_cost", 0.0):
-            bar.append(f" | ${self._run_cost:.4f}")
+        if self._run_costs or self._run_cost_unknown:
+            bar.append(" | " + self._cost_text(), style=self.paint("dim $text-dim"))
         if self._turn_started is not None:
             elapsed = int(time.monotonic() - self._turn_started)
             bar.append(f" | ⏱ {elapsed // 60}:{elapsed % 60:02d}", style=self.paint("$accent"))
