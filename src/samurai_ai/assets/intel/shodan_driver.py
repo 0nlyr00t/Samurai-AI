@@ -8,6 +8,7 @@ the tool's own argv.
 import json
 import os
 import sys
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -22,7 +23,7 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
-def get(path: str, **params) -> dict:
+def get(path: str, **params: object) -> dict[str, Any]:
     key = os.environ.get("SHODAN_API_KEY", "")
     if not key:
         fail("SHODAN_API_KEY is empty — set it in /settings")
@@ -31,7 +32,8 @@ def get(path: str, **params) -> dict:
     request = Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urlopen(request, timeout=60) as answer:  # noqa: S310 - fixed host
-            return json.loads(answer.read().decode())
+            payload: dict[str, Any] = json.loads(answer.read().decode())
+            return payload
     except HTTPError as exc:
         fail(f"HTTP {exc.code}: {exc.read().decode()[:200]}")
     except URLError as exc:

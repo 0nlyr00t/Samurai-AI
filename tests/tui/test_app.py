@@ -7088,6 +7088,13 @@ def test_the_status_bar_shows_a_context_gauge(tmp_path: Path) -> None:
             assert "50k/128k" in bar
             assert "▓" in bar and "░" in bar  # the gauge is drawn
             assert "⇈32k ⇊18k" in bar
+            # a cache hit is shown next to the gauge, and only when there is one
+            assert "⚡" not in bar
+            app._cache_share = 0.42
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "⚡42%" in bar
 
     asyncio.run(exercise())
 

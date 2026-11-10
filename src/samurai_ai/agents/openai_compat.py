@@ -129,11 +129,28 @@ def parse_completion(
         usage=Usage(
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
+            cached_tokens=_cached_tokens(usage),
         ),
         model_id=model_id,
         provider_id=provider_id,
         latency_ms=latency_ms,
     )
+
+
+def _cached_tokens(usage: dict[str, Any]) -> int:
+    """Prefix-cache hits, however the gateway spells them; 0 when it cannot say."""
+    details = usage.get("prompt_tokens_details") or {}
+    for value in (
+        details.get("cached_tokens") if isinstance(details, dict) else None,
+        usage.get("cache_read_input_tokens"),
+        usage.get("prompt_cache_hit_tokens"),
+    ):
+        if value:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 0
 
 
 def _json_dict(raw: object) -> dict[str, Any]:
@@ -240,7 +257,7 @@ class OpenAICompatProvider:
         """Drain the SSE stream into text parts and tool calls."""
         text_parts: list[str] = []
         tool_map: dict[int, dict[str, Any]] = {}
-        prompt_tokens = completion_tokens = 0
+        prompt_tokens = completion_tokens = cached_tokens = 0
         for raw in self.broker.fetch_stream(
             f"{self.provider.base_url}/chat/completions",
             body=json.dumps(payload).encode("utf-8"),
@@ -260,6 +277,7 @@ class OpenAICompatProvider:
             usage_payload = chunk.get("usage") or {}
             prompt_tokens = usage_payload.get("prompt_tokens", prompt_tokens)
             completion_tokens = usage_payload.get("completion_tokens", completion_tokens)
+            cached_tokens = _cached_tokens(usage_payload) or cached_tokens
             for choice in chunk.get("choices") or []:
                 delta = choice.get("delta") or {}
                 piece = delta.get("content")
@@ -279,7 +297,9 @@ class OpenAICompatProvider:
                     if function.get("arguments"):
                         entry["function"]["arguments"] += function["arguments"]
         return text_parts, tool_map, Usage(
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
         )
 
     def _headers(self) -> dict[str, str]:
