@@ -2,7 +2,7 @@
 
 A manifest cannot ship a file, and the sandbox mounts nothing, so a stdlib driver
 has to travel in argv as a `python3 -c` literal. The sources stay reviewable in
-`assets/intel/` and `assets/loot/`; this script keeps the JSON in sync and a test
+`src/samurai_ai/assets/intel/` and `.../loot/`; this script keeps the JSON in sync and a test
 fails when they drift.
 
     uv run python ops/build_inline_manifests.py
@@ -14,7 +14,8 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOLS = ROOT / "assets" / "tools"
+ASSETS = ROOT / "src" / "samurai_ai" / "assets"
+TOOLS = ASSETS / "tools"
 
 #: the interpreter image, pinned by *index* digest so arm64 runs natively
 IMAGE = (
@@ -46,7 +47,7 @@ URL_TARGETS = {"param": "url", "kind": "url-host", "max": 1}
 
 TOOLS_SPEC = (
     {
-        "driver": "assets/intel/shodan_driver.py",
+        "driver": "src/samurai_ai/assets/intel/shodan_driver.py",
         "name": "intel.shodan",
         "title": "Shodan lookup",
         "description": "Passive Shodan data for one in-scope IP (services, banners, "
@@ -58,7 +59,7 @@ TOOLS_SPEC = (
         "hosts": ("api.shodan.io",),
     },
     {
-        "driver": "assets/intel/censys_driver.py",
+        "driver": "src/samurai_ai/assets/intel/censys_driver.py",
         "name": "intel.censys",
         "title": "Censys lookup",
         "description": "Passive Censys host asset for an in-scope IP or a certificate "
@@ -73,7 +74,7 @@ TOOLS_SPEC = (
         "hosts": ("api.platform.censys.io",),
     },
     {
-        "driver": "assets/loot/loot_driver.py",
+        "driver": "src/samurai_ai/assets/loot/loot_driver.py",
         "name": "loot.scan",
         "title": "Credential scan of a body",
         "description": "Fetch one in-scope URL and pull credential-shaped strings out "

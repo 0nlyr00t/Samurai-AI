@@ -8,13 +8,22 @@
 
 | Платформа | Статус | Чем |
 |---|---|---|
-| macOS arm64 (эта машина) | проверено живьём | `tool capabilities`, `tool provision --dry-run`, `tool verify scan.nmap` |
+| macOS arm64 (эта машина) | проверено живьём | capabilities, dry-run, реальная установка hashcat через brew, no-op, verify |
+| Parrot Security 7.4 aarch64 (VM 10.211.55.27) | проверено живьём | capabilities, dry-run (apt), реальная установка nuclei через `sudo -n`, no-op, verify, отказ manual-only |
 | Kali Linux | не проверено | только fake-окружение и юниты |
-| Parrot OS | не проверено | только fake-окружение и юниты |
 | macOS x86_64 | не проверено | только fake-окружение и юниты |
 
-Непроверенная платформа — это непроверенная платформа: рецепты Kali/Parrot
-опираются на apt и на разбор `/etc/os-release`, но живьём они не запускались.
+Прогон на Parrot (2026-11-09): `os` = `linux parrot arm64`, docker отсутствует и
+честно помечен, `nmap/ffuf/hashcat/curl` найдены нативно, `nuclei` отсутствовал;
+dry-run показал `sudo -n apt-get install -y --no-install-recommends nuclei` и не
+оставил следов; установка дала `ready` и версию после healthcheck, повтор —
+`provision.skipped`, `verify` вернул версию с кодом 0. Живой прогон вскрыл две
+шероховатости и обе исправлены: цветовые ANSI-последовательности в записи
+версии и выбор строки-предупреждения вместо строки версии.
+
+Непроверенная платформа — это непроверенная платформа: Kali и macOS x86_64
+живьём не запускались, их рецепты опираются на apt/brew и на разбор
+`/etc/os-release`, но проверены только fake-окружением.
 
 ## Ручной сценарий (свежая VM, любой дистрибутив из таблицы)
 
