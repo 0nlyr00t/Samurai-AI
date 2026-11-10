@@ -335,6 +335,16 @@ class ChatController:
                 "properties": {
                     "title": {"type": "string", "minLength": 1, "maxLength": 200},
                     "parent_fact": {"type": "string"},
+                    "next_test": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "description": "The next test that could falsify this, in one line.",
+                    },
+                    "stop_condition": {
+                        "type": "string",
+                        "maxLength": 160,
+                        "description": "When to give up on it, before starting the work.",
+                    },
                 },
                 "required": ["title"],
                 "additionalProperties": False,
@@ -2178,6 +2188,13 @@ class ChatController:
                 parent = facts[-1].id if facts else root.id
             assert self.operation is not None
             intent = self.graph.open_intent(self.operation.id, task_id, title, parent)
+            plan = {
+                key: str(call.arguments.get(key) or "").strip()[:200]
+                for key in ("next_test", "stop_condition")
+                if str(call.arguments.get(key) or "").strip()
+            }
+            if plan:
+                intent = self.graph.annotate_intent(intent.id, plan)
         except GraphError as exc:
             return Message(role="user", content=f"[tool open_intent] {exc}")
         self._graph_used = True

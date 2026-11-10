@@ -7,13 +7,14 @@ import subprocess
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 from rich.markdown import Markdown
 from rich.text import Text
 from textual import events
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
@@ -66,6 +67,7 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.goals import GoalService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.kernel import KernelService
+from samurai_ai.services.killchain import KillchainService, PhaseOverrideError  # noqa: I001
 from samurai_ai.services.lessons import LessonService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -473,14 +475,17 @@ class SamuraiApp(
         #: the input — the operator was reading something, and stays there
         self._focus_before_modal: Widget | None = None
         self._killchain_phase: str = ""
+        self._phase_override: tuple[str, str] | None = None
         #: the operator forced the side column on; a narrow width then keeps it
         self._side_forced = False
+        self._compact_hud = False
         self._live_answer = None
         self._turn_todo: list[tuple[str, str]] = []
         self._chat_history: list[Message] = []
         self._progress = Stagnation()
         self._graph_used = False
         self._last_turn_reason: TerminalReason | None = None
+        self.phases = KillchainService(service, kernel)
         self.chat_history = ChatHistoryService(
             ChatHistoryRepository(service.repository.database), SecretRedactor()
         )
@@ -968,9 +973,12 @@ class SamuraiApp(
         self.call_after_refresh(self._restore_focus_if_free)
 
     def _restore_focus_if_free(self) -> None:
-        if not self.is_running:
+        # a dismiss that lands during shutdown has no screen left to ask about
+        try:
+            screen = self.screen
+        except ScreenStackError:
             return
-        if isinstance(self.screen, ModalScreen):
+        if isinstance(screen, ModalScreen):
             # the closing screen opened another one; its own close restores
             return
         self.restore_focus()
@@ -1114,6 +1122,8 @@ class SamuraiApp(
 
     #: below this width the side column and the rail fold away on their own
     _NARROW_WIDTH = 100
+    #: between narrow and roomy the rail keeps only markers and the counter
+    _COMPACT_WIDTH = 110
 
     def action_toggle_side(self) -> None:
         """Show or hide the side column; a narrow terminal remembers the choice."""
@@ -1130,6 +1140,7 @@ class SamuraiApp(
 
     def _apply_chrome_fit(self, width: int) -> None:
         narrow = width < self._NARROW_WIDTH
+        self._compact_hud = width < self._COMPACT_WIDTH
         side = self.query_one("#side", Vertical)
         rail = self.query_one("#killchain", Static)
         if narrow and not self._side_forced:
@@ -3703,6 +3714,42 @@ class SamuraiApp(
             self.translator.t("reconcile.unknown", runs=", ".join(marked_runs)), process=False
         )
 
+    def _show_phase(self, argument: str) -> None:
+        """Show, override or clear the phase; an override needs a reason."""
+        if self.operation is None:
+            self._write_line("[phase] " + self.translator.t("status.no-operation"))
+            return
+        phases = self.phases.phases(self.operation.id)
+        argument = argument.strip()
+        if not argument:
+            active = self.phases.active(self.operation.id)
+            current = self._killchain().current
+            self._write_line(
+                "[phase] "
+                + self.translator.t("phase.current", phase=current, phases=", ".join(phases))
+            )
+            if active:
+                self._write_line("[phase] " + self.translator.t("phase.override", reason=active[1]))
+            else:
+                self._write_line("[phase] " + self.translator.t("phase.auto"))
+            return
+        if argument == "auto":
+            self.phases.clear(self.operation.id)
+            self._phase_override = None
+            self._killchain_phase = ""
+            self._write_dim(self.translator.t("phase.cleared"))
+            self._refresh_chrome()
+            return
+        phase, _, reason = argument.partition(" ")
+        try:
+            self.phases.override(self.operation.id, phase, reason)
+        except PhaseOverrideError as exc:
+            self._write_line("[phase] " + self.translator.t("phase.bad", detail=str(exc)))
+            return
+        self._killchain_phase = ""
+        self._write_dim(self.translator.t("phase.set", phase=phase, reason=reason.strip()))
+        self._refresh_chrome()
+
     def _show_reconcile(self) -> None:
         if not self.operation:
             self._write_line("[reconcile] " + self.translator.t("status.no-operation"))
@@ -3800,6 +3847,7 @@ class SamuraiApp(
             if run.exit_code == 0
         )
         rows = scope_rows(self.operation.scope, touched)
+        scope_block.row_ids = [f"scope:{row.rule}" for row in rows]
         scope_block.entries = [
             f"{row.rule} {row.note}".strip() + (" (excluded)" if row.excluded else "")
             for row in rows
@@ -3829,34 +3877,117 @@ class SamuraiApp(
             )
         scope_block.update(lines)
 
-        names = [
-            meta.name
-            for meta in self.vault.list_metadata(self.operation.id)
-            if not self._is_service_key(meta.name)
-        ]
-        # captured flags are loot too — and in CTF they are the point
-        flags: list[str] = []
-        if self.operation.mode is OperationMode.CTF_HTB:
-            flags = [flag.value for flag in self.ctf.list_flags(self.operation.id)]
-        loot_block.entries = [*flags, *names]
+        entries = self._loot_entries(self._access_rows())
+        loot_block.row_ids = [entry.source_id for entry in entries]
+        loot_block.entries = [entry.label for entry in entries]
         secrets = Text()
         secrets.append(self.translator.t("side.creds") + "\n", style=self.paint("dim accent"))
-        if not names and not flags:
+        if not entries:
             secrets.append(
                 self.translator.t("side.creds-empty"), style=self.paint("dim text-faint")
             )
-        for value in flags[: SideBlock.LIMIT]:
-            secrets.append("⚑ ", style=self.paint("success"))
-            secrets.append(value + "\n", style=self.paint("bold $text"))
-        for name in names[: max(0, SideBlock.LIMIT - len(flags))]:
-            secrets.append("· ", style=self.paint("dim"))
-            secrets.append(name + "\n", style=self.paint("text"))
-        if len(loot_block.entries) > SideBlock.LIMIT:
+        for entry in entries[: SideBlock.LIMIT]:
+            mark = {"flag": "⚑ ", "secret": "· ", "access": "◆ "}.get(entry.kind, "· ")
+            secrets.append(mark, style=self.paint("success" if entry.kind == "flag" else "dim"))
+            secrets.append(entry.label, style=self.paint("text"))
+            if entry.used:
+                secrets.append(" ✚", style=self.paint("success"))
+            secrets.append("\n")
+        if len(entries) > SideBlock.LIMIT:
             secrets.append(
-                self.translator.t("side.more", left=len(loot_block.entries) - SideBlock.LIMIT),
+                self.translator.t("side.more", left=len(entries) - SideBlock.LIMIT),
                 style=self.paint("accent"),
             )
         loot_block.update(secrets)
+
+    def _access_rows(self) -> list[Any]:
+        """Confirmed facts as host/level rows, keeping each fact's node id."""
+        from samurai_ai.tui.killchain import access_rows
+
+        if self.operation is None:
+            return []
+        facts = [
+            (str(node.payload.get("summary") or node.text()), node.id)
+            for node in self.graph.for_operation(self.operation.id)
+            if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
+        ]
+        return access_rows(facts, self.operation.scope)
+
+    def _loot_entries(self, access: list[Any]) -> list[Any]:
+        """LOOT as domain rows: flags, non-service secrets and reached hosts.
+
+        Each row carries the id of what proves it, so a click reaches the
+        source instead of a copy of the shown string; secrets are listed by
+        name and their value stays masked until copied.
+        """
+        from samurai_ai.tui.killchain import LootEntry
+
+        if self.operation is None:
+            return []
+        entries: list[LootEntry] = []
+        if self.operation.mode is OperationMode.CTF_HTB:
+            for flag in self.ctf.list_flags(self.operation.id):
+                entries.append(
+                    LootEntry(
+                        kind="flag",
+                        label=flag.value,
+                        source_id=f"artifact:{flag.proof_artifact_id}"
+                        if flag.proof_artifact_id
+                        else f"flag:{flag.id}",
+                        at=flag.created_at.strftime("%H:%M"),
+                        secret=True,
+                    )
+                )
+        for meta in self.vault.list_metadata(self.operation.id):
+            if self._is_service_key(meta.name):
+                continue
+            entries.append(
+                LootEntry(
+                    kind="secret",
+                    label=meta.name,
+                    source_id=f"secret:{meta.name}",
+                    at=meta.created_at.strftime("%H:%M"),
+                    secret=True,
+                    used=self._secret_used(meta.name),
+                )
+            )
+        for row in access:
+            if not row.hit:
+                continue
+            entries.append(
+                LootEntry(
+                    kind="access",
+                    label=f"{row.host} · {row.level}",
+                    source_id=f"fact:{row.node_id}" if row.node_id else "",
+                    level=row.level,
+                )
+            )
+        return entries
+
+    def _secret_used(self, name: str) -> bool:
+        """Whether a run already consumed the secret — a used credential reads so."""
+        if self.operation is None:
+            return False
+        needle = f"secret:{name}"
+        events = self.service.repository.events(self.operation.id)
+        return any(needle in str(event.payload) for event in events)
+
+    def _open_loot_source(self, source_id: str) -> None:
+        """Click on a LOOT row: open what proves it, not a copy of its text."""
+        kind, _, ref = source_id.partition(":")
+        if kind == "artifact":
+            self.action_inspect_full("artifact", ref)
+            return
+        if kind == "fact":
+            self.action_inspect_full("node", ref)
+            return
+        if kind == "flag":
+            self._write_dim(self.translator.t("loot.flag", flag=ref))
+            return
+        if kind == "secret":
+            self._write_dim(self.translator.t("loot.secret", name=ref))
+            return
+        self._write_dim(self.translator.t("inspect.unknown", kind=kind, ref=ref))
 
     def _show_side_list(self, target: str, entries: list[str]) -> None:
         """The full SCOPE or LOOT list behind the «ещё N…» row."""
@@ -3890,7 +4021,7 @@ class SamuraiApp(
             if node.kind is NodeKind.INTENT
             and node.state in (NodeState.OPEN, NodeState.RUNNING)
         ]
-        return phase_for(
+        chain = phase_for(
             self.operation.mode,
             tasks,
             fact_payloads=facts,
@@ -3903,6 +4034,10 @@ class SamuraiApp(
             gate_total=gate_total,
             chain=tuple(gate.id for gate in plan.gates) if plan and plan.gates else None,
         )
+        self._phase_override = self.phases.active(self.operation.id)
+        if self._phase_override and self._phase_override[0] in chain.phases:
+            return replace(chain, current=self._phase_override[0])
+        return chain
 
     def _challenge_flag_total(self) -> int:
         """How many flags the challenge has, when the operation is one."""
@@ -3923,21 +4058,15 @@ class SamuraiApp(
         """Stage names stay English in every locale — they are terms of art."""
         return phase.replace("-", " ")
 
-
     def _refresh_attack_map(self) -> None:
         """The access graph, when there is more than one host to name."""
-        from samurai_ai.tui.killchain import access_rows, attack_map
+        from samurai_ai.tui.killchain import attack_map
 
         panel = self.query_one("#attack-map", Static)
         if self.operation is None:
             panel.display = False
             return
-        facts = [
-            str(node.payload.get("summary") or node.text())
-            for node in self.graph.for_operation(self.operation.id)
-            if node.kind is NodeKind.FACT and node.state is NodeState.CONFIRMED
-        ]
-        rows = access_rows(facts, self.operation.scope)
+        rows = self._access_rows()
         if len(rows) < 2:
             panel.display = False
             return
@@ -4032,12 +4161,21 @@ class SamuraiApp(
         self._refresh_operations_strip()
 
     def _refresh_killchain(self) -> None:
+        """Draw the rail from proven state, with the current phase's exit gap."""
+        from samurai_ai.tui.killchain import PhaseState, phase_views
+
         widget = self.query_one("#killchain", Static)
         chain = self._killchain()
         if not chain or self.size.width < self._NARROW_WIDTH:
             widget.display = False
             return
         widget.display = True
+        views = phase_views(
+            chain,
+            self._killchain_tasks(),
+            gates=self._killchain_gates(),
+            artifacts=self._artifact_names(),
+        )
         current_phase = chain.current
         if current_phase != self._stage_label:
             self._stage_label = current_phase
@@ -4045,19 +4183,39 @@ class SamuraiApp(
             goal = self._current_goal()
             self._stage_steps = goal.spent_steps if goal is not None else 0
             self._stage_nudged = False
+        compact = self.size.width < self._COMPACT_WIDTH
         line = Text()
-        for phase in chain.phases:
-            if phase == chain.current:
-                line.append(f"▶ {self._phase_label(phase)} ",
-                            style=self.paint("bold risk-mid"))
-                hint = self.translator.t(f"killchain.exit.{phase}")
-                if hint != f"killchain.exit.{phase}":
+        for view in views:
+            style = {
+                PhaseState.COMPLETE: "success",
+                PhaseState.ACTIVE: "bold risk-mid",
+                PhaseState.BLOCKED: "bold danger",
+                PhaseState.READY: "bold success",
+                PhaseState.NOT_STARTED: "dim text-faint",
+            }[view.state]
+            line.append(f"{view.marker} {self._phase_label(view.phase)} ", style=self.paint(style))
+            if view.state in (PhaseState.ACTIVE, PhaseState.READY) and not compact:
+                hint = self.translator.t(f"killchain.exit.{view.phase}")
+                if hint != f"killchain.exit.{view.phase}":
                     line.append(f"· {hint} ", style=self.paint("dim text-faint"))
-            else:
-                done = chain.phases.index(phase) < chain.phases.index(chain.current)
-                mark = "✓" if done else "·"
-                line.append(f"{mark} {self._phase_label(phase)} ",
-                            style=self.paint("success" if done else "dim text-faint"))
+                if view.goal:
+                    line.append(f"· {view.goal} ", style=self.paint("dim text-faint"))
+        current = next((view for view in views if view.phase == chain.current), None)
+        if compact:
+            current = None
+        if current is not None and current.state is PhaseState.BLOCKED:
+            line.append(f"· ✖ {current.reason} ", style=self.paint("danger"))
+        if current is not None and current.missing:
+            line.append(
+                self.translator.t("killchain.missing", items=", ".join(current.missing)),
+                style=self.paint("dim warning"),
+            )
+        coverage = None if compact else self._coverage_counts()
+        if coverage is not None and coverage[1]:
+            line.append(
+                self.translator.t("killchain.coverage", done=coverage[0], total=coverage[1]),
+                style=self.paint("dim text-faint"),
+            )
         if chain.counter_label:
             total = f"/{chain.counter_total}" if chain.counter_total else ""
             line.append(
@@ -4069,16 +4227,72 @@ class SamuraiApp(
         if chain.current and chain.current != self._killchain_phase:
             previous, self._killchain_phase = self._killchain_phase, chain.current
             if previous:
-                self._write_dim(
-                    self.translator.t(
-                        "killchain.moved",
-                        **{
-                            "from": self._phase_label(previous),
-                            "to": self._phase_label(chain.current),
-                        },
-                    ),
-                    process=False,
+                self._killchain_moved(previous, chain.current)
+
+    def _coverage_counts(self) -> tuple[int, int] | None:
+        """(covered, total) over surface and check classes, for the rail."""
+        from samurai_ai.tui.coverage import check_rows, summarise, surface_rows
+        from samurai_ai.tui.killchain import hosts_in, scope_rows
+
+        if self.operation is None:
+            return None
+        touched = hosts_in(
+            str(run.parameters.get("command", ""))
+            for run in self.execution.list_runs(self.operation.id)[-40:]
+            if run.exit_code == 0
+        )
+        rules = scope_rows(self.operation.scope, touched)
+        targets = [row.rule for row in rules if not row.excluded and not row.note]
+        excluded = [row.rule for row in rules if row.excluded]
+        rows = [
+            *surface_rows(targets, touched, excluded),
+            *check_rows(self._killchain_tasks()),
+        ]
+        return summarise(rows)
+
+    def _killchain_moved(self, previous: str, current: str) -> None:
+        """A phase change is a domain fact: it is journaled, not just drawn."""
+        if self.operation is not None:
+            self.service.repository.append_event(
+                OperationEvent(
+                    operation_id=self.operation.id,
+                    event_type="killchain.phase",
+                    payload={"from": previous, "to": current, "source": "evidence"},
                 )
+            )
+        self._write_dim(
+            self.translator.t(
+                "killchain.moved",
+                **{"from": self._phase_label(previous), "to": self._phase_label(current)},
+            ),
+            process=False,
+        )
+
+    def _killchain_tasks(self) -> list[Any]:
+        if self.operation is None:
+            return []
+        plan = self.kernel.get_current_plan(self.operation.id)
+        return list(plan.tasks) if plan else []
+
+    def _killchain_gates(self) -> list[tuple[str, str]]:
+        """Gate names with their status, for the phase blocked by a failed one."""
+        if self.operation is None:
+            return []
+        plan = self.kernel.get_current_plan(self.operation.id)
+        if plan is None:
+            return []
+        return [(gate.name, gate.status.value) for gate in plan.gates]
+
+    def _artifact_names(self) -> list[str]:
+        """Requirement strings already satisfied by an artifact of the operation."""
+        if self.operation is None:
+            return []
+        names: list[str] = []
+        for artifact in self.kernel.kernel.list_artifacts(self.operation.id):
+            if artifact.requirement:
+                names.append(artifact.requirement)
+            names.append(artifact.kind.value)
+        return names
 
     def _refresh_welcome(self) -> None:
         welcome = self.query_one("#welcome", Static)
