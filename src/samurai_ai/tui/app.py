@@ -478,6 +478,7 @@ class SamuraiApp(
         self._phase_override: tuple[str, str] | None = None
         #: the operator forced the side column on; a narrow width then keeps it
         self._side_forced = False
+        self._compact_hud = False
         self._live_answer = None
         self._turn_todo: list[tuple[str, str]] = []
         self._chat_history: list[Message] = []
@@ -1121,6 +1122,8 @@ class SamuraiApp(
 
     #: below this width the side column and the rail fold away on their own
     _NARROW_WIDTH = 100
+    #: between narrow and roomy the rail keeps only markers and the counter
+    _COMPACT_WIDTH = 110
 
     def action_toggle_side(self) -> None:
         """Show or hide the side column; a narrow terminal remembers the choice."""
@@ -1137,6 +1140,7 @@ class SamuraiApp(
 
     def _apply_chrome_fit(self, width: int) -> None:
         narrow = width < self._NARROW_WIDTH
+        self._compact_hud = width < self._COMPACT_WIDTH
         side = self.query_one("#side", Vertical)
         rail = self.query_one("#killchain", Static)
         if narrow and not self._side_forced:
@@ -4179,6 +4183,7 @@ class SamuraiApp(
             goal = self._current_goal()
             self._stage_steps = goal.spent_steps if goal is not None else 0
             self._stage_nudged = False
+        compact = self.size.width < self._COMPACT_WIDTH
         line = Text()
         for view in views:
             style = {
@@ -4189,13 +4194,15 @@ class SamuraiApp(
                 PhaseState.NOT_STARTED: "dim text-faint",
             }[view.state]
             line.append(f"{view.marker} {self._phase_label(view.phase)} ", style=self.paint(style))
-            if view.state in (PhaseState.ACTIVE, PhaseState.READY):
+            if view.state in (PhaseState.ACTIVE, PhaseState.READY) and not compact:
                 hint = self.translator.t(f"killchain.exit.{view.phase}")
                 if hint != f"killchain.exit.{view.phase}":
                     line.append(f"· {hint} ", style=self.paint("dim text-faint"))
                 if view.goal:
                     line.append(f"· {view.goal} ", style=self.paint("dim text-faint"))
         current = next((view for view in views if view.phase == chain.current), None)
+        if compact:
+            current = None
         if current is not None and current.state is PhaseState.BLOCKED:
             line.append(f"· ✖ {current.reason} ", style=self.paint("danger"))
         if current is not None and current.missing:
@@ -4203,11 +4210,10 @@ class SamuraiApp(
                 self.translator.t("killchain.missing", items=", ".join(current.missing)),
                 style=self.paint("dim warning"),
             )
-        coverage = self._coverage_counts()
-        if coverage is not None:
-            covered, on_table = coverage
+        coverage = None if compact else self._coverage_counts()
+        if coverage is not None and coverage[1]:
             line.append(
-                self.translator.t("killchain.coverage", done=covered, total=on_table),
+                self.translator.t("killchain.coverage", done=coverage[0], total=coverage[1]),
                 style=self.paint("dim text-faint"),
             )
         if chain.counter_label:

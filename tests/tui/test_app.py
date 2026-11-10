@@ -9391,3 +9391,59 @@ def test_the_coverage_line_and_board_show_what_is_still_untested(tmp_path: Path)
             await pilot.pause()
 
     asyncio.run(exercise())
+
+
+def test_the_rail_goes_compact_before_it_disappears(tmp_path: Path) -> None:
+    """Between narrow and roomy the rail keeps markers, drops the prose."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Compact lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.9",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(105, 30)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            rail = str(app.query_one("#killchain", Static).render())
+            assert "recon" in rail and "flags 0" in rail
+            assert "map the surface" not in rail
+            assert "coverage" not in rail
+            # and back to roomy restores the prose
+            await pilot.resize_terminal(150, 30)
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            rail = str(app.query_one("#killchain", Static).render())
+            assert "map the surface" in rail
+
+    asyncio.run(exercise())
+
+
+def test_an_empty_side_panel_says_what_to_do_next(tmp_path: Path) -> None:
+    """No decorative zeros: an empty panel names the next action."""
+    from samurai_ai.tui.widgets import SideBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            operation = stack[0].create(
+                "Empty lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.1",))
+            )
+            operation = operation.model_copy(
+                update={"scope": ScopeContract(includes=("10.0.0.1",))}
+            )
+            app.operation = operation
+            app._refresh_chrome()
+            await pilot.pause()
+            # a target exists, so TARGETS is not empty; LOOT still points ahead
+            assert "10.0.0.1" in str(app.query_one("#side-access", SideBlock).render())
+            assert "flags and secrets" in str(app.query_one("#side-creds", SideBlock).render())
+
+    asyncio.run(exercise())

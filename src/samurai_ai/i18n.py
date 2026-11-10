@@ -682,7 +682,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "mouse.disabled": "mouse capture off — the terminal handles selection and copy natively",
         "side.swarm": "SWARM",
         "side.access": "TARGETS",
-        "side.access-empty": "no targets in scope",
+        "side.access-empty": "no targets — /scope add <target>",
         "side.creds": "LOOT",
         "loot.flag": "flag {flag} — its proof artifact is one step from here",
         "loot.secret": "secret {name} — value stays masked until copied",
@@ -692,7 +692,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "side.list-hint": "read-only list — Esc closes",
         "side.list-empty": "(empty)",
         "side.secret-saved": "[vault] stored {name}",
-        "side.creds-empty": "no loot yet",
+        "side.creds-empty": "no loot yet — flags and secrets land here",
         "side.workspace": "workspace",
         "strategist.review-task": (
             "A fact was just confirmed: {fact}. Re-read the attack map this "
@@ -1504,7 +1504,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "mouse.disabled": "захват мыши выключен — выделение и копирование обычные, как в терминале",
         "side.swarm": "РОЙ",
         "side.access": "ЦЕЛИ",
-        "side.access-empty": "целей в скоупе нет",
+        "side.access-empty": "целей нет — /scope add <цель>",
         "side.creds": "LOOT",
         "loot.flag": "флаг {flag} — артефакт-подтверждение в одном шаге",
         "loot.secret": "секрет {name} — значение маскировано до копирования",
@@ -1514,7 +1514,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "side.list-hint": "только просмотр — Esc закрывает",
         "side.list-empty": "(пусто)",
         "side.secret-saved": "[хранилище] сохранён {name}",
-        "side.creds-empty": "добычи ещё нет",
+        "side.creds-empty": "добычи нет — флаги и секреты появятся здесь",
         "side.workspace": "рабочая папка",
         "strategist.review-task": (
             "A fact was just confirmed: {fact}. Re-read the attack map this "
