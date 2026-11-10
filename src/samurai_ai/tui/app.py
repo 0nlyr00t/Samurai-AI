@@ -4203,6 +4203,13 @@ class SamuraiApp(
                 self.translator.t("killchain.missing", items=", ".join(current.missing)),
                 style=self.paint("dim warning"),
             )
+        coverage = self._coverage_counts()
+        if coverage is not None:
+            covered, on_table = coverage
+            line.append(
+                self.translator.t("killchain.coverage", done=covered, total=on_table),
+                style=self.paint("dim text-faint"),
+            )
         if chain.counter_label:
             total = f"/{chain.counter_total}" if chain.counter_total else ""
             line.append(
@@ -4215,6 +4222,27 @@ class SamuraiApp(
             previous, self._killchain_phase = self._killchain_phase, chain.current
             if previous:
                 self._killchain_moved(previous, chain.current)
+
+    def _coverage_counts(self) -> tuple[int, int] | None:
+        """(covered, total) over surface and check classes, for the rail."""
+        from samurai_ai.tui.coverage import check_rows, summarise, surface_rows
+        from samurai_ai.tui.killchain import hosts_in, scope_rows
+
+        if self.operation is None:
+            return None
+        touched = hosts_in(
+            str(run.parameters.get("command", ""))
+            for run in self.execution.list_runs(self.operation.id)[-40:]
+            if run.exit_code == 0
+        )
+        rules = scope_rows(self.operation.scope, touched)
+        targets = [row.rule for row in rules if not row.excluded and not row.note]
+        excluded = [row.rule for row in rules if row.excluded]
+        rows = [
+            *surface_rows(targets, touched, excluded),
+            *check_rows(self._killchain_tasks()),
+        ]
+        return summarise(rows)
 
     def _killchain_moved(self, previous: str, current: str) -> None:
         """A phase change is a domain fact: it is journaled, not just drawn."""

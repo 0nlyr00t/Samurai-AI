@@ -263,3 +263,33 @@ def test_an_override_needs_a_known_phase_and_a_reason(tmp_path: object) -> None:
         assert "reason" in str(exc)
     else:  # pragma: no cover - an override without a reason is noise
         raise AssertionError("a reasonless override must be refused")
+
+
+def test_coverage_distinguishes_covered_pending_and_out_of_scope() -> None:
+    from samurai_ai.tui.coverage import CoverageState, summarise, surface_rows
+
+    rows = surface_rows(("a.example.com", "b.example.com", "c.example.com"),
+                        touched=["a.example.com"], excluded=["c.example.com"])
+    assert [row.state for row in rows] == [
+        CoverageState.COVERED,
+        CoverageState.PENDING,
+        CoverageState.BLOCKED_SCOPE,
+    ]
+    assert summarise(rows) == (1, 3)
+
+
+def test_a_blocked_check_class_carries_its_task_and_an_unasked_one_is_na() -> None:
+    from samurai_ai.tui.coverage import CoverageState, check_rows
+
+    rows = check_rows(
+        [
+            PlanTask(id="brute-1", title="brute force the login", status=TaskStatus.BLOCKED),
+            PlanTask(id="fuzz-1", title="fuzz paths", status=TaskStatus.DONE),
+        ]
+    )
+    states = {row.target: row.state for row in rows}
+    assert states["brute"] is CoverageState.BLOCKED_POLICY
+    assert states["fuzz"] is CoverageState.COVERED
+    assert states["spray"] is CoverageState.NOT_APPLICABLE
+    blocked = next(row for row in rows if row.target == "brute")
+    assert blocked.reason == "brute force the login"
