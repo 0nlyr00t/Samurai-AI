@@ -67,6 +67,10 @@ class GraphService:
         """Intents that keep a task open — named in the refusal, not counted."""
         return [node for node in self.graph.for_task(task_id) if node.open]
 
+    def facts_of(self, intent_id: str) -> list[GraphNode]:
+        """The facts an intent yielded — its evidence, confirmed or not."""
+        return self.graph.targets(intent_id, EdgeRel.YIELDS.value)
+
     def lineage(self, node_id: str) -> list[GraphNode]:
         """The chain from the node up to its origin, nearest ancestor first."""
         path: list[GraphNode] = []
@@ -318,6 +322,23 @@ class GraphService:
         return dismissed
 
     # --- internals --------------------------------------------------------
+
+    def annotate_intent(self, node_id: str, fields: dict[str, str]) -> GraphNode:
+        """Attach the next test and the stop condition to a hypothesis.
+
+        They are plan lines, not state: the verdict still needs facts, but a
+        hypothesis now says how it could be falsified before the work starts.
+        """
+        node = self.get(node_id)
+        if node.kind is not NodeKind.INTENT:
+            raise GraphInvariantError(f"{node.id} is a {node.kind.value}, not an intent")
+        payload = dict(node.payload)
+        for key, value in fields.items():
+            if key in ("next_test", "stop_condition") and value.strip():
+                payload[key] = value.strip()[:200]
+        self.graph.set_payload(node.id, payload, now=_now())
+        self._event(node.operation_id, "graph.intent.annotated", self.get(node.id))
+        return self.get(node.id)
 
     def _move(
         self,

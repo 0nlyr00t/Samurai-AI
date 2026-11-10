@@ -9283,3 +9283,74 @@ def test_a_used_secret_is_marked_and_its_value_stays_hidden(tmp_path: Path) -> N
             assert "✚" in text
 
     asyncio.run(exercise())
+
+
+def test_a_hypothesis_shows_its_evidence_plan_and_age(tmp_path: Path) -> None:
+    """A hypothesis is a claim with evidence, a next test and a deadline."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hypothesis lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt",
+        [PlanTask(id="t-1", title="check login", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            intent = app.graph.open_intent(operation.id, "t-1", "weak ssh password", origin.id)
+            app.graph.annotate_intent(
+                intent.id,
+                {"next_test": "hydra with 10k list", "stop_condition": "after 20 min"},
+            )
+            app.graph.start_intent(intent.id)
+            app.graph.record_fact(intent.id, "password hunter2 works on ssh")
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            text = app.query_one("#view-hunt", BlockJournal).text()
+            assert "weak ssh password" in text
+            # qualitative, not an invented percentage
+            assert "supported by evidence" in text
+            assert "%" not in text.split("Hypotheses")[1]
+            assert "+1/−0" in text
+            assert "→ hydra with 10k list" in text
+            assert "⊘ after 20 min" in text
+            assert "age 0m" in text
+
+    asyncio.run(exercise())
+
+
+def test_a_refuted_hypothesis_says_so(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Refuted lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt",
+        [PlanTask(id="t-1", title="check login", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            intent = app.graph.open_intent(operation.id, "t-1", "default creds", origin.id)
+            app.graph.start_intent(intent.id)
+            app.graph.record_fact(intent.id, "admin/admin refused", negative=True)
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            text = app.query_one("#view-hunt", BlockJournal).text()
+            assert "refuted by evidence" in text
+            assert "+0/−1" in text
+
+    asyncio.run(exercise())
