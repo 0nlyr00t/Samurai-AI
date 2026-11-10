@@ -349,3 +349,110 @@ def test_the_digest_keeps_the_tail() -> None:
     lines = [f"line {i}" for i in range(500)]
     out = goal_judge.digest(lines, limit=100)
     assert len(out) <= 100 and "line 499" in out
+
+
+def _provider(broker: object):
+    from samurai_ai.agents.openai_compat import OpenAICompatProvider
+    from samurai_ai.domain.models import ProviderDefinition
+
+    definition = ProviderDefinition(
+        id="fake", name="fake", base_url="http://fake", api_family="openai-compatible"
+    )
+    return OpenAICompatProvider(definition, None, broker=broker)  # type: ignore[arg-type]
+
+
+def _request():
+    from samurai_ai.agents.provider import ChatRequest, Message
+
+    return ChatRequest(
+        model_id="fake/m@v1", messages=(Message(role="user", content="hi"),), tools=()
+    )
+
+
+def test_empty_chunks_and_junk_tool_deltas_do_not_lose_the_answer() -> None:
+    """A malformed delta is skipped; the text around it still arrives."""
+    import asyncio
+
+    class _JunkBroker:
+        def fetch_stream(self, url, **kwargs):
+            yield b'data: {"choices":[{"delta":{"content":"a"}}]}\n'
+            yield b'data: {"choices":[{"delta":{}}]}\n'
+            yield b'data: {"choices":[{"delta":{"content":""}}]}\n'
+            yield (
+                b'data: {"choices":[{"delta":{"tool_calls":[{"index":"x",'
+                b'"function":{"name":"shell_exec","arguments":"{}"}}]}}]}\n'
+            )
+            yield b'data: not-json\n'
+            yield b'data: {"choices":["junk"]}\n'
+            yield b'data: {"choices":[{"delta":{"content":"b"}}]}\n'
+            yield b"data: [DONE]\n"
+
+    seen: list[str] = []
+    response = asyncio.run(_provider(_JunkBroker()).complete_stream(_request(), seen.append))
+    assert seen == ["a", "b"]
+    assert response.text == "ab"
+    assert response.tool_calls and response.tool_calls[0].name == "shell_exec"
+
+
+def test_reasoning_streams_separately_from_the_answer() -> None:
+    import asyncio
+
+    class _ReasoningBroker:
+        def fetch_stream(self, url, **kwargs):
+            yield b'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}\n'
+            yield b'data: {"choices":[{"delta":{"content":"done"}}]}\n'
+            yield b"data: [DONE]\n"
+
+    seen: list[str] = []
+    response = asyncio.run(_provider(_ReasoningBroker()).complete_stream(_request(), seen.append))
+    assert response.text == "done"
+    assert response.reasoning == "thinking"
+    assert seen == ["done"]  # reasoning does not leak into the answer
+
+
+def test_a_stop_request_ends_the_stream_with_what_arrived() -> None:
+    import asyncio
+
+    class _LongBroker:
+        def fetch_stream(self, url, **kwargs):
+            for index in range(5):
+                yield f'data: {{"choices":[{{"delta":{{"content":"{index}"}}}}]}}\n'.encode()
+
+    state = {"stop": False}
+    seen: list[str] = []
+
+    def on_token(token: str) -> None:
+        seen.append(token)
+        state["stop"] = True  # the operator pressed stop after the first token
+
+    response = asyncio.run(
+        _provider(_LongBroker()).complete_stream(
+            _request(), on_token, should_stop=lambda: state["stop"]
+        )
+    )
+    assert seen == ["0"]
+    assert response.text == "0"
+
+
+def test_a_mid_stream_failure_asks_the_view_to_reset_before_falling_back() -> None:
+    import asyncio
+
+    from samurai_ai.agents.provider import STREAM_RESET
+
+    class _BrokenBroker:
+        def fetch_stream(self, url, **kwargs):
+            yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n'
+            raise RuntimeError("socket died")
+
+    provider = _provider(_BrokenBroker())
+    from samurai_ai.agents.provider import ChatResponse
+
+    async def complete(request):  # type: ignore[no-untyped-def]
+        return ChatResponse(text="full", model_id=request.model_id, provider_id="fake")
+
+    provider.complete = complete  # type: ignore[method-assign]
+
+    seen: list[str] = []
+    response = asyncio.run(provider.complete_stream(_request(), seen.append))
+    assert seen == ["partial", STREAM_RESET]
+    assert response.text == "full"

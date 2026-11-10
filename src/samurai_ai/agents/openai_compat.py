@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from samurai_ai.agents.provider import (
+    STREAM_RESET,
     ChatRequest,
     ChatResponse,
     ImagePart,
@@ -137,6 +138,14 @@ def parse_completion(
     )
 
 
+def _usage(prompt_tokens: int, completion_tokens: int, cached_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens,
+    )
+
+
 def _cached_tokens(usage: dict[str, Any]) -> int:
     """Prefix-cache hits, however the gateway spells them; 0 when it cannot say."""
     details = usage.get("prompt_tokens_details") or {}
@@ -207,7 +216,10 @@ class OpenAICompatProvider:
         return parse_completion(request.model_id, self.provider.id, response, latency_ms)
 
     async def complete_stream(
-        self, request: ChatRequest, on_token: Callable[[str], None]
+        self,
+        request: ChatRequest,
+        on_token: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
     ) -> ChatResponse:
         """The same call with SSE streaming; text arrives through on_token.
 
@@ -218,13 +230,24 @@ class OpenAICompatProvider:
         payload = build_completion_payload(model_name, request)
         payload["stream"] = True
         started = time.monotonic()
+        sent: list[str] = []
+
+        def emit(token: str) -> None:
+            sent.append(token)
+            on_token(token)
+
         try:
-            text_parts, tool_map, usage = await asyncio.to_thread(
-                self._read_stream, payload, on_token
+            text_parts, reasoning_parts, tool_map, usage = await asyncio.to_thread(
+                self._read_stream, payload, emit, should_stop
             )
         except ProviderStreamError:
             raise
         except Exception:
+            if sent:
+                # tokens already reached the screen: the retry starts over, so
+                # tell the view to drop the partial answer first — otherwise the
+                # fallback answer doubles the text
+                on_token(STREAM_RESET)
             # a gateway without SSE must not break the turn: answer plainly
             return await self.complete(request)
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -249,13 +272,22 @@ class OpenAICompatProvider:
             model_id=request.model_id,
             provider_id=self.provider.id,
             latency_ms=latency_ms,
+            reasoning="".join(reasoning_parts),
         )
 
     def _read_stream(
-        self, payload: dict[str, Any], on_token: Callable[[str], None]
-    ) -> tuple[list[str], dict[int, dict[str, Any]], Usage]:
-        """Drain the SSE stream into text parts and tool calls."""
+        self,
+        payload: dict[str, Any],
+        on_token: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[list[str], list[str], dict[int, dict[str, Any]], Usage]:
+        """Drain the SSE stream into text parts, reasoning and tool calls.
+
+        Anything malformed is skipped rather than fatal: a chunk with a junk
+        index or a non-string content must not lose the answer that arrived.
+        """
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_map: dict[int, dict[str, Any]] = {}
         prompt_tokens = completion_tokens = cached_tokens = 0
         for raw in self.broker.fetch_stream(
@@ -279,13 +311,30 @@ class OpenAICompatProvider:
             completion_tokens = usage_payload.get("completion_tokens", completion_tokens)
             cached_tokens = _cached_tokens(usage_payload) or cached_tokens
             for choice in chunk.get("choices") or []:
+                if should_stop is not None and should_stop():
+                    # the operator stopped: what arrived is the answer
+                    return text_parts, reasoning_parts, tool_map, _usage(
+                        prompt_tokens, completion_tokens, cached_tokens
+                    )
+                if not isinstance(choice, dict):
+                    continue
                 delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_parts.append(reasoning)
                 piece = delta.get("content")
-                if piece:
+                if isinstance(piece, str) and piece:
                     text_parts.append(piece)
                     on_token(piece)
                 for call in delta.get("tool_calls") or []:
-                    index = int(call.get("index", 0))
+                    if not isinstance(call, dict):
+                        continue
+                    try:
+                        index = int(call.get("index", 0))
+                    except (TypeError, ValueError):
+                        index = len(tool_map)
                     entry = tool_map.setdefault(
                         index, {"id": call.get("id", ""), "function": {"name": "", "arguments": ""}}
                     )
@@ -296,10 +345,8 @@ class OpenAICompatProvider:
                         entry["function"]["name"] = function["name"]
                     if function.get("arguments"):
                         entry["function"]["arguments"] += function["arguments"]
-        return text_parts, tool_map, Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cached_tokens=cached_tokens,
+        return text_parts, reasoning_parts, tool_map, _usage(
+            prompt_tokens, completion_tokens, cached_tokens
         )
 
     def _headers(self) -> dict[str, str]:
