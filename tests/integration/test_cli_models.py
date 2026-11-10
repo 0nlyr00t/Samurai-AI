@@ -172,7 +172,11 @@ def test_cli_model_complete_approval_flow(
     )
     response = json.loads(capsys.readouterr().out)
     assert response["text"] == "cli:hello cli"
-    assert response["usage"] == {"prompt_tokens": 4, "completion_tokens": 2}
+    assert response["usage"] == {
+        "prompt_tokens": 4,
+        "completion_tokens": 2,
+        "cached_tokens": 0,
+    }
 
     assert (
         main(["--db", database, "--json", "operation", "show", operation_id, "--events"])

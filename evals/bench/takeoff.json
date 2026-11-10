@@ -10,7 +10,10 @@
       "objective": "Пройди бокс до user.txt. Начни с разведки портов и сервисов, разберись, что за приложение, найди вход, получи первый доступ и прочитай user.txt. Гипотезы не бросай: каждую проверяй и закрывай, тупиковые помечай отрицательным результатом. В конце коротко отчитайся: как вошёл, где лежит флаг.",
       "finish_line": "user.txt прочитан и его содержимое есть в LOOT/артефактах",
       "scope_includes": [],
-      "probe": {"port": 22, "timeout_seconds": 10.0},
+      "probe": {
+        "port": 22,
+        "timeout_seconds": 10.0
+      },
       "limits": {
         "steps": 60,
         "seconds": 3600,
@@ -18,7 +21,8 @@
         "max_wall_seconds": 5400.0,
         "max_failed_rate": 0.35,
         "max_transport_failures": 0
-      }
+      },
+      "difficulty": "medium"
     },
     {
       "id": "web-surface-first",
@@ -26,7 +30,10 @@
       "mode": "ctf-htb",
       "objective": "Опиши внешнюю поверхность бокса: какие порты открыты, что за сервисы и версии, какие пути и vhost отвечают. Не ломай ничего — только карта. Каждый вывод подкрепи фактом с артефактом.",
       "finish_line": "есть карта портов и сервисов с артефактами, все гипотезы закрыты",
-      "probe": {"port": 80, "timeout_seconds": 10.0},
+      "probe": {
+        "port": 80,
+        "timeout_seconds": 10.0
+      },
       "limits": {
         "steps": 30,
         "seconds": 1800,
@@ -34,7 +41,8 @@
         "max_wall_seconds": 2400.0,
         "max_failed_rate": 0.4,
         "max_transport_failures": 0
-      }
+      },
+      "difficulty": "medium"
     }
   ]
 }
