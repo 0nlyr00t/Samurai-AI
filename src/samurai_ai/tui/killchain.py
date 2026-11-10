@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import PlanTask, TaskStatus
@@ -72,6 +73,37 @@ _IMPACT_PHASE = {
 }
 
 
+class PhaseState(StrEnum):
+    """Where one phase stands, always with a reason behind it."""
+
+    NOT_STARTED = "not-started"
+    ACTIVE = "active"
+    BLOCKED = "blocked"
+    READY = "ready-to-advance"
+    COMPLETE = "complete"
+
+
+@dataclass(frozen=True)
+class PhaseView:
+    """One phase with its exit criteria and what is still missing for them."""
+
+    phase: str
+    state: PhaseState
+    goal: str = ""
+    missing: tuple[str, ...] = ()
+    reason: str = ""
+
+    @property
+    def marker(self) -> str:
+        return {
+            PhaseState.NOT_STARTED: "○",
+            PhaseState.ACTIVE: "▶",
+            PhaseState.BLOCKED: "✖",
+            PhaseState.READY: "▸",
+            PhaseState.COMPLETE: "✔",
+        }[self.state]
+
+
 @dataclass(frozen=True)
 class KillChain:
     """The rail to draw, its current stage and the mode's progress counter."""
@@ -84,6 +116,11 @@ class KillChain:
 
     def __bool__(self) -> bool:
         return bool(self.phases)
+
+
+def chains_for(mode: OperationMode) -> tuple[str, ...]:
+    """The mode's own phase chain, for messages and validation."""
+    return _CHAINS.get(mode, ())
 
 
 def _index_of(phase: str, phases: Sequence[str]) -> int:
@@ -148,6 +185,74 @@ def phase_for(
     return KillChain(phases, current, "verified", verified_findings, 0)
 
 
+def phase_views(
+    chain: KillChain,
+    tasks: Iterable[PlanTask],
+    *,
+    gates: Iterable[tuple[str, str]] = (),
+    artifacts: Iterable[str] = (),
+) -> tuple[PhaseView, ...]:
+    """Per phase: state, its own goal, and the unmet exit criteria.
+
+    A phase is complete once it is behind the rail; the current one is active
+    until nothing is left undone — then it is ready to advance. Anything the
+    plan already knows is blocked (a blocked task, a failed gate, a required
+    artifact that never arrived) turns it into *blocked* with that named. The
+    phase comes from the domain, never from a claim in the text.
+    """
+    if not chain.phases:
+        return ()
+    phase_tasks: dict[str, list[PlanTask]] = {phase: [] for phase in chain.phases}
+    for task in tasks:
+        phase = _phase_from_text(task.title, chain.phases)
+        if phase is None:
+            continue
+        phase_tasks[phase].append(task)
+    have_artifacts = {name.lower() for name in artifacts}
+    failed_gates = {
+        phase: [name for name, status in gates if status == "failed"]
+        for phase in chain.phases
+    }
+    current_index = _index_of(chain.current, chain.phases)
+    views: list[PhaseView] = []
+    for index, phase in enumerate(chain.phases):
+        own = phase_tasks[phase]
+        goal = own[0].title[:60] if own else ""
+        missing: list[str] = []
+        reason = ""
+        if index < current_index:
+            views.append(PhaseView(phase, PhaseState.COMPLETE, goal))
+            continue
+        if index > current_index:
+            views.append(PhaseView(phase, PhaseState.NOT_STARTED, goal))
+            continue
+        blocked = [task.title for task in own if task.status is TaskStatus.BLOCKED]
+        for task in own:
+            missing.extend(
+                name
+                for name in task.required_artifacts
+                if name.lower() not in have_artifacts
+            )
+        unfinished = [
+            task.title for task in own if task.status not in (TaskStatus.DONE, TaskStatus.SKIPPED)
+        ]
+        if failed_gates[phase]:
+            reason = failed_gates[phase][0]
+        if blocked:
+            reason = reason or blocked[0]
+        if reason:
+            views.append(PhaseView(phase, PhaseState.BLOCKED, goal, tuple(missing), reason))
+            continue
+        if unfinished:
+            views.append(PhaseView(phase, PhaseState.ACTIVE, goal, tuple(missing)))
+            continue
+        if missing:
+            views.append(PhaseView(phase, PhaseState.BLOCKED, goal, tuple(missing), missing[0]))
+            continue
+        views.append(PhaseView(phase, PhaseState.READY, goal))
+    return tuple(views)
+
+
 def nodes_to_payloads(nodes: Iterable[object]) -> list[dict[str, object]]:
     """Confirmed graph facts feed the stage, nothing else does."""
     return [
@@ -177,10 +282,27 @@ class AccessRow:
     host: str
     level: str
     note: str
+    #: the confirmed fact this row came from — the evidence behind it
+    node_id: str = ""
+
+
+@dataclass(frozen=True)
+class LootEntry:
+    """One loot row: domain identity, what it is, where it came from."""
+
+    kind: str
+    label: str
+    #: domain id — a fact node, a run, an artifact; "" when there is none
+    source_id: str = ""
+    at: str = ""
+    level: str = ""
+    used: bool = False
+    secret: bool = False
+    note: str = ""
 
 
 def access_rows(
-    facts: Iterable[str], scope: ScopeContract | None = None
+    facts: Iterable[tuple[str, str]] | Iterable[str], scope: ScopeContract | None = None
 ) -> list[AccessRow]:
     """Hosts named by confirmed facts, with the strongest level each reached.
 
@@ -192,7 +314,8 @@ def access_rows(
     """
     found: dict[str, AccessRow] = {}
     order = {"read": 0, "user": 1, "root": 2}
-    for text in facts:
+    for entry in facts:
+        text, node_id = entry if isinstance(entry, tuple) else (entry, "")
         matches = list(_HOST_RE.finditer(text))
         if not matches:
             continue
@@ -210,7 +333,7 @@ def access_rows(
             note = text[max(0, match.start() - 24):end].strip()[:80]
             previous = found.get(host)
             if previous is None or order[level] > order[previous.level]:
-                found[host] = AccessRow(host, level, note)
+                found[host] = AccessRow(host, level, note, node_id)
     return list(found.values())
 
 

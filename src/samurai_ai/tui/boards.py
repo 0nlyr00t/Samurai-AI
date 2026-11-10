@@ -50,6 +50,8 @@ class BoardController:
         def _write_dim(self, message: str, *, process: bool = True) -> None: ...
         def _refresh_chrome(self) -> None: ...
         def _require_path(self, path: str) -> bool: ...
+        def _hunt_tasks(self) -> list[PlanTask]: ...
+        def _show_scope(self, target: str) -> None: ...
         access: Any
         team: Any
         def _memory_workspace(self) -> str: ...
@@ -131,6 +133,62 @@ class BoardController:
                 self.translator.t("board.no-plan"),
                 on_trace=trace,
                 trace_tooltip=self.translator.t("board.trace-tooltip"),
+            )
+        )
+
+    # -- coverage board ---------------------------------------------------
+    def _coverage_rows(self, show_all: bool) -> list[Row]:
+        """Mirror of the HUD line, with one reason per untested row."""
+        from samurai_ai.tui.coverage import MARKERS, check_rows, surface_rows
+        from samurai_ai.tui.killchain import hosts_in, scope_rows
+
+        if self.operation is None:
+            return []
+        touched = hosts_in(
+            str(run.parameters.get("command", ""))
+            for run in self.execution.list_runs(self.operation.id)[-40:]
+            if run.exit_code == 0
+        )
+        rules = scope_rows(self.operation.scope, touched)
+        targets = [row.rule for row in rules if not row.excluded and not row.note]
+        excluded = [row.rule for row in rules if row.excluded]
+        rows: list[Row] = []
+        for group_key, group in (
+            ("board.group.surface", surface_rows(targets, touched, excluded)),
+            ("board.group.checks", check_rows(self._hunt_tasks())),
+        ):
+            rows.append(("group", self.translator.t(group_key), ""))
+            for row in group:
+                label = f"{MARKERS[row.state]} [{self.translator.t('cov.' + row.state.value)}] "
+                label += row.target
+                if row.reason and row.reason != row.target:
+                    label += f" — {row.reason}"
+                rows.append(("item", f"{row.kind}:{row.target}", label))
+        return rows
+
+    def _coverage_open(self, item_id: str) -> None:
+        """Enter on a coverage row goes to the thing still to be checked."""
+        kind, _, target = item_id.partition(":")
+        if kind == "host":
+            self._show_scope(target)
+        else:
+            self._show_task_board()
+
+    def _show_coverage_board(self) -> None:
+        if not self._require_operation():
+            return
+        from samurai_ai.tui.screens import BoardScreen
+
+        self.push_screen(
+            BoardScreen(
+                self.translator,
+                self.translator.t("board.coverage-title"),
+                self.translator.t("board.hint", actions="Enter " + self.translator.t("cov.open")),
+                self._coverage_rows,
+                {},
+                {},
+                self._coverage_open,
+                self.translator.t("cov.empty"),
             )
         )
 

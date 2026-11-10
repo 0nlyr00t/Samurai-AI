@@ -937,6 +937,13 @@ def test_ctrl_c_copies_selection_then_quits(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+class _Click:
+    """The only bit of a Textual click the side blocks read."""
+
+    def __init__(self, y: int) -> None:
+        self.y = y
+
+
 def _tool_blocks_text(journal) -> str:  # type: ignore[no-untyped-def]
     """Titles and bodies of the journal's tool blocks, as plain text."""
     parts: list[str] = []
@@ -7724,7 +7731,8 @@ def test_a_long_scope_folds_behind_a_more_row_and_opens_as_a_list(tmp_path: Path
             assert "10.0.0.2" in text
             assert "10.0.0.12" not in text
             assert "3 more" in text
-            block.on_click()
+            # the «more» row sits below the fold, one line under the title
+            block.on_click(_Click(y=SideBlock.LIMIT + 1))
             await pilot.pause()
             assert isinstance(app.screen, PickerScreen)
             assert "10.0.0.14" in [label for _id, label, _desc in app.screen.picks]
@@ -7756,7 +7764,8 @@ def test_a_long_loot_list_folds_behind_a_more_row_and_opens_as_a_list(tmp_path: 
             assert "secret-00" in text
             assert "secret-10" not in text
             assert "2 more" in text
-            block.on_click()
+            # the «more» row sits below the fold, one line under the title
+            block.on_click(_Click(y=SideBlock.LIMIT + 1))
             await pilot.pause()
             assert isinstance(app.screen, PickerScreen)
             assert "secret-11" in [label for _id, label, _desc in app.screen.picks]
@@ -9126,5 +9135,315 @@ def test_long_paths_do_not_break_the_journal_at_eighty(tmp_path: Path) -> None:
             assert journal.max_scroll_x == 0 or journal.max_scroll_x < 10
             text = journal.text()
             assert "artifact.txt" in text
+
+    asyncio.run(exercise())
+
+
+def test_the_phase_moves_only_on_evidence_and_is_journaled(tmp_path: Path) -> None:
+    """A prose claim alone does not move the rail; a confirmed fact does."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Phase lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.4",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            assert app._killchain().current == "recon"
+            # nothing confirmed yet: still recon, whatever was written
+            app._write_dim("got root, RCE, domain admin")
+            app._refresh_killchain()
+            await pilot.pause()
+            assert app._killchain().current == "recon"
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            node = app.graph.open_intent(operation.id, "t-1", "foothold attempt", origin.id)
+            app.graph.start_intent(node.id)
+            app.graph.record_fact(node.id, "uid=0 root shell on 10.0.0.4")
+            app._refresh_killchain()
+            await pilot.pause()
+            assert app._killchain().current == "privesc"
+            events = app.service.repository.events(operation.id)
+            moved = [event for event in events if event.event_type == "killchain.phase"]
+            assert moved and moved[-1].payload["to"] == "privesc"
+            assert moved[-1].payload["source"] == "evidence"
+
+    asyncio.run(exercise())
+
+
+def test_a_blocked_phase_shows_its_reason_on_the_rail(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Blocked lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.3",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="recon-scan", title="recon scan the box", status=TaskStatus.BLOCKED)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            text = str(app.query_one("#killchain", Static).render())
+            assert "✖" in text and "recon scan the box" in text
+
+    asyncio.run(exercise())
+
+
+def test_a_manual_phase_override_is_journaled_and_cleared(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Override lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.2",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._show_phase("loot took it by hand")
+            await pilot.pause()
+            assert app._killchain().current == "loot"
+            events = app.service.repository.events(operation.id)
+            override = [e for e in events if e.event_type == "killchain.phase.override"]
+            assert override[-1].payload == {"phase": "loot", "reason": "took it by hand",
+                                            "actor": "operator"}
+            app._show_phase("auto")
+            await pilot.pause()
+            assert app._killchain().current != "loot"
+
+    asyncio.run(exercise())
+
+
+def test_loot_rows_carry_their_source_and_a_click_opens_it(tmp_path: Path) -> None:
+    """A loot row is a domain id, and the click lands on the artifact."""
+    from samurai_ai.tui.widgets import SideBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Loot lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.9",))
+    )
+    artifact = stack[1].register_artifact(
+        operation.id, ArtifactKind.FILE, "HTB{one}", summary="flag proof"
+    )
+    stack[10].init_ctf(operation.id, "Loot", "misc")  # type: ignore[arg-type]
+    stack[10].record_flag(operation.id, "user", "HTB{one}", proof_artifact_id=artifact.id)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            block = app.query_one("#side-creds", SideBlock)
+            assert block.row_ids[0] == f"artifact:{artifact.id}"
+            assert "HTB{one}" in block.entries[0]
+            app._open_loot_source(block.row_ids[0])
+            await pilot.pause()
+            screen = app.screen
+            assert type(screen).__name__ == "InspectorScreen"
+            body = "\n".join(
+                str(child.render())
+                for child in screen.query("*")
+                if hasattr(child, "render")
+            )
+            assert artifact.id in body or "flag proof" in body
+
+    asyncio.run(exercise())
+
+
+def test_a_used_secret_is_marked_and_its_value_stays_hidden(tmp_path: Path) -> None:
+    from samurai_ai.tui.widgets import SideBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Secret lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.9",))
+    )
+    stack[5].add("db_pass", "hunter2", operation.id)
+    stack[1].request_approval(operation.id, "run with secret:db_pass", RiskClass.R1)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            block = app.query_one("#side-creds", SideBlock)
+            assert "db_pass" in block.entries[0]
+            assert block.row_ids[0] == "secret:db_pass"
+            assert "hunter2" not in block.entries[0]
+            text = str(block.render())
+            assert "✚" in text
+
+    asyncio.run(exercise())
+
+
+def test_a_hypothesis_shows_its_evidence_plan_and_age(tmp_path: Path) -> None:
+    """A hypothesis is a claim with evidence, a next test and a deadline."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Hypothesis lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt",
+        [PlanTask(id="t-1", title="check login", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            intent = app.graph.open_intent(operation.id, "t-1", "weak ssh password", origin.id)
+            app.graph.annotate_intent(
+                intent.id,
+                {"next_test": "hydra with 10k list", "stop_condition": "after 20 min"},
+            )
+            app.graph.start_intent(intent.id)
+            app.graph.record_fact(intent.id, "password hunter2 works on ssh")
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            text = app.query_one("#view-hunt", BlockJournal).text()
+            assert "weak ssh password" in text
+            # qualitative, not an invented percentage
+            assert "supported by evidence" in text
+            assert "%" not in text.split("Hypotheses")[1]
+            assert "+1/−0" in text
+            assert "→ hydra with 10k list" in text
+            assert "⊘ after 20 min" in text
+            assert "age 0m" in text
+
+    asyncio.run(exercise())
+
+
+def test_a_refuted_hypothesis_says_so(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Refuted lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Hunt",
+        [PlanTask(id="t-1", title="check login", risk_class=RiskClass.R1)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            intent = app.graph.open_intent(operation.id, "t-1", "default creds", origin.id)
+            app.graph.start_intent(intent.id)
+            app.graph.record_fact(intent.id, "admin/admin refused", negative=True)
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            text = app.query_one("#view-hunt", BlockJournal).text()
+            assert "refuted by evidence" in text
+            assert "+0/−1" in text
+
+    asyncio.run(exercise())
+
+
+def test_the_coverage_line_and_board_show_what_is_still_untested(tmp_path: Path) -> None:
+    """Coverage is surface plus check classes, and every gap carries a reason."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Coverage lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("a.example.com", "b.example.com"), excludes=("b.example.com",)),
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="fuzz-1", title="fuzz the paths", status=TaskStatus.DONE)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            rail = str(app.query_one("#killchain", Static).render())
+            assert "coverage" in rail and "/3" in rail
+            app._show_coverage_board()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            labels = [str(option.prompt) for option in listed.options]
+            assert any("b.example.com" in label and "out of scope" in label for label in labels)
+            assert any("fuzz" in label and "covered" in label for label in labels)
+            assert any("spray" in label and "n/a" in label for label in labels)
+            await pilot.press("escape")
+            await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_the_rail_goes_compact_before_it_disappears(tmp_path: Path) -> None:
+    """Between narrow and roomy the rail keeps markers, drops the prose."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Compact lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.9",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(105, 30)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            rail = str(app.query_one("#killchain", Static).render())
+            assert "recon" in rail and "flags 0" in rail
+            assert "map the surface" not in rail
+            assert "coverage" not in rail
+            # and back to roomy restores the prose
+            await pilot.resize_terminal(150, 30)
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            rail = str(app.query_one("#killchain", Static).render())
+            assert "map the surface" in rail
+
+    asyncio.run(exercise())
+
+
+def test_an_empty_side_panel_says_what_to_do_next(tmp_path: Path) -> None:
+    """No decorative zeros: an empty panel names the next action."""
+    from samurai_ai.tui.widgets import SideBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            operation = stack[0].create(
+                "Empty lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.1",))
+            )
+            operation = operation.model_copy(
+                update={"scope": ScopeContract(includes=("10.0.0.1",))}
+            )
+            app.operation = operation
+            app._refresh_chrome()
+            await pilot.pause()
+            # a target exists, so TARGETS is not empty; LOOT still points ahead
+            assert "10.0.0.1" in str(app.query_one("#side-access", SideBlock).render())
+            assert "flags and secrets" in str(app.query_one("#side-creds", SideBlock).render())
 
     asyncio.run(exercise())
