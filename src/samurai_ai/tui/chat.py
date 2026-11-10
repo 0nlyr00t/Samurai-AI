@@ -1574,8 +1574,11 @@ class ChatController:
             Message(role="system", content=system),
             Message(role="user", content=question),
         )
+        # the judge answers one word: a fast model is enough and keeps the main
+        # one out of a mechanical call. Unset means the main model, as before.
+        fast = self.settings.get_value("model.fast") or model_id
         answer = await self._request_chat_completion(
-            operation_id, model_id, None, (), max_tokens=8, messages=messages
+            operation_id, fast, None, (), max_tokens=8, messages=messages
         )
         if answer is None:
             self._write_dim(self.translator.t("chat.goal-judge-failed"))

@@ -7890,6 +7890,52 @@ def test_a_present_tense_announcement_is_also_a_promise(tmp_path: Path) -> None:
     assert not _PROMISE_RE.search("Готово: отчёт лежит в артефактах")
 
 
+def test_the_judge_uses_the_fast_model_when_one_is_set(tmp_path: Path) -> None:
+    """A one-word call does not need the main model; unset keeps the old path."""
+    from samurai_ai.agents.provider import ChatResponse, Usage
+
+    seen: list[str] = []
+
+    class _Recorder:
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            seen.append(request.model_id)
+            return ChatResponse(
+                text="stop", usage=Usage(prompt_tokens=3, completion_tokens=1),
+                model_id=request.model_id, provider_id="gpt", latency_ms=1,
+            )
+
+    provider = _Recorder()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/main@v1")
+    stack[-1].add_model("gpt/fast@v1")
+    stack[2].set_value("model.default", "gpt/main@v1")
+    operation = stack[0].create(
+        "Judge model lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.service.set_goal(operation.id, "own it")
+            await app._judge_goal(operation.id, "gpt/main@v1")
+            assert seen == ["gpt/main@v1"]
+            stack[2].set_value("model.fast", "gpt/fast@v1")
+            await app._judge_goal(operation.id, "gpt/main@v1")
+            assert seen[-1] == "gpt/fast@v1"
+
+    asyncio.run(exercise())
+
+
 def test_a_worked_turn_is_judged_before_it_may_complete(tmp_path: Path) -> None:
     """A turn with tool calls and a goal ends only when the judge agrees."""
     from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
