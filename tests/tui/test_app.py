@@ -4288,8 +4288,9 @@ def test_subagent_asks_for_approvals_in_ask_mode(tmp_path: Path) -> None:
                 if isinstance(app.screen, AccessPromptScreen):
                     break
             assert isinstance(app.screen, AccessPromptScreen)
-            subtitle = str(app.screen.query_one("#access-action", Static).render())
-            assert "agent_" in subtitle
+            # the run/task ids ride in the facts line above the body
+            prompt = str(app.screen.query_one("#access-meta", Static).render())
+            assert "agent_" in prompt
             app.screen.dismiss(True)
             await asyncio.wait_for(job, 20)
             for _ in range(20):
@@ -6368,11 +6369,15 @@ def test_the_approval_prompt_reveals_and_copies_the_full_command(tmp_path: Path)
             app.push_screen(AccessPromptScreen(app.translator, action, "R2"))
             await pilot.pause()
             full = app.screen.query_one("#access-full")
+            # the command is readable before any key: no deciding on an ellipsis
+            assert full.display
+            assert action in str(app.screen.query_one("#access-full-text", Static).render())
+            await pilot.press("v")
+            await pilot.pause()
             assert not full.display
             await pilot.press("v")
             await pilot.pause()
             assert full.display
-            assert action in str(app.screen.query_one("#access-full-text", Static).render())
             await pilot.press("c")
             await pilot.pause()
             assert getattr(app, "_clipboard", "") == action
@@ -8917,5 +8922,59 @@ def test_a_background_event_does_not_switch_the_visible_tab(tmp_path: Path) -> N
             app._refresh_chrome()
             await pilot.pause()
             assert str(views.current) == "view-hunt"
+
+    asyncio.run(exercise())
+
+
+def test_a_long_multiline_command_is_readable_on_a_narrow_terminal(tmp_path: Path) -> None:
+    """Several thousand characters, 80 columns: full text, numbered, scrollable."""
+    from samurai_ai.tui.screens import AccessPromptScreen
+    from samurai_ai.tui.screens.access import ApprovalMeta
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("ru")
+    body = "\n".join(
+        f"curl -s -H 'X-Token: {index}' https://example.com/{'a' * 60}" for index in range(40)
+    )
+    action = f"cd /tmp && {body}"
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.push_screen(
+                AccessPromptScreen(
+                    app.translator,
+                    action,
+                    "r2 · destructive",
+                    meta=ApprovalMeta(
+                        tool_id="net.curl",
+                        tool_version=3,
+                        cwd="/home/agent/work",
+                        execution_path="ssh -F ~/.ssh/htb.conf vm",
+                        timeout_s=120,
+                        destructive=("redirect",),
+                        sensitive=("token",),
+                    ),
+                )
+            )
+            await pilot.pause()
+            screen = app.screen
+            shown = str(screen.query_one("#access-full-text", Static).render())
+            # every line is there verbatim, behind a number for reference
+            for line in action.splitlines():
+                assert line in shown
+            assert " 1 │" in shown and "40 │" in shown
+            facts = str(screen.query_one("#access-meta", Static).render())
+            assert "net.curl" in facts and "v3" in facts
+            assert "/home/agent/work" in facts and "ssh -F" in facts
+            assert "120" in facts
+            badges = str(screen.query_one("#access-badges", Static).render())
+            assert "redirect" in badges and "token" in badges
+            # the layout survives 80 columns instead of overflowing the screen
+            dialog = screen.query_one("#access-dialog")
+            assert dialog.size.width <= 80
+            await pilot.press("escape")
+            await pilot.pause()
 
     asyncio.run(exercise())
