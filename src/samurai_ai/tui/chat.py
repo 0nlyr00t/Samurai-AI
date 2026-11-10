@@ -177,6 +177,7 @@ class ChatController:
         _sent_tokens: int
         _recv_tokens: int
         _running_tools: int
+        _cache_share: float
         _round_approvals: dict[str, bool]
         _background_results: list[Message]
         _process_block: list[str]
@@ -456,6 +457,22 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="provision_tool",
+            description=(
+                "Install a tool that is missing on this machine, from the reviewed "
+                "catalogue, then run it once more. Use it only when a run answered "
+                "that the binary is missing: a scope refusal, a bad parameter or a "
+                "timeout do not need an install. The plan is shown and approved "
+                "before anything changes."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"tool_id": {"type": "string", "maxLength": 64}},
+                "required": ["tool_id"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="set_relay",
             description=(
                 "Point this operation's network commands through a relay prefix "
@@ -639,6 +656,7 @@ class ChatController:
         "update_todo": "_run_update_todo_tool",
         "remember_secret": "_run_remember_secret_tool",
         "set_relay": "_run_set_relay_tool",
+        "provision_tool": "_run_provision_tool",
         "check_scope": "_run_check_scope_tool",
         "request_scope": "_run_request_scope_tool",
         "add_scope": "_run_request_scope_tool",
@@ -762,6 +780,38 @@ class ChatController:
         except Exception:  # noqa: BLE001 - a count must never break a turn
             return 0
 
+    #: tools whose job starts after the foothold: their long prose is wasted on
+    #: recon, and the whole block rides in every request
+    _LATER_TOOLS = frozenset(
+        {"propose_finding", "record_traffic", "remember_secret", "propose_plan", "read_image"}
+    )
+    _SHORT_DESCRIPTIONS = {
+        "propose_finding": "Record a finding for the operation (title, summary, severity).",
+        "record_traffic": "Attach a request/response pair to a finding as evidence.",
+        "remember_secret": "Store a secret in the operation vault.",
+        "propose_plan": "Propose a plan of tasks for the operation.",
+        "read_image": "Read an image file and describe it.",
+    }
+
+    def _tool_specs(self) -> tuple[ToolSpec, ...]:
+        """The tool block for this turn: same schemas, prose only where it helps.
+
+        Every tool stays callable — dropping one is how the model ends up unable
+        to record the finding it just made — but a tool that belongs to a later
+        stage does not need its full description on a recon turn.
+        """
+        early = getattr(self, "_stage_label", "") in ("", "recon", "surface")
+        if not early:
+            return self._CHAT_TOOL_SPECS
+        return tuple(
+            spec.model_copy(
+                update={"description": self._SHORT_DESCRIPTIONS[spec.name]}
+            )
+            if spec.name in self._LATER_TOOLS
+            else spec
+            for spec in self._CHAT_TOOL_SPECS
+        )
+
     def _count_usage(self, usage: Any) -> None:
         """One place that sees every model answer: context gauge and totals.
 
@@ -774,6 +824,12 @@ class ChatController:
         self._ctx_tokens = usage.prompt_tokens + usage.completion_tokens
         self._sent_tokens += usage.prompt_tokens
         self._recv_tokens += usage.completion_tokens
+        # a provider-side prefix cache is the cheapest speed there is; it stays
+        # invisible unless the share is said out loud, so it goes in the journal
+        hit = float(getattr(usage, "cache_hit", 0.0) or 0.0)
+        if hit:
+            self._cache_share = hit
+            self._write_dim(self.translator.t("chat.cache-hit", share=f"{hit:.0%}"), process=False)
 
     def _note_stagnation(self) -> None:
         """Tell the model and the operator about a direction that stopped paying."""
@@ -1351,7 +1407,7 @@ class ChatController:
             self._count_goal_step()
             try:
                 response = await self._request_chat_completion(
-                    operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
+                    operation_id, model_id, reasoning, self._tool_specs()
                 )
             except ProviderUnavailableError as exc:
                 # a slow or sick gateway is the common case; the operator sees
@@ -1370,7 +1426,7 @@ class ChatController:
                     await asyncio.sleep(self._MODEL_RETRY_DELAY)
                     try:
                         response = await self._request_chat_completion(
-                            operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
+                            operation_id, model_id, reasoning, self._tool_specs()
                         )
                         break
                     except ProviderUnavailableError as retry_exc:
@@ -1518,8 +1574,11 @@ class ChatController:
             Message(role="system", content=system),
             Message(role="user", content=question),
         )
+        # the judge answers one word: a fast model is enough and keeps the main
+        # one out of a mechanical call. Unset means the main model, as before.
+        fast = self.settings.get_value("model.fast") or model_id
         answer = await self._request_chat_completion(
-            operation_id, model_id, None, (), max_tokens=8, messages=messages
+            operation_id, fast, None, (), max_tokens=8, messages=messages
         )
         if answer is None:
             self._write_dim(self.translator.t("chat.goal-judge-failed"))
@@ -1968,6 +2027,80 @@ class ChatController:
             content=(
                 f"[tool set_relay] relay is now: {relay or 'off'}; write plain "
                 "far-side commands, the harness quotes them for the relay"
+            ),
+        )
+
+    async def _run_provision_tool(self, call: ToolCall) -> Message:
+        """The model asks for a missing tool; the operator sees the plan first."""
+        tool_id = str(call.arguments.get("tool_id", "") or "").strip()
+        if self.operation is None:
+            return Message(role="user", content="[tool provision_tool] no open operation")
+        provisioner = getattr(self, "provisioner", None)
+        if provisioner is None:
+            return Message(role="user", content="[tool provision_tool] provisioning is off")
+        from samurai_ai.domain.provision import ProvisionError, ProvisionLockedError
+        from samurai_ai.services.provisioner import Provisioner
+
+        try:
+            profile = await asyncio.to_thread(provisioner.detector.detect, refresh=True)
+            plan = provisioner.plan(tool_id, profile)
+        except ProvisionError as exc:
+            return Message(
+                role="user",
+                content=(
+                    f"[tool provision_tool] {tool_id} cannot be installed: {exc}"
+                    + (
+                        f" (manual: {getattr(exc, 'manual', '')})"
+                        if getattr(exc, "manual", "")
+                        else ""
+                    )
+                ),
+            )
+        journal = self.query_one("#journal", BlockJournal)
+        for line in Provisioner.describe(plan):
+            journal.write(Text(f"[scope] {line}", style=self.paint("accent")))
+        if provisioner.needs_decision(tool_id):
+            self._write_dim(self.translator.t("provision.retry"), process=False)
+        approval = self.kernel.request_approval(
+            self.operation.id,
+            f"provision {plan.tool_id} v{plan.recipe_version} via {plan.manager}",
+            RiskClass.R3,
+            reason="system package installation from the reviewed catalogue",
+            requested_by="agent",
+        )
+        allowed = await self.push_screen_wait(
+            AccessPromptScreen(
+                self.translator,
+                f"provision {plan.tool_id}: {' '.join(plan.commands[0]) if plan.commands else ''}",
+                f"r3 · {plan.platform}",
+                batch_items=[(" ".join(argv), "r3") for argv in plan.commands],
+            )
+        )
+        self.kernel.approve(approval.id, decided_by=("operator" if allowed else "operator"))
+        if not allowed:
+            return Message(role="user", content=f"[tool provision_tool] {tool_id} declined")
+        try:
+            result = await asyncio.to_thread(
+                provisioner.run, self.operation.id, tool_id, profile
+            )
+        except ProvisionLockedError as exc:
+            return Message(role="user", content=f"[tool provision_tool] {exc}")
+        except ProvisionError as exc:
+            return Message(role="user", content=f"[tool provision_tool] {tool_id}: {exc}")
+        if result.status.value != "ready":
+            self._write_line(f"[error] provision {tool_id}: {result.error}")
+            return Message(
+                role="user",
+                content=f"[tool provision_tool] {tool_id} failed: {result.error}",
+            )
+        version = provisioner.state(tool_id).installed_version
+        self._write_dim(self.translator.t("provision.ready", tool=tool_id), process=False)
+        self._refresh_chrome()
+        return Message(
+            role="user",
+            content=(
+                f"[tool provision_tool] {tool_id} installed and verified "
+                f"({version or 'ready'}); run it once more — do not provision again"
             ),
         )
 

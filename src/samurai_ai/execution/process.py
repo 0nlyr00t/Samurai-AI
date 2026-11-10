@@ -85,13 +85,48 @@ class ProcessManager:
         self.output_limit_bytes = output_limit_bytes
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.stall_seconds = stall_seconds
+        #: how many finished results stay available for attach
+        self.collected_limit = 32
         self._deadline_at: float | None = None
         self._running: dict[str, _RunningProcess] = {}
+        #: finished results by handle id: status/tail/collect read, never re-run
+        self._collected: dict[str, ProcessResult] = {}
+        self._collected_order: list[str] = []
         self._consecutive_failures = 0
         self._breaker_opened_at: float | None = None
 
     def list(self) -> list[ManagedProcess]:
         return [entry.handle for entry in self._running.values()]
+
+    def status(self, handle_id: str) -> str:
+        """running | finished | unknown — a status never re-runs the command."""
+        if handle_id in self._running:
+            return "running"
+        return "finished" if handle_id in self._collected else "unknown"
+
+    def tail(self, handle_id: str, limit: int = 4000) -> str:
+        """What the process has written so far, bounded; safe on a finished run."""
+        entry = self._running.get(handle_id)
+        if entry is not None:
+            data = b"".join(entry.stdout_chunks + entry.stderr_chunks)
+        else:
+            result = self._collected.get(handle_id)
+            if result is None:
+                raise ProcessNotFoundError(f"process not found: {handle_id}")
+            data = (result.stdout + result.stderr).encode("utf-8", errors="replace")
+        text = data.decode("utf-8", errors="replace")
+        return text[-limit:]
+
+    def collect(self, handle_id: str) -> ProcessResult:
+        """The finished result, kept after `wait` so an attach does not re-run."""
+        result = self._collected.get(handle_id)
+        if result is None:
+            if handle_id in self._running:
+                raise ProcessNotFoundError(
+                    f"process {handle_id} is still running: wait or cancel it first"
+                )
+            raise ProcessNotFoundError(f"process not found: {handle_id}")
+        return result
 
     def reset_circuit_breaker(self) -> None:
         self._consecutive_failures = 0
@@ -116,12 +151,18 @@ class ProcessManager:
         *,
         env: Mapping[str, str] | None = None,
         stdin_data: bytes | None = None,
+        inherit_env: bool = True,
     ) -> ManagedProcess:
         arguments = tuple(argv)
         self._validate_argv(arguments)
         self._validate_env(env)
         self._validate_stdin(stdin_data)
-        child_env = {**os.environ, **env} if env else None
+        # a native tool gets exactly the declared variables, not the whole
+        # operator environment: no stray token or proxy leaks into it
+        if inherit_env:
+            child_env = {**os.environ, **env} if env else None
+        else:
+            child_env = dict(env or {})
         try:
             process = await asyncio.create_subprocess_exec(
                 *arguments,
@@ -194,6 +235,7 @@ class ProcessManager:
             self._record_failure()
         else:
             self._clear_failures()
+        self._remember(handle_id, result)
         return result
 
     async def cancel(self, handle_id: str) -> ProcessResult:
@@ -202,13 +244,15 @@ class ProcessManager:
             raise ProcessNotFoundError(f"process not found: {handle_id}")
         await self._terminate_group(entry.process)
         self._running.pop(handle_id, None)
-        return ProcessResult(
+        result = ProcessResult(
             exit_code=entry.process.returncode,
             stdout=b"".join(entry.stdout_chunks).decode("utf-8", errors="replace"),
             stderr=b"".join(entry.stderr_chunks).decode("utf-8", errors="replace"),
             cancelled=True,
             truncated=entry.truncated,
         )
+        self._remember(handle_id, result)
+        return result
 
     async def run(
         self,
@@ -217,8 +261,11 @@ class ProcessManager:
         *,
         env: Mapping[str, str] | None = None,
         stdin_data: bytes | None = None,
+        inherit_env: bool = True,
     ) -> ProcessResult:
-        handle = await self.start(argv, env=env, stdin_data=stdin_data)
+        handle = await self.start(
+            argv, env=env, stdin_data=stdin_data, inherit_env=inherit_env
+        )
         return await self.wait(handle.id, timeout_seconds=timeout_seconds)
 
     def _validate_argv(self, argv: tuple[str, ...]) -> None:
@@ -331,6 +378,13 @@ class ProcessManager:
             except (ProcessLookupError, PermissionError):
                 pass
             await process.wait()
+
+    def _remember(self, handle_id: str, result: ProcessResult) -> None:
+        """Keep the final result bounded in count so attach stays cheap."""
+        self._collected[handle_id] = result
+        self._collected_order.append(handle_id)
+        while len(self._collected_order) > self.collected_limit:
+            self._collected.pop(self._collected_order.pop(0), None)
 
     def _clear_failures(self) -> None:
         self._consecutive_failures = 0

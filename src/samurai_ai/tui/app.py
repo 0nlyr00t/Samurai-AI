@@ -456,6 +456,10 @@ class SamuraiApp(
         self._sent_tokens: int = 0
         self._recv_tokens: int = 0
         self._running_tools: int = 0
+        #: last observed prefix-cache hit share, shown next to the gauge
+        self._cache_share: float = 0.0
+        #: set by the host when the reviewed catalogue is available
+        self.provisioner: Any = None
         self._round_approvals: dict[str, bool] = {}
         self._background_results: list[Any] = []
         self._auto_title: str | None = None
@@ -4085,6 +4089,8 @@ class SamuraiApp(
             )
         else:
             bar.append(f"ctx {self._ctx_tokens} tok")
+        if self._cache_share:
+            bar.append(f" ⚡{self._cache_share:.0%}", style=self.paint("success"))
         bar.append(
             f" | ⇈{self._sent_tokens // 1000}k ⇊{self._recv_tokens // 1000}k"
             f" · Σ {self._run_tokens} tok",

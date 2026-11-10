@@ -16,6 +16,7 @@
 - findings workflow от candidate до reported;
 - snapshots/restore/fork, recovery reconcile и plan/scope diff;
 - versioned tool registry, `process.exec` без shell и `http.fetch` через scope broker;
+- локальный Tool Fabric: read-only детект окружения (`tool capabilities`), каталог рецептов (`assets/recipes`), детерминированный резолвер native → project-local → container → provision → relay → отказ, нативное исполнение по argv без shell поверх `ProcessManager` (`status/tail/collect` для долгих процессов), управляемая установка с dry-run, отдельным approval, `sudo -n`, healthcheck, замком и персистентным состоянием (`tool provision`, `tool verify`), команда агента `request_tool_provision` с одной попыткой на прогон;
 - Docker sandbox profiles со signed allowlist, scoped egress proxy с DNS pinning;
 - MCP stdio/HTTP client и persistent secrets vault (AES-256-GCM);
 - prompt-injection warnings и `untrusted-external` trust label;

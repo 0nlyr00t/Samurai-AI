@@ -54,12 +54,21 @@ class BenchLimits(BaseModel):
     max_transport_failures: int | None = Field(default=0, ge=0)
 
 
+class BenchDifficulty(StrEnum):
+    """A box class, so a run can be compared only against its own kind."""
+
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
+
+
 class BenchScenario(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     mode: OperationMode = OperationMode.RED_TEAM
+    difficulty: BenchDifficulty = BenchDifficulty.MEDIUM
     #: the operator's own task text, sent to the chat loop verbatim
     objective: str = Field(min_length=1)
     #: extra scope rules beside the target hosts given on the command line
@@ -120,6 +129,8 @@ class BenchResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     scenario_id: str
+    #: the box class, carried so a report can group and compare by it
+    difficulty: str = ""
     verdict: BenchVerdict
     metrics: BenchMetrics | None = None
     failures: tuple[str, ...] = ()
@@ -180,6 +191,7 @@ def judge(result_metrics: BenchMetrics, limits: BenchLimits) -> tuple[BenchVerdi
 
 
 __all__ = [
+    "BenchDifficulty",
     "BenchError",
     "BenchLimits",
     "BenchMetrics",

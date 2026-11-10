@@ -42,7 +42,12 @@ from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_team import handle_team_command
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
 from samurai_ai.cli_web import handle_web_command, register_web_commands
-from samurai_ai.config import default_database_path, genes_path, vault_key_path
+from samurai_ai.config import (
+    config_directory,
+    default_database_path,
+    genes_path,
+    vault_key_path,
+)
 from samurai_ai.domain.access import AccessError, Principal, Role
 from samurai_ai.domain.agents import AgentError, AgentRunNotFoundError
 from samurai_ai.domain.ctf import (
@@ -88,6 +93,7 @@ from samurai_ai.domain.vault import VaultError
 from samurai_ai.execution.registry import default_registry
 from samurai_ai.self_update import run_update
 from samurai_ai.services.access import AccessService
+from samurai_ai.services.catalog import portability_scripts
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService, ToolRunNotFoundError
 from samurai_ai.services.exports import IntegrationExportService
@@ -101,6 +107,7 @@ from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.planning import PlanningService
 from samurai_ai.services.playbooks import PlaybookService, ProgramRulesNotFoundError
+from samurai_ai.services.provisioner import Provisioner
 from samurai_ai.services.questions import OperatorQuestionService
 from samurai_ai.services.recovery import (
     PlanNotFoundError,
@@ -371,6 +378,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         access_service,
         team_service,
         question_service,
+        provisioner,
     ) = _make_services(args.db)
     global _SERVICES
     _SERVICES = (
@@ -379,7 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent_orchestrator, playbook_service, report_service, ctf_service,
         redteam_service, planning_service, swarm_service, goal_service,
         memory_service, skill_service, export_service, access_service,
-        team_service, question_service,
+        team_service, question_service, provisioner,
     )
     operation_policies = OperationPolicyRepository(
         Database(args.db or default_database_path())
@@ -534,7 +542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"{action} {decision.target}: {decision.detail}")
             return 0 if decision.allowed else 1
 
-        SamuraiApp(
+        app = SamuraiApp(
             operation_service,
             kernel_service,
             settings_service,
@@ -554,7 +562,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             skill_service,
             model_service,
             getattr(args, "operation_id", None),
-        ).run()
+        )
+        app.provisioner = provisioner
+        app.run()
         return 0
     except (
         OperationNotFoundError,
@@ -871,6 +881,7 @@ def _make_services(
     AccessService,
     TeamworkService,
     OperatorQuestionService,
+    Provisioner,
 ]:
     database = Database(database_path or default_database_path())
     operation_repository = OperationRepository(database)
@@ -934,6 +945,14 @@ def _make_services(
     redteam = RedTeamService(operations, kernel, RedTeamRepository(database), vault)
     planning = PlanningService(operations, kernel, PlanningRepository(database), vault)
     swarm = SwarmService(operations, kernel, agents, SwarmRunRepository(database))
+    provisioner = Provisioner(
+        operations=operations,
+        kernel=kernel,
+        tools_dir=config_directory() / "tools",
+        templates=portability_scripts(),
+    )
+    agents.provisioner = provisioner
+    provisioner.watch(execution.registry)
     goals = GoalService(operations, GoalRepository(database))
     exports = IntegrationExportService(operations, kernel, redteam, planning, vault)
     access = AccessService(
@@ -966,6 +985,7 @@ def _make_services(
         access,
         team,
         questions,
+        provisioner,
     )
 
 
