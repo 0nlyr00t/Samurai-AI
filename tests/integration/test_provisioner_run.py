@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from samurai_ai.assets import assets_root
 from samurai_ai.domain.environment import Arch, EnvironmentProfile, OsFamily
 from samurai_ai.domain.provision import (
     ProvisionLockedError,
@@ -65,7 +66,7 @@ def _provisioner(
         kernel=None,
         manager=ProcessManager(allowed_executables=frozenset({"apt-get", "cp", "mkdir"})),
         tools_dir=tmp_path / "tools",
-        templates=Path("assets/templates"),
+        templates=assets_root("templates"),
         runner=manager,
     )
     return provisioner, manager

@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -28,11 +27,10 @@ class CatalogError(ManifestError):
 
 
 def assets_directory() -> Path:
-    """`assets`, also inside a PyInstaller one-file bundle."""
-    bundle = getattr(sys, "_MEIPASS", None)
-    if bundle is not None:
-        return Path(bundle) / "assets"
-    return _REPO_ROOT / "assets"
+    """`assets`, wherever the shipped data lives."""
+    from samurai_ai.assets import assets_root
+
+    return assets_root()
 
 
 def recipes_directory() -> Path:

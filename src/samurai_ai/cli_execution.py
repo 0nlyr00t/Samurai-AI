@@ -364,6 +364,8 @@ def _verify(args: argparse.Namespace) -> int:
             argv, timeout_seconds=20.0, inherit_env=False
         )
     )
-    detail = (result.stdout or result.stderr).strip().splitlines()
-    print(f"{recipe.id}\t{path}\t{detail[0] if detail else 'no output'}")
+    from samurai_ai.services.provisioner import version_line
+
+    detail = version_line(result.stdout or result.stderr) or "no output"
+    print(f"{recipe.id}\t{path}\t{detail}")
     return 0 if result.exit_code == 0 else 1

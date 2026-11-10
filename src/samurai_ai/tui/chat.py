@@ -177,6 +177,7 @@ class ChatController:
         _sent_tokens: int
         _recv_tokens: int
         _running_tools: int
+        _cache_share: float
         _round_approvals: dict[str, bool]
         _background_results: list[Message]
         _process_block: list[str]
@@ -779,6 +780,38 @@ class ChatController:
         except Exception:  # noqa: BLE001 - a count must never break a turn
             return 0
 
+    #: tools whose job starts after the foothold: their long prose is wasted on
+    #: recon, and the whole block rides in every request
+    _LATER_TOOLS = frozenset(
+        {"propose_finding", "record_traffic", "remember_secret", "propose_plan", "read_image"}
+    )
+    _SHORT_DESCRIPTIONS = {
+        "propose_finding": "Record a finding for the operation (title, summary, severity).",
+        "record_traffic": "Attach a request/response pair to a finding as evidence.",
+        "remember_secret": "Store a secret in the operation vault.",
+        "propose_plan": "Propose a plan of tasks for the operation.",
+        "read_image": "Read an image file and describe it.",
+    }
+
+    def _tool_specs(self) -> tuple[ToolSpec, ...]:
+        """The tool block for this turn: same schemas, prose only where it helps.
+
+        Every tool stays callable — dropping one is how the model ends up unable
+        to record the finding it just made — but a tool that belongs to a later
+        stage does not need its full description on a recon turn.
+        """
+        early = getattr(self, "_stage_label", "") in ("", "recon", "surface")
+        if not early:
+            return self._CHAT_TOOL_SPECS
+        return tuple(
+            spec.model_copy(
+                update={"description": self._SHORT_DESCRIPTIONS[spec.name]}
+            )
+            if spec.name in self._LATER_TOOLS
+            else spec
+            for spec in self._CHAT_TOOL_SPECS
+        )
+
     def _count_usage(self, usage: Any) -> None:
         """One place that sees every model answer: context gauge and totals.
 
@@ -791,6 +824,12 @@ class ChatController:
         self._ctx_tokens = usage.prompt_tokens + usage.completion_tokens
         self._sent_tokens += usage.prompt_tokens
         self._recv_tokens += usage.completion_tokens
+        # a provider-side prefix cache is the cheapest speed there is; it stays
+        # invisible unless the share is said out loud, so it goes in the journal
+        hit = float(getattr(usage, "cache_hit", 0.0) or 0.0)
+        if hit:
+            self._cache_share = hit
+            self._write_dim(self.translator.t("chat.cache-hit", share=f"{hit:.0%}"), process=False)
 
     def _note_stagnation(self) -> None:
         """Tell the model and the operator about a direction that stopped paying."""
@@ -1368,7 +1407,7 @@ class ChatController:
             self._count_goal_step()
             try:
                 response = await self._request_chat_completion(
-                    operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
+                    operation_id, model_id, reasoning, self._tool_specs()
                 )
             except ProviderUnavailableError as exc:
                 # a slow or sick gateway is the common case; the operator sees
@@ -1387,7 +1426,7 @@ class ChatController:
                     await asyncio.sleep(self._MODEL_RETRY_DELAY)
                     try:
                         response = await self._request_chat_completion(
-                            operation_id, model_id, reasoning, self._CHAT_TOOL_SPECS
+                            operation_id, model_id, reasoning, self._tool_specs()
                         )
                         break
                     except ProviderUnavailableError as retry_exc:

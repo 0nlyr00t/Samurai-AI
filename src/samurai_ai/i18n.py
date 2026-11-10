@@ -490,6 +490,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-exit": "exit {code}",
         "chat.tool-collapsed": "⚙ {command}{code_mark} · {lines} lines",
         "chat.tool-background": "«{command}» takes a while — continuing in the background",
+        "chat.cache-hit": "prefix cache {share} — prefill is cheaper this call",
         "chat.tool-background-done": "[bg] done: {command}…",
         "chat.expand-empty": "nothing to expand yet — no folded process or output",
         "chat.process-block": "{lines} step(s) folded — Ctrl+E, Enter or a click to open",
@@ -1287,6 +1288,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
 
         "chat.tool-collapsed": "⚙ {command}{code_mark} · строк: {lines}",
         "chat.tool-background": "«{command}» надолго — продолжаю в фоне",
+        "chat.cache-hit": "кэш префикса {share} — этот вызов дешевле",
         "chat.tool-background-done": "[фон] готово: {command}…",
         "chat.thinking": "думаю · {count}",
         "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",

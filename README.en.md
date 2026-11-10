@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/samurai-logo.jpg" width="880" alt="Samurai AI — a samurai with a katana inside a red brush ring and the SAMURAI-AI wordmark">
+  <img src="src/samurai_ai/assets/samurai-logo.jpg" width="880" alt="Samurai AI — a samurai with a katana inside a red brush ring and the SAMURAI-AI wordmark">
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@ A local harness for authorized attacking: red teaming, bug bounty, CTF/HTB, oper
 TUI and CLI, state on the operator's machine, secrets in a local vault. Tools run in containers pinned by digest; out-of-scope calls and dangerous actions go through policy rather than through trust in the model.
 
 <p align="center">
-  <img src="assets/samurai-tui.en.png" width="1080" alt="Samurai AI TUI: operation journal with agent steps, a finding and a waiting approval, plan progress 1/3">
+  <img src="src/samurai_ai/assets/samurai-tui.en.png" width="1080" alt="Samurai AI TUI: operation journal with agent steps, a finding and a waiting approval, plan progress 1/3">
 </p>
 
 ## Install

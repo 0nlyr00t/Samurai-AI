@@ -13,13 +13,13 @@ def test_the_logo_stays_on_top_of_both_readmes() -> None:
     for name in ("README.md", "README.en.md"):
         text = readme(name)
         assert text.lstrip().startswith("<p align=\"center\">")
-        assert "assets/samurai-logo.jpg" in text.split("\n## ")[0]
+        assert "src/samurai_ai/assets/samurai-logo.jpg" in text.split("\n## ")[0]
 
 
 def test_both_readmes_show_a_screenshot_that_exists() -> None:
     for name, shot in (
-        ("README.md", "assets/samurai-tui.ru.png"),
-        ("README.en.md", "assets/samurai-tui.en.png"),
+        ("README.md", "src/samurai_ai/assets/samurai-tui.ru.png"),
+        ("README.en.md", "src/samurai_ai/assets/samurai-tui.en.png"),
     ):
         text = readme(name)
         assert shot in text

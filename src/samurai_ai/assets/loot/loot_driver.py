@@ -6,6 +6,7 @@ Prints what it recognised first, then the (truncated) body for the artifact.
 """
 
 import base64
+import binascii
 import re
 import sys
 from urllib.parse import urlsplit
@@ -37,7 +38,7 @@ PATTERNS = (
 def decode_basic(value: str) -> str:
     try:
         return base64.b64decode(value + "=" * (-len(value) % 4)).decode("utf-8", "replace")
-    except (ValueError, base64.binascii.Error):
+    except (ValueError, binascii.Error):
         return value
 
 

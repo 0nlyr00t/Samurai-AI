@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from samurai_ai.assets import assets_root
 from samurai_ai.domain.environment import Arch, EnvironmentProfile, OsFamily
 from samurai_ai.domain.provision import (
     ProvisionLockedError,
@@ -47,7 +48,7 @@ def _provisioner(tmp_path: Path, **profile: object) -> Provisioner:
         kernel=None,
         manager=ProcessManager(allowed_executables=frozenset({"apt-get", "cp", "mkdir"})),
         tools_dir=tmp_path / "tools",
-        templates=Path("assets/templates"),
+        templates=assets_root("templates"),
     )
 
 
@@ -174,7 +175,7 @@ def test_state_survives_a_restart_and_an_interrupted_lock_is_failed(
         kernel=None,
         manager=ProcessManager(allowed_executables=frozenset({"apt-get"})),
         tools_dir=tmp_path / "tools",
-        templates=Path("assets/templates"),
+        templates=assets_root("templates"),
     )
     assert again.state("scan.nmap").installed_version == "7.95"
     # a lock left behind by a crash must not block forever
@@ -191,3 +192,15 @@ def test_the_catalog_is_the_only_source_of_package_names() -> None:
             assert " " not in spec.package
             assert platform in ("linux", "macos")
     json.dumps({name: recipe.model_dump(mode="json") for name, recipe in recipes.items()})
+
+
+def test_the_version_line_skips_log_noise_and_ansi() -> None:
+    """`nuclei -version` leads with a coloured ERR line; the version is below it."""
+    from samurai_ai.services.provisioner import version_line
+
+    # exactly what the tool prints: brackets outside the escape sequence
+    text = "[\x1b[31mERR\x1b[0m] failed to load provider keys\n[\x1b[34mINF\x1b[0m] Nuclei v3.6.1\n"
+    assert version_line(text) == "[INF] Nuclei v3.6.1"
+    assert version_line("[\x1b[34mINF\x1b[0m] Nmap version 7.95") == "[INF] Nmap version 7.95"
+    assert version_line("[ERR] boom") == "[ERR] boom"  # only noise: say it
+    assert version_line("") == ""
