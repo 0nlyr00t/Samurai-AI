@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from rich.text import Text
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, ContentSwitcher, Input, OptionList, Static, Tab, Tabs
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
@@ -9076,5 +9076,55 @@ def test_restored_context_is_marked_off_from_new_messages(tmp_path: Path) -> Non
             await pilot.pause()
             fresh = [line.text for line in app.query_one("#journal", BlockJournal).lines]
             assert fresh.index("новый вопрос") > end
+
+    asyncio.run(exercise())
+
+
+def test_a_narrow_terminal_folds_the_chrome_and_keeps_the_journal(tmp_path: Path) -> None:
+    """80 columns: no side column, no rail, journal still full width."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Narrow lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            assert not app.query_one("#side", Vertical).display
+            assert not app.query_one("#killchain", Static).display
+            journal = app.query_one("#journal", BlockJournal)
+            assert journal.size.width >= 60
+            # the operator can force the panels back on a narrow screen
+            await pilot.press("ctrl+6")
+            await pilot.pause()
+            assert app.query_one("#side", Vertical).display
+            await pilot.press("ctrl+6")
+            await pilot.pause()
+            assert not app.query_one("#side", Vertical).display
+
+    asyncio.run(exercise())
+
+
+def test_long_paths_do_not_break_the_journal_at_eighty(tmp_path: Path) -> None:
+    """A 200-character path wraps instead of pushing the layout sideways."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    long_path = "/very/deep/" + "nested/" * 20 + "artifact.txt"
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app._write_dim(f"[artifact] {long_path}", process=False)
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            assert journal.size.width <= 80
+            assert journal.max_scroll_x == 0 or journal.max_scroll_x < 10
+            text = journal.text()
+            assert "artifact.txt" in text
 
     asyncio.run(exercise())
