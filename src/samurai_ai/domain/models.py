@@ -116,6 +116,15 @@ class ModelDefinition(BaseModel):
         return value
 
     @property
+    def price_known(self) -> bool:
+        """Whether the tariff is known; a local model is known to be free.
+
+        A cloud model with no tariff on file is *unknown*, not free — showing
+        ``$0.0000`` for it would read as a measurement it never made.
+        """
+        return self.local or bool(self.cost_input_per_m or self.cost_output_per_m)
+
+    @property
     def model_name(self) -> str:
         return self.id.split("/", 1)[1].rsplit("@", 1)[0]
 
