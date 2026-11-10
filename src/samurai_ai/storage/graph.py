@@ -56,6 +56,16 @@ class GraphRepository:
             ).fetchone()
         return _node(row) if row else None
 
+    def set_payload(self, node_id: str, payload: dict[str, object], *, now: str) -> None:
+        """Rewrite a node's payload, keeping the title the row already had."""
+        import json as _json
+
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE exploration_nodes SET payload = ?, updated_at = ? WHERE id = ?",
+                (_json.dumps(payload, ensure_ascii=False), now, node_id),
+            )
+
     def transition(
         self,
         node_id: str,

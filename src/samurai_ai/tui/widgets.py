@@ -73,7 +73,11 @@ class StripItem(Static):
 
 
 class SideBlock(Static):
-    """A side-panel list (SCOPE, LOOT); a click with overflow opens the full list."""
+    """A side-panel list (SCOPE, LOOT); a click opens the row or the full list.
+
+    Rows carry the domain id they came from, so a click reaches the evidence
+    behind a loot entry instead of stopping at the row text.
+    """
 
     #: how many rows the panel shows before the rest fold behind «ещё N…»
     LIMIT = 10
@@ -83,13 +87,27 @@ class SideBlock(Static):
         self.target = target
         #: every row as a plain line, for the full list behind the click
         self.entries: list[str] = []
+        #: id per row position in the text, "" where a row opens nothing
+        self.row_ids: list[str] = []
 
-    def on_click(self) -> None:
+    def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
+        index = int(getattr(event, "y", 0)) - self._header_lines()
+        visible = 0 <= index < min(len(self.row_ids), self.LIMIT)
+        if visible and self.row_ids[index]:
+            opener = getattr(self.app, "_open_loot_source", None)
+            if opener is not None:
+                opener(self.row_ids[index])
+                return
         if len(self.entries) <= self.LIMIT:
             return
-        opener = getattr(self.app, "_show_side_list", None)
-        if opener is not None:
-            opener(self.target, self.entries)
+        # the «ещё N…» fold, and any row that proves nothing, open the whole list
+        full = getattr(self.app, "_show_side_list", None)
+        if full is not None:
+            full(self.target, self.entries)
+
+    def _header_lines(self) -> int:
+        """Rows sit under the block title; the LOOT block has none in SCOPE."""
+        return 1
 
 
 class OperationTab(Static):
