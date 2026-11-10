@@ -22,7 +22,14 @@ from rich.text import Text
 from textual.widgets import Input, Static
 
 from samurai_ai import __version__
-from samurai_ai.agents.provider import ChatResponse, ImagePart, Message, ToolCall, ToolSpec
+from samurai_ai.agents.provider import (
+    STREAM_RESET,
+    ChatResponse,
+    ImagePart,
+    Message,
+    ToolCall,
+    ToolSpec,
+)
 from samurai_ai.domain.execution import (
     ApprovalRequiredError,
     SecretRedactor,
@@ -977,6 +984,13 @@ class ChatController:
         block = self._live_answer
         if block is None:
             return
+        if token == STREAM_RESET:
+            # a fallback is about to resend the whole answer: drop the partial
+            if getattr(self, "_thread_id", None) == threading.get_ident():
+                block.reset_tokens()
+            else:
+                self.call_from_thread(block.reset_tokens)
+            return
         # on a worker thread (real run) we hop to the app thread; on the test
         # harness the pilot runs inline and a hop would deadlock
         if getattr(self, "_thread_id", None) == threading.get_ident():
@@ -1339,6 +1353,7 @@ class ChatController:
                     approval_id=approval_id,
                     max_tokens=max_tokens,
                     on_token=self._stream_token,
+                    should_stop=lambda: self._stop_requested,
                 )
             except ApprovalRequiredError as exc:
                 approval = self.kernel.kernel.get_approval(exc.approval_id)

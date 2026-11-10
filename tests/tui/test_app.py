@@ -6891,7 +6891,9 @@ def test_the_answer_streams_into_a_live_block(tmp_path: Path) -> None:
         async def list_models(self) -> list[str]:
             return ["m"]
 
-        async def complete_stream(self, request, on_token):  # type: ignore[no-untyped-def]
+        async def complete_stream(
+            self, request, on_token, should_stop=None
+        ):  # type: ignore[no-untyped-def]
             for piece in ["Hel", "lo", " world"]:
                 self.chunks.append(piece)
                 on_token(piece)
@@ -9445,5 +9447,33 @@ def test_an_empty_side_panel_says_what_to_do_next(tmp_path: Path) -> None:
             # a target exists, so TARGETS is not empty; LOOT still points ahead
             assert "10.0.0.1" in str(app.query_one("#side-access", SideBlock).render())
             assert "flags and secrets" in str(app.query_one("#side-creds", SideBlock).render())
+
+    asyncio.run(exercise())
+
+
+def test_a_streamed_answer_is_reset_when_the_partial_one_is_dropped(tmp_path: Path) -> None:
+    """The reset sentinel clears the live block instead of appending a marker."""
+    from samurai_ai.agents.provider import STREAM_RESET
+    from samurai_ai.tui.journal import LiveAnswerBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            block = LiveAnswerBlock()
+            journal.add_block(block)
+            await pilot.pause()
+            app._live_answer = block
+            block.append_token("partial")
+            app._stream_token(STREAM_RESET)
+            await pilot.pause()
+            assert block.plain_text() == ""
+            app._stream_token("full")
+            await pilot.pause()
+            assert block.plain_text() == "full"
 
     asyncio.run(exercise())
