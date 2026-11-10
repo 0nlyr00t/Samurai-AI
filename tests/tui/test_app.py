@@ -9354,3 +9354,40 @@ def test_a_refuted_hypothesis_says_so(tmp_path: Path) -> None:
             assert "+0/−1" in text
 
     asyncio.run(exercise())
+
+
+def test_the_coverage_line_and_board_show_what_is_still_untested(tmp_path: Path) -> None:
+    """Coverage is surface plus check classes, and every gap carries a reason."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Coverage lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("a.example.com", "b.example.com"), excludes=("b.example.com",)),
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [PlanTask(id="fuzz-1", title="fuzz the paths", status=TaskStatus.DONE)],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            rail = str(app.query_one("#killchain", Static).render())
+            assert "coverage" in rail and "/3" in rail
+            app._show_coverage_board()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            labels = [str(option.prompt) for option in listed.options]
+            assert any("b.example.com" in label and "out of scope" in label for label in labels)
+            assert any("fuzz" in label and "covered" in label for label in labels)
+            assert any("spray" in label and "n/a" in label for label in labels)
+            await pilot.press("escape")
+            await pilot.pause()
+
+    asyncio.run(exercise())
