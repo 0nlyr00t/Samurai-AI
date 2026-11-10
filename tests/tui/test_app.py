@@ -6891,7 +6891,9 @@ def test_the_answer_streams_into_a_live_block(tmp_path: Path) -> None:
         async def list_models(self) -> list[str]:
             return ["m"]
 
-        async def complete_stream(self, request, on_token):  # type: ignore[no-untyped-def]
+        async def complete_stream(
+            self, request, on_token, should_stop=None
+        ):  # type: ignore[no-untyped-def]
             for piece in ["Hel", "lo", " world"]:
                 self.chunks.append(piece)
                 on_token(piece)
@@ -8236,7 +8238,8 @@ def test_a_short_paste_types_itself_in(tmp_path: Path) -> None:
 def test_an_at_path_inlines_the_file(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
-    target = tmp_path / "notes.txt"
+    # the mention must sit inside the working directory to be trusted
+    target = Path.cwd() / "notes-attached.txt"
     target.write_text("pasted file body")
 
     async def exercise() -> None:
@@ -8244,6 +8247,7 @@ def test_an_at_path_inlines_the_file(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             out = app._attach_paths(f"look at @{target}")
+            target.unlink(missing_ok=True)
             assert "pasted file body" in out
             missing = app._attach_paths("look at @/nope/missing.txt")
             assert "@" in missing  # a bad path stays as text
@@ -9445,5 +9449,178 @@ def test_an_empty_side_panel_says_what_to_do_next(tmp_path: Path) -> None:
             # a target exists, so TARGETS is not empty; LOOT still points ahead
             assert "10.0.0.1" in str(app.query_one("#side-access", SideBlock).render())
             assert "flags and secrets" in str(app.query_one("#side-creds", SideBlock).render())
+
+    asyncio.run(exercise())
+
+
+def test_a_streamed_answer_is_reset_when_the_partial_one_is_dropped(tmp_path: Path) -> None:
+    """The reset sentinel clears the live block instead of appending a marker."""
+    from samurai_ai.agents.provider import STREAM_RESET
+    from samurai_ai.tui.journal import LiveAnswerBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            block = LiveAnswerBlock()
+            journal.add_block(block)
+            await pilot.pause()
+            app._live_answer = block
+            block.append_token("partial")
+            app._stream_token(STREAM_RESET)
+            await pilot.pause()
+            assert block.plain_text() == ""
+            app._stream_token("full")
+            await pilot.pause()
+            assert block.plain_text() == "full"
+
+    asyncio.run(exercise())
+
+
+def _attached(app, text: str) -> str:  # type: ignore[no-untyped-def]
+    return app._attach_paths(text)
+
+
+def test_an_attached_file_is_cut_redacted_and_registered(tmp_path: Path) -> None:
+    """A big secret-bearing file rides as a bounded excerpt with an artifact."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    body = (f"token = {secret}\n" + "line\n" * 4000)
+    target = Path.cwd() / "attached-config.env"
+    target.write_text(body)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            operation = stack[0].create(
+                "Attach lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.4",))
+            )
+            app.operation = operation
+            try:
+                out = _attached(app, f"look at @{target.name}")
+            finally:
+                target.unlink(missing_ok=True)
+            assert "first 8000 of" in out
+            assert secret not in out  # masked before the model sees it
+            assert "secrets masked" in out
+            artifacts = stack[1].kernel.list_artifacts(operation.id)
+            assert artifacts and artifacts[0].summary.startswith("attached attached-config.env")
+
+    asyncio.run(exercise())
+
+
+def test_a_binary_is_named_not_pasted_and_an_image_points_at_the_tool(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    binary = Path.cwd() / "attached.bin"
+    binary.write_bytes(b"\x00\x01\x02payload")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            try:
+                out = _attached(app, f"see @{binary.name}")
+                assert "is binary" in out and "```" not in out
+                image = Path.cwd() / "shot.png"
+                image.write_bytes(b"\x89PNG\r\n\x1a\n\x00data")
+                out = _attached(app, f"see @{image.name}")
+                assert "read_image" in out
+                image.unlink(missing_ok=True)
+            finally:
+                binary.unlink(missing_ok=True)
+
+    asyncio.run(exercise())
+
+
+def test_a_file_outside_the_working_directory_is_refused(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("nope")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            out = _attached(app, f"read @{outside}")
+            lines = "\n".join(line.text for line in app.query_one("#journal", BlockJournal).lines)
+            assert "outside the working directory" in lines
+            assert out == f"read @{outside}"
+
+    asyncio.run(exercise())
+
+
+def test_an_unpriced_model_shows_na_not_zero(tmp_path: Path) -> None:
+    """A cloud model with no tariff is unknown, not free."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # openrouter/auto is registered with no tariff on file
+            app._add_cost("openrouter/auto@v1", 1_000_000, 0)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "auto n/a" in bar
+            assert "$0.0000" not in bar
+
+    asyncio.run(exercise())
+
+
+def test_routes_are_priced_separately_and_a_local_model_is_free(tmp_path: Path) -> None:
+    """Two models on one run show two numbers; a local route is a known zero."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    from samurai_ai.domain.models import ModelDefinition
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # a cloud provider keeps the price path synchronous, so a local
+            # route is modelled as a free model on it
+            app.models.registry.static_models = (
+                *app.models.registry.static_models,
+                ModelDefinition(id="openai/local@v1", provider_id="openai", local=True),
+            )
+            app._add_cost("openai/gpt-4o@v1", 1_000_000, 0)
+            app._add_cost("openai/local@v1", 5_000_000, 1000)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "gpt-4o $2.5000" in bar
+            assert "local $0.0000" in bar
+
+    asyncio.run(exercise())
+
+
+def test_cached_prompt_tokens_are_not_billed_at_full_price(tmp_path: Path) -> None:
+    """A prefix-cache hit is cheaper; the estimate must not charge it twice."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._add_cost("openai/gpt-4o@v1", 1_000_000, 0, cached_tokens=1_000_000)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "gpt-4o $0.0000" in bar
+            app._add_cost("openai/gpt-4o@v1", 1_000_000, 0, cached_tokens=600_000)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "gpt-4o $1.0000" in bar
 
     asyncio.run(exercise())
