@@ -9555,3 +9555,72 @@ def test_a_file_outside_the_working_directory_is_refused(tmp_path: Path) -> None
             assert out == f"read @{outside}"
 
     asyncio.run(exercise())
+
+
+def test_an_unpriced_model_shows_na_not_zero(tmp_path: Path) -> None:
+    """A cloud model with no tariff is unknown, not free."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # openrouter/auto is registered with no tariff on file
+            app._add_cost("openrouter/auto@v1", 1_000_000, 0)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "auto n/a" in bar
+            assert "$0.0000" not in bar
+
+    asyncio.run(exercise())
+
+
+def test_routes_are_priced_separately_and_a_local_model_is_free(tmp_path: Path) -> None:
+    """Two models on one run show two numbers; a local route is a known zero."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    from samurai_ai.domain.models import ModelDefinition
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # a cloud provider keeps the price path synchronous, so a local
+            # route is modelled as a free model on it
+            app.models.registry.static_models = (
+                *app.models.registry.static_models,
+                ModelDefinition(id="openai/local@v1", provider_id="openai", local=True),
+            )
+            app._add_cost("openai/gpt-4o@v1", 1_000_000, 0)
+            app._add_cost("openai/local@v1", 5_000_000, 1000)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "gpt-4o $2.5000" in bar
+            assert "local $0.0000" in bar
+
+    asyncio.run(exercise())
+
+
+def test_cached_prompt_tokens_are_not_billed_at_full_price(tmp_path: Path) -> None:
+    """A prefix-cache hit is cheaper; the estimate must not charge it twice."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._add_cost("openai/gpt-4o@v1", 1_000_000, 0, cached_tokens=1_000_000)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "gpt-4o $0.0000" in bar
+            app._add_cost("openai/gpt-4o@v1", 1_000_000, 0, cached_tokens=600_000)
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = str(app.query_one("#status-bar", Static).render())
+            assert "gpt-4o $1.0000" in bar
+
+    asyncio.run(exercise())

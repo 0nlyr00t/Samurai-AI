@@ -357,8 +357,10 @@ class ModelService:
             "prompt_tokens": response.usage.prompt_tokens,
             "completion_tokens": response.usage.completion_tokens,
             "latency_ms": response.latency_ms,
+            # cached prompt tokens bill at a discount the provider does not
+            # disclose, so they are not charged at the full input rate
             "estimated_cost_usd": used_model.estimate_cost(
-                response.usage.prompt_tokens,
+                max(0, response.usage.prompt_tokens - response.usage.cached_tokens),
                 response.usage.completion_tokens,
             ),
         }
