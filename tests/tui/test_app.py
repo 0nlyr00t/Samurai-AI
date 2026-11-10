@@ -8842,3 +8842,80 @@ def test_a_bare_relay_mention_only_nudges(tmp_path: Path) -> None:
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
+
+
+def test_a_live_update_keeps_the_draft_and_never_steals_focus(tmp_path: Path) -> None:
+    """Text typed while a tool runs stays, and focus is not pulled around."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.focus()
+            await pilot.press(*"nmap -sV")
+            # a background event of every kind the loop produces
+            app._write_line("[info] tool finished")
+            app._refresh_chrome()
+            app.focus_command_input()
+            await pilot.pause()
+            assert command_input.value == "nmap -sV"
+            assert app.focused is command_input
+            assert command_input.cursor_position == len("nmap -sV")
+
+    asyncio.run(exercise())
+
+
+def test_closing_a_modal_returns_focus_to_where_it_was(tmp_path: Path) -> None:
+    """Reading a list before opening a screen: focus comes back to the list."""
+    from samurai_ai.tui.screens import InspectorScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Focus lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.8",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._switch_view("view-scope")
+            await pilot.pause()
+            scope_list = app.query_one("#view-scope", OptionList)
+            scope_list.focus()
+            await pilot.pause()
+            app.push_screen(InspectorScreen(app.translator, "t", (("head", ("line",)),), {}))
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.pause()
+            assert app.focused is scope_list
+
+    asyncio.run(exercise())
+
+
+def test_a_background_event_does_not_switch_the_visible_tab(tmp_path: Path) -> None:
+    """The operator's chosen pane stays put while the loop writes lines."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Tab lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.9",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            views = app.query_one("#views", ContentSwitcher)
+            assert str(views.current) == "view-hunt"
+            app._write_line("[info] background")
+            app._refresh_chrome()
+            await pilot.pause()
+            assert str(views.current) == "view-hunt"
+
+    asyncio.run(exercise())
