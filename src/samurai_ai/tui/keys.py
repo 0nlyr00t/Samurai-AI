@@ -56,6 +56,7 @@ ACTIONS: tuple[Action, ...] = (
     Action("view_ops", "ctrl+2", "keys.action.view-ops", priority=True),
     Action("view_bounty", "ctrl+3", "keys.action.view-bounty", priority=True),
     Action("view_tasks", "ctrl+4", "keys.action.view-tasks", priority=True),
+    Action("toggle_side", "ctrl+6", "keys.action.side", priority=True),
     Action("view_next", "ctrl+right", "keys.action.view-next", priority=True),
     Action("view_previous", "ctrl+left", "keys.action.view-previous", priority=True),
 )

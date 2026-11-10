@@ -16,7 +16,9 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import (
     ContentSwitcher,
     Input,
@@ -370,6 +372,7 @@ class SamuraiApp(
         Binding("ctrl+e", "expand_output", "Expand collapsed output", show=False, priority=True),
         # priority: the focused input would otherwise keep the key
         Binding("shift+tab", "toggle_plan", "Plan mode", show=False, priority=True),
+        Binding("ctrl+6", "toggle_side", "Side panels", show=False, priority=True),
     ]
 
     _QUIT_CONFIRM_SECONDS = 2.0
@@ -466,7 +469,12 @@ class SamuraiApp(
         self._tab_activations_seen: int = 0
         self._selection_copy_timer: Timer | None = None
         self._last_auto_copy: str | None = None
+        #: who had focus before a modal opened: closing it returns there, not to
+        #: the input — the operator was reading something, and stays there
+        self._focus_before_modal: Widget | None = None
         self._killchain_phase: str = ""
+        #: the operator forced the side column on; a narrow width then keeps it
+        self._side_forced = False
         self._live_answer = None
         self._turn_todo: list[tuple[str, str]] = []
         self._chat_history: list[Message] = []
@@ -753,6 +761,7 @@ class SamuraiApp(
     def _after_locale(self) -> None:
         self._write_welcome()
         if not self._chat_history:
+            self.reconcile_before_show()
             self._restore_chat()
         self._refresh_chrome()
         # the search counters move slowly; a three-minute beat is plenty and
@@ -911,19 +920,60 @@ class SamuraiApp(
         command_input.value = value
         command_input.cursor_position = len(value)
 
+    def operator_busy(self) -> bool:
+        """True while the operator is reading: dragging, or driving a list."""
+        if self.screen.selections:
+            return True
+        return isinstance(self.focused, (OptionList, Tabs))
+
     def focus_command_input(self, *, force: bool = False) -> None:
         """Return focus to the command input unless the operator is busy.
 
         A turn finishing or a background refresh must not take focus away while
         the operator drags a selection or scrolls a list — that is the bug half
-        the terminal agents get filed for. Explicit actions pass ``force``.
+        the terminal agents get filed for. Explicit actions pass ``force``, and
+        so does anything that *is* the operator's own keystroke.
         """
-        if not force:
-            if self.screen.selections:
-                return
-            if isinstance(self.focused, (OptionList, Tabs)):
-                return
+        if not force and self.operator_busy():
+            return
         self.query_one("#command-input", Input).focus()
+
+    def restore_focus(self) -> None:
+        """Give focus back to whatever had it before the modal, else the input."""
+        previous = self._focus_before_modal
+        self._focus_before_modal = None
+        # the suggestion popup follows the input and steals focus back the moment
+        # it reappears, so it is not a target of its own
+        if previous is not None and previous.is_mounted and previous.id != "command-suggestions":
+            previous.focus()
+            return
+        self.focus_command_input(force=True)
+
+    def push_screen(self, screen, callback=None, wait_for_dismiss: bool = False):  # type: ignore[no-untyped-def]
+        """Remember the focused widget so closing a modal can return to it."""
+        if not isinstance(screen, ModalScreen):
+            return super().push_screen(screen, callback, wait_for_dismiss)
+        if self._focus_before_modal is None:
+            self._focus_before_modal = self.focused
+
+        def closed(result):  # type: ignore[no-untyped-def]
+            if callback is not None:
+                callback(result)
+            self._after_modal_closed()
+
+        return super().push_screen(screen, closed, wait_for_dismiss)
+
+    def _after_modal_closed(self) -> None:
+        """Restore focus once the dismissed screen is really off the stack."""
+        self.call_after_refresh(self._restore_focus_if_free)
+
+    def _restore_focus_if_free(self) -> None:
+        if not self.is_running:
+            return
+        if isinstance(self.screen, ModalScreen):
+            # the closing screen opened another one; its own close restores
+            return
+        self.restore_focus()
 
     def _on_screen_selections(self) -> None:
         """Selection changes during the drag; copy once it settles."""
@@ -1060,7 +1110,33 @@ class SamuraiApp(
                 )
             )
         self._refresh_chrome()
-        self.query_one("#command-input", Input).focus()
+        self.focus_command_input(force=True)
+
+    #: below this width the side column and the rail fold away on their own
+    _NARROW_WIDTH = 100
+
+    def action_toggle_side(self) -> None:
+        """Show or hide the side column; a narrow terminal remembers the choice."""
+        side = self.query_one("#side", Vertical)
+        self._side_forced = not side.display
+        side.display = self._side_forced
+        self.settings.set_value("tui.side", "1" if side.display else "0")
+        self._refresh_chrome()
+        self.focus_command_input(force=True)
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Narrow terminals fold the chrome away; the journal keeps the room."""
+        self._apply_chrome_fit(event.size.width)
+
+    def _apply_chrome_fit(self, width: int) -> None:
+        narrow = width < self._NARROW_WIDTH
+        side = self.query_one("#side", Vertical)
+        rail = self.query_one("#killchain", Static)
+        if narrow and not self._side_forced:
+            side.display = False
+        elif not narrow:
+            side.display = self.settings.get_value("tui.side") != "0"
+        rail.display = bool(self._killchain_phase) and not narrow
 
     def action_toggle_journal(self) -> None:
         views = self.query_one("#views", ContentSwitcher)
@@ -1373,6 +1449,7 @@ class SamuraiApp(
         self._chat_history.clear()
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
+        self.reconcile_before_show()
         self._restore_chat()
         self._restore_tab_state()
         self._write_dim(self.translator.t("resume.done", name=operation.name), process=False)
@@ -1449,7 +1526,7 @@ class SamuraiApp(
 
     def _on_resume(self, operation_id: str | None) -> None:
         if operation_id is None:
-            self.focus_command_input(force=True)
+            self.restore_focus()
             return
         try:
             operation = self.service.get(operation_id)
@@ -1464,17 +1541,19 @@ class SamuraiApp(
         self._last_ai_code = None
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
+        self.reconcile_before_show()
         self._restore_chat()
         self._write_dim(self.translator.t("resume.done", name=operation.name), process=False)
         self._switch_view("journal")
         self._refresh_chrome()
+        self.restore_focus()
 
     def _show_new_operation(self) -> None:
         self.push_screen(NewOperationScreen(self.translator), self._on_new_operation)
 
     def _on_new_operation(self, choice: tuple[str, str, str] | None) -> None:
         if choice is None:
-            self.focus_command_input(force=True)
+            self.restore_focus()
             return
         name, mode, scope = choice
         includes = tuple(rule.strip() for rule in scope.split(",") if rule.strip()) or (
@@ -2112,7 +2191,7 @@ class SamuraiApp(
             self._dir_trusted = False
             self._write_line("[deny] " + self.translator.t("trust.denied", path=cwd))
         self._refresh_chrome()
-        self.focus_command_input(force=True)
+        self.restore_focus()
 
     def _toggle_yolo(self) -> None:
         target = (
@@ -3609,6 +3688,21 @@ class SamuraiApp(
                 f"{runbook.created_at.isoformat()}"
             )
 
+    def reconcile_before_show(self) -> None:
+        """Settle what a crash left in flight before its operation is displayed.
+
+        Runs marked failed here are *not* retried: a command whose result is
+        unknown shows as unknown, because re-running it is a second side effect.
+        """
+        if self.operation is None:
+            return
+        marked_runs = self.execution.reconcile_runs(self.operation.id, actor="operator")
+        if not marked_runs:
+            return
+        self._write_dim(
+            self.translator.t("reconcile.unknown", runs=", ".join(marked_runs)), process=False
+        )
+
     def _show_reconcile(self) -> None:
         if not self.operation:
             self._write_line("[reconcile] " + self.translator.t("status.no-operation"))
@@ -3940,7 +4034,7 @@ class SamuraiApp(
     def _refresh_killchain(self) -> None:
         widget = self.query_one("#killchain", Static)
         chain = self._killchain()
-        if not chain:
+        if not chain or self.size.width < self._NARROW_WIDTH:
             widget.display = False
             return
         widget.display = True
@@ -4017,6 +4111,7 @@ class SamuraiApp(
         self._chat_history.clear()
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
+        self.reconcile_before_show()
         self._restore_chat()
         self._refresh_chrome()
 

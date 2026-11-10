@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from rich.text import Text
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, ContentSwitcher, Input, OptionList, Static, Tab, Tabs
 
 from samurai_ai.agents.orchestrator import AgentOrchestrator
@@ -4288,8 +4288,9 @@ def test_subagent_asks_for_approvals_in_ask_mode(tmp_path: Path) -> None:
                 if isinstance(app.screen, AccessPromptScreen):
                     break
             assert isinstance(app.screen, AccessPromptScreen)
-            subtitle = str(app.screen.query_one("#access-action", Static).render())
-            assert "agent_" in subtitle
+            # the run/task ids ride in the facts line above the body
+            prompt = str(app.screen.query_one("#access-meta", Static).render())
+            assert "agent_" in prompt
             app.screen.dismiss(True)
             await asyncio.wait_for(job, 20)
             for _ in range(20):
@@ -6368,11 +6369,15 @@ def test_the_approval_prompt_reveals_and_copies_the_full_command(tmp_path: Path)
             app.push_screen(AccessPromptScreen(app.translator, action, "R2"))
             await pilot.pause()
             full = app.screen.query_one("#access-full")
+            # the command is readable before any key: no deciding on an ellipsis
+            assert full.display
+            assert action in str(app.screen.query_one("#access-full-text", Static).render())
+            await pilot.press("v")
+            await pilot.pause()
             assert not full.display
             await pilot.press("v")
             await pilot.pause()
             assert full.display
-            assert action in str(app.screen.query_one("#access-full-text", Static).render())
             await pilot.press("c")
             await pilot.pause()
             assert getattr(app, "_clipboard", "") == action
@@ -8840,5 +8845,286 @@ def test_a_bare_relay_mention_only_nudges(tmp_path: Path) -> None:
             assert "prlctl list" in text
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_live_update_keeps_the_draft_and_never_steals_focus(tmp_path: Path) -> None:
+    """Text typed while a tool runs stays, and focus is not pulled around."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.focus()
+            await pilot.press(*"nmap -sV")
+            # a background event of every kind the loop produces
+            app._write_line("[info] tool finished")
+            app._refresh_chrome()
+            app.focus_command_input()
+            await pilot.pause()
+            assert command_input.value == "nmap -sV"
+            assert app.focused is command_input
+            assert command_input.cursor_position == len("nmap -sV")
+
+    asyncio.run(exercise())
+
+
+def test_closing_a_modal_returns_focus_to_where_it_was(tmp_path: Path) -> None:
+    """Reading a list before opening a screen: focus comes back to the list."""
+    from samurai_ai.tui.screens import InspectorScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Focus lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.8",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._switch_view("view-scope")
+            await pilot.pause()
+            scope_list = app.query_one("#view-scope", OptionList)
+            scope_list.focus()
+            await pilot.pause()
+            app.push_screen(InspectorScreen(app.translator, "t", (("head", ("line",)),), {}))
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.pause()
+            assert app.focused is scope_list
+
+    asyncio.run(exercise())
+
+
+def test_a_background_event_does_not_switch_the_visible_tab(tmp_path: Path) -> None:
+    """The operator's chosen pane stays put while the loop writes lines."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Tab lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.9",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._switch_view("view-hunt")
+            await pilot.pause()
+            views = app.query_one("#views", ContentSwitcher)
+            assert str(views.current) == "view-hunt"
+            app._write_line("[info] background")
+            app._refresh_chrome()
+            await pilot.pause()
+            assert str(views.current) == "view-hunt"
+
+    asyncio.run(exercise())
+
+
+def test_a_long_multiline_command_is_readable_on_a_narrow_terminal(tmp_path: Path) -> None:
+    """Several thousand characters, 80 columns: full text, numbered, scrollable."""
+    from samurai_ai.tui.screens import AccessPromptScreen
+    from samurai_ai.tui.screens.access import ApprovalMeta
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("ru")
+    body = "\n".join(
+        f"curl -s -H 'X-Token: {index}' https://example.com/{'a' * 60}" for index in range(40)
+    )
+    action = f"cd /tmp && {body}"
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.push_screen(
+                AccessPromptScreen(
+                    app.translator,
+                    action,
+                    "r2 · destructive",
+                    meta=ApprovalMeta(
+                        tool_id="net.curl",
+                        tool_version=3,
+                        cwd="/home/agent/work",
+                        execution_path="ssh -F ~/.ssh/htb.conf vm",
+                        timeout_s=120,
+                        destructive=("redirect",),
+                        sensitive=("token",),
+                    ),
+                )
+            )
+            await pilot.pause()
+            screen = app.screen
+            shown = str(screen.query_one("#access-full-text", Static).render())
+            # every line is there verbatim, behind a number for reference
+            for line in action.splitlines():
+                assert line in shown
+            assert " 1 │" in shown and "40 │" in shown
+            facts = str(screen.query_one("#access-meta", Static).render())
+            assert "net.curl" in facts and "v3" in facts
+            assert "/home/agent/work" in facts and "ssh -F" in facts
+            assert "120" in facts
+            badges = str(screen.query_one("#access-badges", Static).render())
+            assert "redirect" in badges and "token" in badges
+            # the layout survives 80 columns instead of overflowing the screen
+            dialog = screen.query_one("#access-dialog")
+            assert dialog.size.width <= 80
+            await pilot.press("escape")
+            await pilot.pause()
+
+    asyncio.run(exercise())
+
+
+def test_undo_says_the_external_effect_stays_and_does_not_repeat_it(tmp_path: Path) -> None:
+    """Undo drops the conversation turn; the command that ran is not re-run."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "поработай"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            runs_after_first = len(stack[4].list_runs(operation.id))
+            journal = app.query_one("#journal", BlockJournal)
+            app._undo_last_turn()
+            await pilot.pause()
+            lines = "\n".join(line.text for line in journal.lines)
+            assert "external tools already ran" in lines
+            assert len(stack[4].list_runs(operation.id)) == runs_after_first
+            # a fresh turn does not replay the runs the undone turn already did
+            app.query_one("#command-input", Input).value = "ещё"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            runs = stack[4].list_runs(operation.id)
+            assert len({run.id for run in runs}) == len(runs)
+            assert len(runs) == runs_after_first
+            assert not app._chat_busy
+
+    asyncio.run(exercise())
+
+
+def test_resume_reconciles_an_interrupted_run_and_does_not_retry_it(tmp_path: Path) -> None:
+    """A run left in flight by a crash shows as unknown, and stays one run."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Crash lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.7",))
+    )
+    from samurai_ai.domain.execution import ToolRun, ToolRunStatus
+    from samurai_ai.domain.operations import OperationEvent
+
+    run = ToolRun(operation_id=operation.id, tool_id="scan.nmap", tool_version=1)
+    run.status = ToolRunStatus.RUNNING
+    stack[4].runs.add_run(
+        run, OperationEvent(operation_id=operation.id, event_type="tool.run.started", payload={})
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.operation = operation
+            app.reconcile_before_show()
+            await pilot.pause()
+            journal = "\n".join(
+                line.text for line in app.query_one("#journal", BlockJournal).lines
+            )
+            assert "unknown external result" in journal
+            runs = stack[4].list_runs(operation.id)
+            assert len(runs) == 1
+            assert runs[0].status.value != "running"
+
+    asyncio.run(exercise())
+
+
+def test_restored_context_is_marked_off_from_new_messages(tmp_path: Path) -> None:
+    """Replayed history sits between two dim markers, not loose in the journal."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Restore lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.6",))
+    )
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.chat_history.remember(operation.id, Message(role="user", content="старый вопрос"))
+            app.chat_history.remember(
+                operation.id, Message(role="assistant", content="старый ответ")
+            )
+            app.query_one("#journal", BlockJournal).clear()
+            app._restore_chat()
+            await pilot.pause()
+            lines = [line.text for line in app.query_one("#journal", BlockJournal).lines]
+            start = next(i for i, text in enumerate(lines) if "restored" in text)
+            end = next(i for i, text in enumerate(lines) if "restored" in text and i > start)
+            assert start < end
+            body = "\n".join(lines[start:end])
+            assert "старый ответ" in body
+            # new messages land after the closing marker
+            app._write_user_message("новый вопрос")
+            await pilot.pause()
+            fresh = [line.text for line in app.query_one("#journal", BlockJournal).lines]
+            assert fresh.index("новый вопрос") > end
+
+    asyncio.run(exercise())
+
+
+def test_a_narrow_terminal_folds_the_chrome_and_keeps_the_journal(tmp_path: Path) -> None:
+    """80 columns: no side column, no rail, journal still full width."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Narrow lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app._refresh_killchain()
+            await pilot.pause()
+            assert not app.query_one("#side", Vertical).display
+            assert not app.query_one("#killchain", Static).display
+            journal = app.query_one("#journal", BlockJournal)
+            assert journal.size.width >= 60
+            # the operator can force the panels back on a narrow screen
+            await pilot.press("ctrl+6")
+            await pilot.pause()
+            assert app.query_one("#side", Vertical).display
+            await pilot.press("ctrl+6")
+            await pilot.pause()
+            assert not app.query_one("#side", Vertical).display
+
+    asyncio.run(exercise())
+
+
+def test_long_paths_do_not_break_the_journal_at_eighty(tmp_path: Path) -> None:
+    """A 200-character path wraps instead of pushing the layout sideways."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    long_path = "/very/deep/" + "nested/" * 20 + "artifact.txt"
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app._write_dim(f"[artifact] {long_path}", process=False)
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            assert journal.size.width <= 80
+            assert journal.max_scroll_x == 0 or journal.max_scroll_x < 10
+            text = journal.text()
+            assert "artifact.txt" in text
 
     asyncio.run(exercise())
