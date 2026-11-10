@@ -427,6 +427,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "is empty"
         ),
         "scope.extended": "[scope] added: {rules}",
+        "provision.retry": "the last attempt failed — this retries it on purpose",
+        "provision.ready": "{tool} installed and verified",
         "scope.ask-title": "The command reaches a resource outside the scope",
         "scope.ask-hint": "Enter — add it to the scope and run · s — skip the command",
         "scope.edited": "[scope] added: {added} · removed: {removed}",
@@ -488,6 +490,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-exit": "exit {code}",
         "chat.tool-collapsed": "⚙ {command}{code_mark} · {lines} lines",
         "chat.tool-background": "«{command}» takes a while — continuing in the background",
+        "chat.cache-hit": "prefix cache {share} — prefill is cheaper this call",
         "chat.tool-background-done": "[bg] done: {command}…",
         "chat.expand-empty": "nothing to expand yet — no folded process or output",
         "chat.process-block": "{lines} step(s) folded — Ctrl+E, Enter or a click to open",
@@ -1213,6 +1216,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "[прогресс] {count} вызовов shell и ноль записей — структура пустая"
         ),
         "scope.extended": "[скоуп] добавлено: {rules}",
+        "provision.retry": "прошлая попытка упала — эта повторяет её осознанно",
+        "provision.ready": "{tool} установлен и проверен",
         "scope.ask-title": "Команда обращается за скоуп",
         "scope.ask-hint": "Enter — добавить в скоуп и выполнить · s — пропустить",
         "scope.edited": "[скоуп] добавлено: {added} · удалено: {removed}",
@@ -1283,6 +1288,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
 
         "chat.tool-collapsed": "⚙ {command}{code_mark} · строк: {lines}",
         "chat.tool-background": "«{command}» надолго — продолжаю в фоне",
+        "chat.cache-hit": "кэш префикса {share} — этот вызов дешевле",
         "chat.tool-background-done": "[фон] готово: {command}…",
         "chat.thinking": "думаю · {count}",
         "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",

@@ -35,10 +35,20 @@ class Usage(BaseModel):
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    #: prompt tokens the provider served from its own prefix cache; gateways that
+    #: do not cache leave it at 0 and the gauge simply shows nothing
+    cached_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def cache_hit(self) -> float:
+        """Share of the prompt that came from cache; 0 when nothing was cached."""
+        if not self.prompt_tokens or not self.cached_tokens:
+            return 0.0
+        return min(1.0, self.cached_tokens / self.prompt_tokens)
 
 
 class ImagePart(BaseModel):

@@ -93,6 +93,61 @@ class ParamSpec(BaseModel):
         return self
 
 
+class PackageSpec(BaseModel):
+    """How this tool is installed on one platform family.
+
+    Only these keys exist, so the model can never name a package: the recipe
+    does. `sudo` is a fact of the recipe, decided by review, not by the caller.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    manager: Literal["apt", "brew", "project-local"]
+    package: str = Field(min_length=1, max_length=120)
+    #: argv after the manager, for recipes whose package is not the whole story
+    extra: tuple[str, ...] = ()
+    sudo: bool = False
+    #: apt/brew repositories roll: the exact version is recorded, not promised
+    reproducible: bool = False
+
+
+class ManifestProvision(BaseModel):
+    """Everything the provisioner needs, and nothing a shell would decide."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    packages: dict[str, PackageSpec] = Field(default_factory=dict)
+    #: read-only probes run after install, before the tool is declared ready
+    healthcheck: tuple[str, ...] = ()
+    version_flag: str = "--version"
+    #: what the tool needs from the machine, checked before a plan is built
+    requires_docker: bool = False
+    requires_gpu: bool = False
+    requires_sudo: bool = False
+    min_free_mb: int = Field(default=0, ge=0)
+    #: human-readable limits shown in the dry-run ("hashcat needs a GPU")
+    limitations: tuple[str, ...] = ()
+    #: ids this tool must not be installed next to
+    conflicts: tuple[str, ...] = ()
+
+
+class ManifestExecution(BaseModel):
+    """Where the tool may run. Native is preferred where hardware matters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: argv without the executable: the same template for native and container
+    native: bool = False
+    #: false keeps the typed adapter in front (the HTTP broker pins DNS and
+    #: revalidates scope; a native curl would lose that for a small speed win)
+    native_preferred: bool = True
+    project_local: bool = False
+    container: bool = True
+    relay_supported: bool = False
+    #: working directory, relative to the operation's, when one is needed
+    workdir: str = ""
+
+
 class ManifestTargets(BaseModel):
     """Which parameter carries targets, and what may appear in it."""
 
@@ -139,6 +194,8 @@ class ToolManifest(BaseModel):
     #: env_names so their values never enter the manifest
     env: dict[str, str] = Field(default_factory=dict)
     resolver_url: str | None = None
+    execution: ManifestExecution = Field(default_factory=ManifestExecution)
+    provision: ManifestProvision = Field(default_factory=ManifestProvision)
     limits: ManifestLimits = Field(default_factory=ManifestLimits)
     params: dict[str, ParamSpec] = Field(default_factory=dict)
     targets: ManifestTargets | None = None
@@ -280,6 +337,14 @@ class ToolManifest(BaseModel):
         if self.resolver_url is not None and self.network != "scoped":
             raise ManifestError("a pinned resolver only makes sense on a scoped manifest")
         return self
+
+    def package_for(self, platform: str) -> PackageSpec | None:
+        """The package for a platform family; `macos`/`linux` only, no surprises."""
+        return self.provision.packages.get(platform)
+
+    @property
+    def capabilities_list(self) -> tuple[str, ...]:
+        return self.capabilities
 
     @property
     def profile_id(self) -> str:

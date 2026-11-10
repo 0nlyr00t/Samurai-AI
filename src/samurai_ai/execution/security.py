@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import sys
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any
@@ -48,11 +47,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _wordlist_dir() -> Path:
-    """`assets/wordlists`, also inside a PyInstaller one-file bundle."""
-    bundle = getattr(sys, "_MEIPASS", None)
-    if bundle is not None:
-        return Path(bundle) / "assets" / "wordlists"
-    return _REPO_ROOT / "assets" / "wordlists"
+    """`assets/wordlists`, wherever the shipped data lives."""
+    from samurai_ai.assets import assets_root
+
+    return assets_root("wordlists")
 _FUZZ_MATCH_CODES = "200-299,301,302,307,401,403,405,500"
 
 

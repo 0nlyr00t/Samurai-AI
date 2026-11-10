@@ -1,0 +1,57 @@
+{
+  "id": "intel.censys",
+  "version": 1,
+  "title": "Censys lookup",
+  "description": "Passive Censys host asset for an in-scope IP or a certificate search by an in-scope domain",
+  "image": "python:3.12-slim@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30",
+  "executable": "python3",
+  "risk_class": "r1",
+  "network": "scoped",
+  "read_only": true,
+  "proxy_via_env": true,
+  "egress_hosts": [
+    "api.platform.censys.io"
+  ],
+  "env_names": [
+    "CENSYS_API_TOKEN",
+    "CENSYS_ORG_ID"
+  ],
+  "env": {
+    "HOME": "/tmp",
+    "TMPDIR": "/tmp"
+  },
+  "limits": {
+    "timeout_seconds": 120,
+    "memory_mb": 512,
+    "max_output_bytes": 262144
+  },
+  "params": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "host",
+        "search"
+      ],
+      "default": "host",
+      "description": "host or domain"
+    },
+    "target": {
+      "type": "string",
+      "required": true,
+      "description": "in-scope IP (host) or in-scope domain (domain/search)"
+    }
+  },
+  "targets": {
+    "param": "target",
+    "kind": "host",
+    "max": 1
+  },
+  "argv": [
+    "-c",
+    "\"\"\"Censys Platform lookups: one bare IP (host asset) or a certificate search.\n\nAuth is a Personal Access Token in a Bearer header; the organization id is\noptional and only sent when CENSYS_ORG_ID is set.\n\"\"\"\n\nimport json\nimport os\nimport sys\nfrom typing import Any\nfrom urllib.error import HTTPError, URLError\nfrom urllib.parse import urlencode\nfrom urllib.request import Request, urlopen\n\nBASE = \"https://api.platform.censys.io/v3/global\"\nUSER_AGENT = \"samurai-ai/intel\"\nACCEPT_HOST = \"application/vnd.censys.api.v3.host.v1+json\"\n\n\ndef fail(message: str) -> None:\n    print(f\"censys: {message}\")\n    sys.exit(1)\n\n\ndef request(path: str, accept: str, **params: object) -> dict[str, Any]:\n    token = os.environ.get(\"CENSYS_API_TOKEN\", \"\")\n    if not token:\n        fail(\"CENSYS_API_TOKEN is empty \u2014 set it in /settings\")\n    org = os.environ.get(\"CENSYS_ORG_ID\", \"\")\n    if org:\n        params[\"organization_id\"] = org\n    url = f\"{BASE}{path}\"\n    if params:\n        url = f\"{url}?{urlencode(params)}\"\n    # Cloudflare in front of the API rejects the default urllib agent\n    headers = {\n        \"Authorization\": f\"Bearer {token}\",\n        \"Accept\": accept,\n        \"User-Agent\": USER_AGENT,\n    }\n    try:\n        with urlopen(Request(url, headers=headers), timeout=60) as answer:  # noqa: S310\n            payload: dict[str, Any] = json.loads(answer.read().decode())\n            return payload\n    except HTTPError as exc:\n        fail(f\"HTTP {exc.code}: {exc.read().decode()[:200]}\")\n    except URLError as exc:\n        fail(f\"unreachable: {exc.reason}\")\n    return {}\n\n\ndef host(ip: str) -> None:\n    payload = request(f\"/asset/host/{ip}\", ACCEPT_HOST)\n    host_data = (payload.get(\"result\") or {}).get(\"resource\") or {}\n    location = host_data.get(\"location\") or {}\n    system = host_data.get(\"autonomous_system\") or {}\n    print(\n        f\"{ip}\\t{location.get('country') or '-'}\\t{system.get('asn') or '-'}\"\n        f\"\\t{(system.get('description') or '-')[:40]}\"\n    )\n    names = ((host_data.get(\"dns\") or {}).get(\"names\")) or []\n    if names:\n        print(\"dns\\t\" + \",\".join(str(name) for name in names[:25]))\n    for service in (host_data.get(\"services\") or [])[:50]:\n        banner = str(service.get(\"banner\") or \"\").strip().splitlines()\n        first = banner[0][:120] if banner else \"\"\n        print(\n            f\"service\\t{service.get('port')}/{service.get('transport_protocol', 'tcp')}\"\n            f\"\\t{(service.get('protocol') or '')[:20]}\\t{first}\"\n        )\n\n\ndef search(name: str) -> None:\n    payload = request(\n        \"/search/query\",\n        \"application/json\",\n        q=f\"host.name: {name}\",\n        per_page=25,\n    )\n    for hit in ((payload.get(\"result\") or {}).get(\"hits\")) or []:\n        resource = hit.get(\"host\") or hit\n        print(f\"hit\\t{resource.get('ip') or '-'}\\t{(resource.get('name') or '')[:60]}\")\n\n\ndef main() -> None:\n    if len(sys.argv) != 3:\n        fail(\"usage: censys_driver.py <host|search> <value>\")\n    mode, value = sys.argv[1], sys.argv[2]\n    if mode == \"host\":\n        host(value)\n    elif mode == \"search\":\n        search(value)\n    else:\n        fail(f\"unknown mode {mode!r}\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+    "{mode}",
+    "{target}"
+  ],
+  "parser": "text-lines",
+  "summary_limit": 100
+}

@@ -202,7 +202,11 @@ class BenchRunner:
             )
         verdict, failures = judge(metrics, scenario.limits)
         return BenchResult(
-            scenario_id=scenario.id, verdict=verdict, metrics=metrics, failures=tuple(failures)
+            scenario_id=scenario.id,
+            difficulty=scenario.difficulty.value,
+            verdict=verdict,
+            metrics=metrics,
+            failures=tuple(failures),
         )
 
     def _fallback_model(self) -> str:
@@ -448,6 +452,7 @@ def save_report(report: BenchReport) -> Path:
                     "results": [
                         {
                             "scenario": result.scenario_id,
+                            "difficulty": result.difficulty,
                             "verdict": result.verdict.value,
                             "failures": list(result.failures),
                             "wall_seconds": result.metrics.wall_seconds if result.metrics else None,
@@ -495,17 +500,19 @@ def render_table(report: BenchReport) -> str:
     lines = [
         f"suite {report.suite}@{report.suite_version} · samurai {report.samurai_version}"
         f" · model {report.model_id}",
-        f"{'scenario':<28} {'verdict':<7} {'wall':>7} {'chain':<14} {'fail':>6}"
-        f" {'tok':>8} {'cost':>8}",
+        f"{'scenario':<24} {'class':<7} {'verdict':<7} {'wall':>7} {'chain':<14}"
+        f" {'fail':>6} {'tok':>8} {'cost':>8}",
     ]
     for result in report.results:
         metrics = result.metrics
         lines.append(
-            f"{result.scenario_id[:28]:<28} {result.verdict.value:<7}"
-            f" {metrics.wall_seconds:>6.0f}s {metrics.chain_phase[:14]:<14}"
-            f" {metrics.failed_rate:>5.0%} {metrics.total_tokens:>8} {metrics.cost_usd:>8.4f}"
+            f"{result.scenario_id[:24]:<24} {result.difficulty or '-':<7}"
+            f" {result.verdict.value:<7} {metrics.wall_seconds:>6.0f}s"
+            f" {metrics.chain_phase[:14]:<14} {metrics.failed_rate:>5.0%}"
+            f" {metrics.total_tokens:>8} {metrics.cost_usd:>8.4f}"
             if metrics
-            else f"{result.scenario_id[:28]:<28} {result.verdict.value:<7} {result.error or ''}"
+            else f"{result.scenario_id[:24]:<24} {result.difficulty or '-':<7}"
+            f" {result.verdict.value:<7} {result.error or ''}"
         )
         for failure in result.failures:
             lines.append(f"    └ {failure}")

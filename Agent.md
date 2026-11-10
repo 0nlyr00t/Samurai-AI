@@ -18,7 +18,7 @@ Samurai AI — local-first TUI harness для авторизованных Red T
 
 ## 2. Быстрый старт
 
-Требования для разработки: Python 3.12+, uv. Docker понадобится на этапе Tool Execution. Целевая поставка продукта — standalone per-platform `samurai` executable/installer без Python/uv; optional Docker, MCP servers, security tools и Ollama определяются health checks.
+Требования для разработки: Python 3.12+, uv. Docker нужен для песочных инструментов, но не обязателен: установленные локальные инструменты исполняются нативно (см. `md/local-tools.md`). Целевая поставка продукта — standalone per-platform `samurai` executable/installer без Python/uv; optional Docker, MCP servers, security tools и Ollama определяются health checks.
 
 ```bash
 git clone https://github.com/0nlyr00t/Samurai-AI.git
@@ -107,7 +107,13 @@ uv run samurai tui
 - `src/samurai_ai/cli.py` — CLI entry point и общие команды.
 - `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
 - `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
-- `src/samurai_ai/cli_execution.py` — tool list/run/show команды.
+- `src/samurai_ai/cli_execution.py` — tool list/run/show/install/capabilities/provision/verify команды.
+- `src/samurai_ai/domain/environment.py` — read-only EnvironmentProfile и детектор (ничего не ставит и не тянет).
+- `src/samurai_ai/domain/provision.py` — ProvisionPlan/Run/State, статусы установки и отказы.
+- `src/samurai_ai/services/catalog.py` — каталог рецептов (`assets/recipes`), fail-closed загрузка.
+- `src/samurai_ai/services/provisioner.py` — dry-run, approval, установка по argv, healthcheck, замок, состояние.
+- `src/samurai_ai/services/fabric.py` — capability-сводка и детерминированный резолвер путей исполнения.
+- `src/samurai_ai/execution/native.py` — нативный адаптер по argv без shell поверх ProcessManager.
 - `src/samurai_ai/cli_vault.py` — secret add/list/remove команды (значения не печатаются).
 - `src/samurai_ai/cli_sandbox.py` — sandbox profiles/sign команды.
 - `src/samurai_ai/cli_mcp.py` — mcp add/remove/list/enable/disable/health/tools/invoke команды.
@@ -217,6 +223,7 @@ TUI UX (Этап 8+): верхняя панель с тремя вкладкам
 ## 8. Инварианты и правила изменений
 
 - Не ослаблять scope и не переносить enforcement только в prompts.
+- Установка инструмента — только из reviewed-каталога: модель называет `tool_id`, не пакет и не команду. Новый рецепт в `assets/recipes` проходит ревью, `provision` не ставит ничего вне рецепта, `apt upgrade`/удаление пакетов не выполняются.
 - Не выполнять сетевые или деструктивные действия в unit/integration tests.
 - Не добавлять неограниченную рекурсию агентов.
 - Не хранить секреты в events, reports, fixtures или Git.

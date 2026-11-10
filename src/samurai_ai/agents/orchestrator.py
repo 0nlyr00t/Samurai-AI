@@ -45,6 +45,7 @@ from samurai_ai.domain.agents import (
     ProposeFindingCommand,
     ProposeHypothesisCommand,
     RecordImpactCommand,
+    RequestToolProvisionCommand,
     RequestToolRunCommand,
     command_summary,
 )
@@ -178,6 +179,10 @@ _EXECUTOR_INSTRUCTION = (
     'JSON object: {"commands": [...]}. Allowed command types: '
     'request_tool_run {"type":"request_tool_run","tool_id":...,"params":{...}} '
     '(a rejected call costs a step: read the refusal and fix the value), '
+    'request_tool_provision {"type":"request_tool_provision","tool_id":...} — only '
+    'when request_tool_run answered that the binary is missing: it installs from '
+    'the reviewed catalogue behind an approval, then run the tool once more. '
+    'A scope refusal, a bad parameter or a timeout do not need it, '
     'note {"type":"note","key":...,"value":...}, ask_operator '
     '{"type":"ask_operator","questions":[{"id":"q1","question":...,"header":...,'
     '"options":[{"label":...,"description":...,"recommended":true},...]}],'
@@ -262,6 +267,7 @@ class AgentOrchestrator:
         impact: ImpactService | None = None,
         questions: OperatorQuestionService | None = None,
         ctf: CtfService | None = None,
+        provisioner: Any = None,
     ) -> None:
         self.models = models
         self.kernel = kernel
@@ -276,6 +282,9 @@ class AgentOrchestrator:
         self.impact = impact
         self.questions = questions
         self.ctf = ctf
+        self.provisioner = provisioner
+        #: one provision retry per tool per run: a loop is not a fix
+        self._provisioned: set[tuple[str, str]] = set()
         #: set by the host so a surfaced question can reach the operator
         self.question_notice: Callable[[str], None] | None = None
 
@@ -1038,7 +1047,9 @@ class AgentOrchestrator:
     ) -> str | None:
         """None when the command was applied, the reason when it was rejected."""
         try:
-            if isinstance(command, RequestToolRunCommand):
+            if isinstance(command, RequestToolProvisionCommand):
+                self._command_tool_provision(operation_id, run, command)
+            elif isinstance(command, RequestToolRunCommand):
                 if read_only_only and not self._is_read_only(command.tool_id):
                     reason = "plan mode allows read-only tool calls only"
                     self._reject(operation_id, run, command, reason)
@@ -1199,6 +1210,41 @@ class AgentOrchestrator:
                     value=f"{excerpt}{evidence}",
                 ),
             )
+
+    def _command_tool_provision(
+        self, operation_id: str, run: AgentRun, command: RequestToolProvisionCommand
+    ) -> None:
+        """Install from the catalogue, then let the model retry the run once.
+
+        Only a missing binary is a reason to install: a scope refusal, a bad
+        parameter or a timeout means the tool is already here.
+        """
+        if self.provisioner is None:
+            raise ToolExecutionError("provisioning is not configured in this runner")
+        self.execution.registry.get(command.tool_id)
+        key = (run.id, command.tool_id)
+        if key in self._provisioned:
+            raise ToolExecutionError(
+                f"{command.tool_id} was already provisioned in this run; "
+                "retry the tool run instead of provisioning again"
+            )
+        self._provisioned.add(key)
+        profile = self.provisioner.detector.detect(refresh=True)
+        result = self.provisioner.run(operation_id, command.tool_id, profile)
+        if result.status.value != "ready":
+            raise ToolExecutionError(
+                f"provision {command.tool_id} failed: {result.error or result.status.value}"
+            )
+        version = self.provisioner.state(command.tool_id).installed_version
+        self._append_note(
+            operation_id,
+            run,
+            NoteCommand(
+                type="note",
+                key=f"provisioned.{command.tool_id}",
+                value=(version or "ready")[:200],
+            ),
+        )
 
     def _command_propose_finding(
         self, operation_id: str, run: AgentRun, command: ProposeFindingCommand

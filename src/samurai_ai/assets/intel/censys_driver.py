@@ -7,6 +7,7 @@ optional and only sent when CENSYS_ORG_ID is set.
 import json
 import os
 import sys
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -21,7 +22,7 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
-def request(path: str, accept: str, **params) -> dict:
+def request(path: str, accept: str, **params: object) -> dict[str, Any]:
     token = os.environ.get("CENSYS_API_TOKEN", "")
     if not token:
         fail("CENSYS_API_TOKEN is empty — set it in /settings")
@@ -39,7 +40,8 @@ def request(path: str, accept: str, **params) -> dict:
     }
     try:
         with urlopen(Request(url, headers=headers), timeout=60) as answer:  # noqa: S310
-            return json.loads(answer.read().decode())
+            payload: dict[str, Any] = json.loads(answer.read().decode())
+            return payload
     except HTTPError as exc:
         fail(f"HTTP {exc.code}: {exc.read().decode()[:200]}")
     except URLError as exc:
