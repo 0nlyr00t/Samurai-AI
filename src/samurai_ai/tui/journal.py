@@ -111,6 +111,11 @@ class LiveAnswerBlock(StreamBlock):
             self._parts = [Text(token)]
         self.update(Text("").join(self._parts))
 
+    def reset_tokens(self) -> None:
+        """Throw the streamed text away — a retry re-sends it from the start."""
+        self._parts = []
+        self.update(Text(""))
+
     def flush_tokens(self) -> None:
         """Show whatever was buffered while follow was off."""
         self.update(Text("").join(self._parts))

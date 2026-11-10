@@ -43,6 +43,7 @@ from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import (
     ApprovalStatus,
     Artifact,
+    ArtifactKind,
     GateStatus,
     TaskStatus,
 )
@@ -162,6 +163,14 @@ _YOLO_LEGACY_KEY = "tui.yolo"
 _OPEN_COMMANDS = frozenset({"/login", "/whoami"})
 
 
+#: image suffixes delegated to the vision path instead of pasted as bytes
+_ATTACH_IMAGES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
+#: how much of a mentioned file rides into the prompt
+_ATTACH_EXCERPT = 8_000
+#: bytes inspected to decide text or binary
+_ATTACH_PROBE = 4_096
+
+
 class SamuraiApp(
     HuntController,
     ChatController,
@@ -173,9 +182,6 @@ class SamuraiApp(
     App[None],
 ):
     COMMANDS = {CommandProvider}
-
-    #: how much of an attached file rides into the message
-    _ATTACH_LIMIT = 200_000
 
     CSS = """
     Screen {
@@ -525,7 +531,10 @@ class SamuraiApp(
         self._shell_background = False
         # live status: what the running turn is doing right now
         self._run_tokens = 0
-        self._run_cost = 0.0
+        #: spend per model id: routes differ and so do their tariffs
+        self._run_costs: dict[str, float] = {}
+        #: models whose tariff is not on file — their share is `n/a`, not zero
+        self._run_cost_unknown: set[str] = set()
         self._turn_started: float | None = None
         self._current_tool = ""
         self._expandable: list[tuple[str, int | None, str, str]] = []
@@ -879,28 +888,86 @@ class SamuraiApp(
         return text
 
     def _attach_paths(self, text: str) -> str:
-        """`@path` mentions become fenced file contents; bad paths stay as text."""
+        """`@path` mentions become a bounded, redacted, trusted file excerpt.
+
+        The rules are the ones the rest of the harness already follows: a path
+        outside the trusted directory is refused, a big file is cut to an
+        excerpt with a note, a binary is described instead of pasted, an image
+        goes through the vision path, and secrets never reach the provider in
+        the clear. The file is registered as an artifact so the mention points
+        at evidence instead of only carrying text.
+        """
         if "@" not in text:
             return text
         import re
 
         def replace(match: re.Match[str]) -> str:
-            path = Path(match.group(1))
-            if not path.is_file():
-                self._write_dim(self.translator.t("input.attach-missing", path=str(path)))
-                return match.group(0)
-            try:
-                body = path.read_text(errors="replace")[: self._ATTACH_LIMIT]
-            except OSError as exc:
-                self._write_dim(f"[attach] {exc}")
-                return match.group(0)
-            self._write_dim(
-                self.translator.t("input.attached", path=str(path), chars=len(body)),
-                process=False,
-            )
-            return f"\n\n`{path}`:\n```\n{body}\n```\n"
+            return self._attach_one(match.group(1), match.group(0))
 
         return re.sub(r"@([\w./\-]+\.[\w]+)", replace, text)
+
+    def _attach_one(self, raw: str, literal: str) -> str:
+        path = Path(raw)
+        if not path.is_file():
+            self._write_dim(self.translator.t("input.attach-missing", path=raw))
+            return literal
+        resolved = path.resolve()
+        if not resolved.is_relative_to(self._cwd) and not self._directory_trusted():
+            self._write_dim(self.translator.t("input.attach-untrusted", path=raw))
+            return literal
+        if not resolved.is_relative_to(self._cwd):
+            self._write_dim(self.translator.t("input.attach-outside", path=raw))
+            return literal
+        stat = resolved.stat()
+        size = stat.st_size
+        if resolved.suffix.lower() in _ATTACH_IMAGES:
+            return self._attach_image(resolved, literal)
+        head = resolved.read_bytes()[: _ATTACH_PROBE]
+        if b"\x00" in head:
+            note = self.translator.t("input.attach-binary", path=raw, size=size)
+            self._write_dim(note, process=False)
+            return f"`{raw}`: {note}"
+        try:
+            body = resolved.read_text(errors="replace")[: _ATTACH_EXCERPT]
+        except OSError as exc:
+            self._write_dim(f"[attach] {exc}")
+            return literal
+        redacted = SecretRedactor().redact(body)
+        cut = len(body) < size
+        note = self.translator.t(
+            "input.attach-cut" if cut else "input.attached",
+            path=raw,
+            chars=len(body),
+            size=size,
+        )
+        if redacted.count:
+            note += " · " + self.translator.t("input.attach-redacted", count=redacted.count)
+        reference = self._attach_artifact(raw, redacted.text, size)
+        self._write_dim(note, process=False)
+        return (
+            f"\n\n`{raw}`{reference} ({note}):\n```\n{redacted.text}\n```\n"
+        )
+
+    def _attach_artifact(self, raw: str, body: str, size: int) -> str:
+        """Register the mention as evidence; the prompt carries only its id."""
+        if self.operation is None:
+            return ""
+        try:
+            artifact = self.kernel.register_artifact(
+                self.operation.id,
+                ArtifactKind.NOTE,
+                body,
+                summary=f"attached {Path(raw).name} ({size} bytes)",
+                created_by="operator",
+            )
+        except Exception:  # noqa: BLE001 - an unregistered file must not block the turn
+            return ""
+        return f" [{artifact.id}]"
+
+    def _attach_image(self, path: Path, literal: str) -> str:
+        note = self.translator.t("input.attach-image", path=str(path))
+        self._write_dim(note, process=False)
+        return f"`{path}`: {note}"
 
     def history_step(self, direction: int) -> None:
         if not self._history:
@@ -4347,6 +4414,18 @@ class SamuraiApp(
         self._relay_warned = True
         self._write_dim(self.translator.t("relay.hint"), process=False)
 
+    def _cost_text(self) -> str:
+        """Spend per model; a route with no tariff on file shows `n/a`."""
+        parts = [
+            f"{model_id.split('/')[-1].split('@')[0]} ${amount:.4f}"
+            for model_id, amount in self._run_costs.items()
+            if amount or model_id not in self._run_cost_unknown
+        ]
+        for model_id in sorted(self._run_cost_unknown):
+            name = model_id.split("/")[-1].split("@")[0]
+            parts.append(f"{name} n/a")
+        return " · ".join(parts)
+
     def _refresh_chrome(self) -> None:
         self._refresh_hint_bar()
         self._refresh_attack_map()
@@ -4405,8 +4484,8 @@ class SamuraiApp(
             f" · Σ {self._run_tokens} tok",
             style=self.paint("dim $text-dim"),
         )
-        if getattr(self, "_run_cost", 0.0):
-            bar.append(f" | ${self._run_cost:.4f}")
+        if self._run_costs or self._run_cost_unknown:
+            bar.append(" | " + self._cost_text(), style=self.paint("dim $text-dim"))
         if self._turn_started is not None:
             elapsed = int(time.monotonic() - self._turn_started)
             bar.append(f" | ⏱ {elapsed // 60}:{elapsed % 60:02d}", style=self.paint("$accent"))
