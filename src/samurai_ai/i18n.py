@@ -330,6 +330,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "palette.group.playbooks": "Playbooks and data",
         "palette.group.view": "View",
         "palette.group.control": "Control",
+        "palette.prompt.phase": "<phase name> <reason> | auto",
         "palette.prompt.target": "target to evaluate",
         "palette.prompt.run": "run id",
         "palette.prompt.workspace": "workspace",
@@ -621,6 +622,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Stop and re-plan: what is blocking the exit, and which other vector "
             "moves the kill chain forward?"
         ),
+        "killchain.missing": "needs: {items} ",
         "killchain.moved": "— stage moved: {from} → {to} —",
         "resume.title": "Resume an operation",
         "resume.hint": "Enter switches the tab to the operation; Esc closes",
@@ -665,6 +667,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "side.access": "TARGETS",
         "side.access-empty": "no targets in scope",
         "side.creds": "LOOT",
+        "loot.flag": "flag {flag} — its proof artifact is one step from here",
+        "loot.secret": "secret {name} — value stays masked until copied",
         "side.more": "▾ {left} more…",
         "side.scope-title": "Scope targets",
         "side.loot-title": "Loot",
@@ -807,6 +811,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "app.stop-done": "stopped",
         "app.quit-hint": "press Ctrl+C again to exit",
         "reconcile.unknown": "interrupted before the result: unknown external result — {runs}",
+        "phase.current": "phase {phase}; chain: {phases}",
+        "phase.override": "operator override is in force: {reason}",
+        "phase.auto": "phase follows the evidence",
+        "phase.cleared": "override cleared — the phase follows the evidence again",
+        "phase.set": "phase set to {phase}: {reason}",
+        "phase.bad": "cannot set the phase: {detail}",
         "reconcile.report": (
             "actions-marked-unknown={actions} | tool-runs-marked-failed={runs} | "
             "resumable-tasks={tasks} | pending-approvals={approvals}"
@@ -1127,6 +1137,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "palette.group.playbooks": "Плейбуки и данные",
         "palette.group.view": "Вид",
         "palette.group.control": "Управление",
+        "palette.prompt.phase": "<имя фазы> <причина> | auto",
         "palette.prompt.target": "target для проверки",
         "palette.prompt.run": "id запуска",
         "palette.prompt.workspace": "workspace",
@@ -1416,6 +1427,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "перепланируй: что мешает выходу и какой другой вектор двигает kill "
             "chain вперёд?"
         ),
+        "killchain.missing": "ждёт: {items} ",
         "killchain.moved": "— фаза сменилась: {from} → {to} —",
         "resume.title": "Продолжить операцию",
         "resume.hint": "Enter переключает вкладку на операцию; Esc закрывает",
@@ -1460,6 +1472,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "side.access": "ЦЕЛИ",
         "side.access-empty": "целей в скоупе нет",
         "side.creds": "LOOT",
+        "loot.flag": "флаг {flag} — артефакт-подтверждение в одном шаге",
+        "loot.secret": "секрет {name} — значение маскировано до копирования",
         "side.more": "▾ ещё {left}…",
         "side.scope-title": "Цели скоупа",
         "side.loot-title": "Добыча",
@@ -1605,6 +1619,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "app.stop-done": "остановлено",
         "app.quit-hint": "нажмите Ctrl+C ещё раз для выхода",
         "reconcile.unknown": "прервано до результата: результат снаружи неизвестен — {runs}",
+        "phase.current": "фаза {phase}; цепь: {phases}",
+        "phase.override": "действует ручной выбор оператора: {reason}",
+        "phase.auto": "фаза выводится из доказательств",
+        "phase.cleared": "ручной выбор снят — фаза снова выводится из доказательств",
+        "phase.set": "фаза переключена на {phase}: {reason}",
+        "phase.bad": "нельзя переключить фазу: {detail}",
         "reconcile.report": (
             "отмечено-unknown={actions} | tool-runs-failed={runs} | "
             "возобновимые-задачи={tasks} | ожидающие-согласования={approvals}"
