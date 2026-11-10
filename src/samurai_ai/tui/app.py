@@ -16,7 +16,9 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import (
     ContentSwitcher,
     Input,
@@ -466,6 +468,9 @@ class SamuraiApp(
         self._tab_activations_seen: int = 0
         self._selection_copy_timer: Timer | None = None
         self._last_auto_copy: str | None = None
+        #: who had focus before a modal opened: closing it returns there, not to
+        #: the input — the operator was reading something, and stays there
+        self._focus_before_modal: Widget | None = None
         self._killchain_phase: str = ""
         self._live_answer = None
         self._turn_todo: list[tuple[str, str]] = []
@@ -911,19 +916,60 @@ class SamuraiApp(
         command_input.value = value
         command_input.cursor_position = len(value)
 
+    def operator_busy(self) -> bool:
+        """True while the operator is reading: dragging, or driving a list."""
+        if self.screen.selections:
+            return True
+        return isinstance(self.focused, (OptionList, Tabs))
+
     def focus_command_input(self, *, force: bool = False) -> None:
         """Return focus to the command input unless the operator is busy.
 
         A turn finishing or a background refresh must not take focus away while
         the operator drags a selection or scrolls a list — that is the bug half
-        the terminal agents get filed for. Explicit actions pass ``force``.
+        the terminal agents get filed for. Explicit actions pass ``force``, and
+        so does anything that *is* the operator's own keystroke.
         """
-        if not force:
-            if self.screen.selections:
-                return
-            if isinstance(self.focused, (OptionList, Tabs)):
-                return
+        if not force and self.operator_busy():
+            return
         self.query_one("#command-input", Input).focus()
+
+    def restore_focus(self) -> None:
+        """Give focus back to whatever had it before the modal, else the input."""
+        previous = self._focus_before_modal
+        self._focus_before_modal = None
+        # the suggestion popup follows the input and steals focus back the moment
+        # it reappears, so it is not a target of its own
+        if previous is not None and previous.is_mounted and previous.id != "command-suggestions":
+            previous.focus()
+            return
+        self.focus_command_input(force=True)
+
+    def push_screen(self, screen, callback=None, wait_for_dismiss: bool = False):  # type: ignore[no-untyped-def]
+        """Remember the focused widget so closing a modal can return to it."""
+        if not isinstance(screen, ModalScreen):
+            return super().push_screen(screen, callback, wait_for_dismiss)
+        if self._focus_before_modal is None:
+            self._focus_before_modal = self.focused
+
+        def closed(result):  # type: ignore[no-untyped-def]
+            if callback is not None:
+                callback(result)
+            self._after_modal_closed()
+
+        return super().push_screen(screen, closed, wait_for_dismiss)
+
+    def _after_modal_closed(self) -> None:
+        """Restore focus once the dismissed screen is really off the stack."""
+        self.call_after_refresh(self._restore_focus_if_free)
+
+    def _restore_focus_if_free(self) -> None:
+        if not self.is_running:
+            return
+        if isinstance(self.screen, ModalScreen):
+            # the closing screen opened another one; its own close restores
+            return
+        self.restore_focus()
 
     def _on_screen_selections(self) -> None:
         """Selection changes during the drag; copy once it settles."""
@@ -1060,7 +1106,7 @@ class SamuraiApp(
                 )
             )
         self._refresh_chrome()
-        self.query_one("#command-input", Input).focus()
+        self.focus_command_input(force=True)
 
     def action_toggle_journal(self) -> None:
         views = self.query_one("#views", ContentSwitcher)
@@ -1449,7 +1495,7 @@ class SamuraiApp(
 
     def _on_resume(self, operation_id: str | None) -> None:
         if operation_id is None:
-            self.focus_command_input(force=True)
+            self.restore_focus()
             return
         try:
             operation = self.service.get(operation_id)
@@ -1468,13 +1514,14 @@ class SamuraiApp(
         self._write_dim(self.translator.t("resume.done", name=operation.name), process=False)
         self._switch_view("journal")
         self._refresh_chrome()
+        self.restore_focus()
 
     def _show_new_operation(self) -> None:
         self.push_screen(NewOperationScreen(self.translator), self._on_new_operation)
 
     def _on_new_operation(self, choice: tuple[str, str, str] | None) -> None:
         if choice is None:
-            self.focus_command_input(force=True)
+            self.restore_focus()
             return
         name, mode, scope = choice
         includes = tuple(rule.strip() for rule in scope.split(",") if rule.strip()) or (
@@ -2112,7 +2159,7 @@ class SamuraiApp(
             self._dir_trusted = False
             self._write_line("[deny] " + self.translator.t("trust.denied", path=cwd))
         self._refresh_chrome()
-        self.focus_command_input(force=True)
+        self.restore_focus()
 
     def _toggle_yolo(self) -> None:
         target = (
