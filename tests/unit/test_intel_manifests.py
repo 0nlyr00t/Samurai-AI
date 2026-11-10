@@ -11,8 +11,8 @@ from samurai_ai.domain.tool_manifest import ToolManifest
 from samurai_ai.execution.manifests import render_argv
 
 ROOT = Path(__file__).resolve().parents[2]
-TOOLS = ROOT / "assets" / "tools"
-INTEL = ROOT / "assets" / "intel"
+TOOLS = ROOT / "src" / "samurai_ai" / "assets" / "tools"
+INTEL = ROOT / "src" / "samurai_ai" / "assets" / "intel"
 NAMES = ("intel.shodan", "intel.censys")
 
 
@@ -74,7 +74,7 @@ def test_loot_recognises_the_shapes_it_claims() -> None:
     """The patterns are the product here: a miss is a silent empty answer."""
     import importlib.util
 
-    path = ROOT / "assets" / "loot" / "loot_driver.py"
+    path = ROOT / "src" / "samurai_ai" / "assets" / "loot" / "loot_driver.py"
     spec = importlib.util.spec_from_file_location("loot_driver", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

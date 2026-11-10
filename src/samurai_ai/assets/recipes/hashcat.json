@@ -1,0 +1,33 @@
+{
+  "id": "crack.hashcat",
+  "version": 1,
+  "title": "hashcat cracker (native, GPU)",
+  "description": "Native hashcat against a hash file and a wordlist; needs a usable OpenCL device.",
+  "image": "blacktop/hashcat@sha256:2f0f0c4e2e9b2b6b2a4e6d8c0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b",
+  "executable": "hashcat",
+  "risk_class": "r2",
+  "network": "none",
+  "read_only": true,
+  "capabilities": ["crack"],
+  "execution": {"native": true, "container": false, "relay_supported": false},
+  "provision": {
+    "packages": {
+      "linux": {"manager": "apt", "package": "hashcat", "sudo": true},
+      "macos": {"manager": "brew", "package": "hashcat", "sudo": false}
+    },
+    "healthcheck": ["-I"],
+    "requires_gpu": true,
+    "limitations": [
+      "needs a GPU/OpenCL device; a VM without passthrough has none",
+      "runs long: expect a background run"
+    ]
+  },
+  "params": {
+    "mode": {"type": "string", "description": "Hashcat -m mode number", "required": true, "pattern": "^[0-9]{1,5}$"},
+    "hashfile": {"type": "string", "description": "Path to the hash file", "required": true, "max_length": 300},
+    "wordlist": {"type": "string", "description": "Path to the wordlist", "required": true, "max_length": 300}
+  },
+  "argv": ["-m", "{mode}", "{hashfile}", "{wordlist}", "--potfile-disable", "--quiet", "--status-json"],
+  "parser": "text-lines",
+  "limits": {"timeout_seconds": 1800, "memory_mb": 1024}
+}

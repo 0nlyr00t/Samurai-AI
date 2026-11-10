@@ -1,0 +1,25 @@
+{
+  "id": "web.http-headers",
+  "version": 1,
+  "title": "HTTP head fetcher (project-local)",
+  "description": "Stdlib-only script installed under the state directory and run by the local interpreter: no system pip, no venv.",
+  "image": "python:3.12-slim@sha256:2d1c9b6f0a8e4c6b2a4d8e0f2b6c8a0d4e6f8b0c2d4e6f8a0b2c4d6e8f0a2b4c",
+  "executable": "python3",
+  "risk_class": "r2",
+  "network": "direct",
+  "read_only": true,
+  "capabilities": ["http"],
+  "execution": {"native": true, "project_local": true, "container": false, "relay_supported": true},
+  "provision": {
+    "packages": {"linux": {"manager": "project-local", "package": "http_headers.py"}, "macos": {"manager": "project-local", "package": "http_headers.py"}},
+    "healthcheck": ["--version"],
+    "limitations": ["scope is checked by the adapter only: urllib does not use the egress proxy"]
+  },
+  "params": {
+    "url": {"type": "string", "description": "In-scope http(s) URL", "required": true, "max_length": 400}
+  },
+  "targets": {"param": "url", "kind": "url-host", "max": 1},
+  "argv": ["{__path}", "{url}"],
+  "parser": "text-lines",
+  "limits": {"timeout_seconds": 60, "memory_mb": 128}
+}
