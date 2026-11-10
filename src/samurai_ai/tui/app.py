@@ -372,6 +372,7 @@ class SamuraiApp(
         Binding("ctrl+e", "expand_output", "Expand collapsed output", show=False, priority=True),
         # priority: the focused input would otherwise keep the key
         Binding("shift+tab", "toggle_plan", "Plan mode", show=False, priority=True),
+        Binding("ctrl+6", "toggle_side", "Side panels", show=False, priority=True),
     ]
 
     _QUIT_CONFIRM_SECONDS = 2.0
@@ -472,6 +473,8 @@ class SamuraiApp(
         #: the input — the operator was reading something, and stays there
         self._focus_before_modal: Widget | None = None
         self._killchain_phase: str = ""
+        #: the operator forced the side column on; a narrow width then keeps it
+        self._side_forced = False
         self._live_answer = None
         self._turn_todo: list[tuple[str, str]] = []
         self._chat_history: list[Message] = []
@@ -1108,6 +1111,32 @@ class SamuraiApp(
             )
         self._refresh_chrome()
         self.focus_command_input(force=True)
+
+    #: below this width the side column and the rail fold away on their own
+    _NARROW_WIDTH = 100
+
+    def action_toggle_side(self) -> None:
+        """Show or hide the side column; a narrow terminal remembers the choice."""
+        side = self.query_one("#side", Vertical)
+        self._side_forced = not side.display
+        side.display = self._side_forced
+        self.settings.set_value("tui.side", "1" if side.display else "0")
+        self._refresh_chrome()
+        self.focus_command_input(force=True)
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Narrow terminals fold the chrome away; the journal keeps the room."""
+        self._apply_chrome_fit(event.size.width)
+
+    def _apply_chrome_fit(self, width: int) -> None:
+        narrow = width < self._NARROW_WIDTH
+        side = self.query_one("#side", Vertical)
+        rail = self.query_one("#killchain", Static)
+        if narrow and not self._side_forced:
+            side.display = False
+        elif not narrow:
+            side.display = self.settings.get_value("tui.side") != "0"
+        rail.display = bool(self._killchain_phase) and not narrow
 
     def action_toggle_journal(self) -> None:
         views = self.query_one("#views", ContentSwitcher)
@@ -4005,7 +4034,7 @@ class SamuraiApp(
     def _refresh_killchain(self) -> None:
         widget = self.query_one("#killchain", Static)
         chain = self._killchain()
-        if not chain:
+        if not chain or self.size.width < self._NARROW_WIDTH:
             widget.display = False
             return
         widget.display = True
