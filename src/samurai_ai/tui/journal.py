@@ -272,6 +272,10 @@ class BlockJournal(VerticalScroll, can_focus=False):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.tool_blocks: list[ToolBlock] = []
+        #: the stream block still being appended to. Read from `children[-1]`
+        #: it was lost whenever a mount had not landed yet, and the lines
+        #: written in that window started a second, orphaned block
+        self._last_stream: StreamBlock | None = None
 
     # -- RichLog-compatible surface -------------------------------------
 
@@ -285,6 +289,7 @@ class BlockJournal(VerticalScroll, can_focus=False):
 
     def clear(self) -> None:
         self.tool_blocks.clear()
+        self._last_stream = None
         self.remove_children()
 
     @property
@@ -370,14 +375,16 @@ class BlockJournal(VerticalScroll, can_focus=False):
     # -- internals ------------------------------------------------------
 
     def _stream(self) -> StreamBlock:
-        tail = self.children[-1] if self.children else None
-        if isinstance(tail, StreamBlock):
-            return tail
+        if self._last_stream is not None:
+            return self._last_stream
         block = StreamBlock()
+        self._last_stream = block
         self._mount(block)
         return block
 
     def _mount(self, widget: Any) -> None:
+        if not isinstance(widget, StreamBlock):
+            self._last_stream = None
         self.mount(widget)
         if self.follow:
             self.call_after_refresh(self.scroll_end, animate=False)
