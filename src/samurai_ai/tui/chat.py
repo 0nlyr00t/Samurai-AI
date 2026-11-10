@@ -46,7 +46,7 @@ from samurai_ai.domain.kernel import (
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
 from samurai_ai.domain.models import ModelCapability, ProviderUnavailableError
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
-from samurai_ai.domain.permission import classify_command, decide
+from samurai_ai.domain.permission import CommandRisk, classify_command, command_window, decide
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
@@ -812,6 +812,33 @@ class ChatController:
             for spec in self._CHAT_TOOL_SPECS
         )
 
+    def _approval_meta(
+        self,
+        tool_id: str,
+        command: str,
+        risk: CommandRisk,
+        *,
+        batch: list[tuple[str, str]] | None = None,
+    ) -> Any:
+        """The consequences of a command, for the approval screen to state.
+
+        Only facts the harness already holds: a wrong or invented value in a
+        prompt is worse than a missing line.
+        """
+        from samurai_ai.tui.screens.access import ApprovalMeta
+
+        relay = self.operation.relay if self.operation is not None else ""
+        timeout = command_window(command, relayed=bool(relay))
+        return ApprovalMeta(
+            tool_id=tool_id,
+            cwd=str(self._cwd),
+            execution_path=relay or self.translator.t("access.path-native"),
+            timeout_s=timeout,
+            destructive=risk.destructive,
+            sensitive=risk.sensitive,
+            batch=tuple(label for label, _risk in (batch or [])),
+        )
+
     def _count_usage(self, usage: Any) -> None:
         """One place that sees every model answer: context gauge and totals.
 
@@ -1007,9 +1034,9 @@ class ChatController:
         self._trim_chat_history()
         journal = self.query_one("#journal", BlockJournal)
         journal.write(Text())
-        self._write_dim(self.translator.t("chat.restored", count=total))
+        self._write_dim(self.translator.t("chat.restored", count=total), process=False)
         if truncated:
-            self._write_dim(self.translator.t("chat.restored-cut"))
+            self._write_dim(self.translator.t("chat.restored-cut"), process=False)
         journal.write(Text())
         for message in messages:
             text = str(message.content)
@@ -1019,7 +1046,7 @@ class ChatController:
                 self._write_dim(text)
             else:
                 self._write_user_message(text)
-        self._write_dim(self.translator.t("chat.restored-end"))
+        self._write_dim(self.translator.t("chat.restored-end"), process=False)
 
     def _clear_chat(self) -> None:
         """Forget the operation's transcript in memory and in the database."""
@@ -1151,8 +1178,9 @@ class ChatController:
             allowed = await self.push_screen_wait(
                 AccessPromptScreen(
                     self.translator,
-                    f"shell.exec: {command}",
-                    f"r3 · {risk.label()}" if not risk.empty else "r3",
+                    command,
+                    risk.label() or "r3",
+                    meta=self._approval_meta("shell.exec", command, risk),
                 )
             )
             if not allowed:
@@ -1667,6 +1695,7 @@ class ChatController:
         batched: list[str] = []
         first: str = ""
         first_risk: str = ""
+        first_call: tuple[str, CommandRisk] = ("", CommandRisk())
         allowed_by_id: dict[str, bool] = {}
         mode = self._permission_mode
         for call in calls:
@@ -1691,8 +1720,10 @@ class ChatController:
                 asking.append((_short_tool(tool_id, command), f"r3 · {risk.label()}"))
                 batched.append(call.id)
                 if first == "":
-                    # the screen still names one command in full, and «v» reveals it
-                    first, first_risk = f"{tool_id}: {command}", f"r3 · {risk.label()}"
+                    # the screen shows this command in full; the batch list is
+                    # the tail of the same round, not a different decision
+                    first, first_risk = command, risk.label() or "r3"
+                    first_call = (tool_id, risk)
                 continue
             allowed_by_id[call.id] = True
         if not asking:
@@ -1700,7 +1731,13 @@ class ChatController:
             return allowed_by_id
         allowed = bool(
             await self.push_screen_wait(
-                AccessPromptScreen(self.translator, first, first_risk, batch_items=asking)
+                AccessPromptScreen(
+                    self.translator,
+                    first,
+                    first_risk,
+                    meta=self._approval_meta(first_call[0], first, first_call[1], batch=asking),
+                    batch_items=asking,
+                )
             )
         )
         for call_id in batched:
