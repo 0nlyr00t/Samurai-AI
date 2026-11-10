@@ -8978,3 +8978,103 @@ def test_a_long_multiline_command_is_readable_on_a_narrow_terminal(tmp_path: Pat
             await pilot.pause()
 
     asyncio.run(exercise())
+
+
+def test_undo_says_the_external_effect_stays_and_does_not_repeat_it(tmp_path: Path) -> None:
+    """Undo drops the conversation turn; the command that ran is not re-run."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "поработай"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            runs_after_first = len(stack[4].list_runs(operation.id))
+            journal = app.query_one("#journal", BlockJournal)
+            app._undo_last_turn()
+            await pilot.pause()
+            lines = "\n".join(line.text for line in journal.lines)
+            assert "external tools already ran" in lines
+            assert len(stack[4].list_runs(operation.id)) == runs_after_first
+            # a fresh turn does not replay the runs the undone turn already did
+            app.query_one("#command-input", Input).value = "ещё"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            runs = stack[4].list_runs(operation.id)
+            assert len({run.id for run in runs}) == len(runs)
+            assert len(runs) == runs_after_first
+            assert not app._chat_busy
+
+    asyncio.run(exercise())
+
+
+def test_resume_reconciles_an_interrupted_run_and_does_not_retry_it(tmp_path: Path) -> None:
+    """A run left in flight by a crash shows as unknown, and stays one run."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Crash lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.7",))
+    )
+    from samurai_ai.domain.execution import ToolRun, ToolRunStatus
+    from samurai_ai.domain.operations import OperationEvent
+
+    run = ToolRun(operation_id=operation.id, tool_id="scan.nmap", tool_version=1)
+    run.status = ToolRunStatus.RUNNING
+    stack[4].runs.add_run(
+        run, OperationEvent(operation_id=operation.id, event_type="tool.run.started", payload={})
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.operation = operation
+            app.reconcile_before_show()
+            await pilot.pause()
+            journal = "\n".join(
+                line.text for line in app.query_one("#journal", BlockJournal).lines
+            )
+            assert "unknown external result" in journal
+            runs = stack[4].list_runs(operation.id)
+            assert len(runs) == 1
+            assert runs[0].status.value != "running"
+
+    asyncio.run(exercise())
+
+
+def test_restored_context_is_marked_off_from_new_messages(tmp_path: Path) -> None:
+    """Replayed history sits between two dim markers, not loose in the journal."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Restore lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.6",))
+    )
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.chat_history.remember(operation.id, Message(role="user", content="старый вопрос"))
+            app.chat_history.remember(
+                operation.id, Message(role="assistant", content="старый ответ")
+            )
+            app.query_one("#journal", BlockJournal).clear()
+            app._restore_chat()
+            await pilot.pause()
+            lines = [line.text for line in app.query_one("#journal", BlockJournal).lines]
+            start = next(i for i, text in enumerate(lines) if "restored" in text)
+            end = next(i for i, text in enumerate(lines) if "restored" in text and i > start)
+            assert start < end
+            body = "\n".join(lines[start:end])
+            assert "старый ответ" in body
+            # new messages land after the closing marker
+            app._write_user_message("новый вопрос")
+            await pilot.pause()
+            fresh = [line.text for line in app.query_one("#journal", BlockJournal).lines]
+            assert fresh.index("новый вопрос") > end
+
+    asyncio.run(exercise())
