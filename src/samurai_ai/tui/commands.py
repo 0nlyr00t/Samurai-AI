@@ -97,6 +97,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/approvals", GROUP_KERNEL, "_show_approvals", operation=True),
     _spec("/findings", GROUP_KERNEL, "_show_finding_board", operation=True),
     _spec("/graph", GROUP_KERNEL, "_show_graph_board", operation=True),
+    _spec("/coverage", GROUP_KERNEL, "_show_coverage_board", operation=True),
     _spec("/theme", GROUP_VIEW, "_show_themes"),
     _spec("/keys", GROUP_VIEW, "_show_keys"),
     _spec("/evidence", GROUP_KERNEL, "_show_evidence", operation=True),
