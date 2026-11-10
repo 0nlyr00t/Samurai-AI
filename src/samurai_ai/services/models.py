@@ -265,6 +265,7 @@ class ModelService:
         router: ModelRouter | None = None,
         extra_payload: dict[str, Any] | None = None,
         on_token: Callable[[str], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> ChatResponse:
         return self.chat(
             operation_id,
@@ -293,6 +294,7 @@ class ModelService:
         router: ModelRouter | None = None,
         extra_payload: dict[str, Any] | None = None,
         on_token: Callable[[str], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> ChatResponse:
         operation = self.operations.get(operation_id)
         model, provider = self._resolve_model(model_id)
@@ -329,6 +331,7 @@ class ModelService:
                     reasoning_effort=request.reasoning_effort,
                 ),
                 on_token=on_token,
+                should_stop=should_stop,
             )
 
         def on_fallback(from_model: str, to_model: str, reason: str) -> None:
@@ -405,11 +408,12 @@ class ModelService:
         provider: ProviderDefinition,
         request: ChatRequest,
         on_token: Callable[[str], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> ChatResponse:
         impl = self._build_provider(provider)
         stream = getattr(impl, "complete_stream", None)
         if on_token is not None and stream is not None:
-            response: ChatResponse = await stream(request, on_token)
+            response: ChatResponse = await stream(request, on_token, should_stop)
             return response
         return await impl.complete(request)
 

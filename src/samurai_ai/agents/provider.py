@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +29,11 @@ class ToolCall(BaseModel):
     id: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+#: sent through the token callback when the partial answer is abandoned and the
+#: provider is about to resend it from the start
+STREAM_RESET = "\x00reset\x00"
 
 
 class Usage(BaseModel):
@@ -82,6 +88,8 @@ class ChatResponse(BaseModel):
     model_id: str
     provider_id: str
     latency_ms: int = 0
+    #: reasoning the provider streamed separately from the answer, when it does
+    reasoning: str = ""
 
 
 class ModelProvider(Protocol):
@@ -90,3 +98,10 @@ class ModelProvider(Protocol):
     async def list_models(self) -> list[Any]: ...
 
     async def complete(self, request: ChatRequest) -> ChatResponse: ...
+
+    async def complete_stream(
+        self,
+        request: ChatRequest,
+        on_token: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
+    ) -> ChatResponse: ...
