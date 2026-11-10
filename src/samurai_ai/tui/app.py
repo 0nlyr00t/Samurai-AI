@@ -758,6 +758,7 @@ class SamuraiApp(
     def _after_locale(self) -> None:
         self._write_welcome()
         if not self._chat_history:
+            self.reconcile_before_show()
             self._restore_chat()
         self._refresh_chrome()
         # the search counters move slowly; a three-minute beat is plenty and
@@ -1419,6 +1420,7 @@ class SamuraiApp(
         self._chat_history.clear()
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
+        self.reconcile_before_show()
         self._restore_chat()
         self._restore_tab_state()
         self._write_dim(self.translator.t("resume.done", name=operation.name), process=False)
@@ -1510,6 +1512,7 @@ class SamuraiApp(
         self._last_ai_code = None
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
+        self.reconcile_before_show()
         self._restore_chat()
         self._write_dim(self.translator.t("resume.done", name=operation.name), process=False)
         self._switch_view("journal")
@@ -3656,6 +3659,21 @@ class SamuraiApp(
                 f"{runbook.created_at.isoformat()}"
             )
 
+    def reconcile_before_show(self) -> None:
+        """Settle what a crash left in flight before its operation is displayed.
+
+        Runs marked failed here are *not* retried: a command whose result is
+        unknown shows as unknown, because re-running it is a second side effect.
+        """
+        if self.operation is None:
+            return
+        marked_runs = self.execution.reconcile_runs(self.operation.id, actor="operator")
+        if not marked_runs:
+            return
+        self._write_dim(
+            self.translator.t("reconcile.unknown", runs=", ".join(marked_runs)), process=False
+        )
+
     def _show_reconcile(self) -> None:
         if not self.operation:
             self._write_line("[reconcile] " + self.translator.t("status.no-operation"))
@@ -4064,6 +4082,7 @@ class SamuraiApp(
         self._chat_history.clear()
         self.query_one("#journal", BlockJournal).clear()
         self._write_welcome()
+        self.reconcile_before_show()
         self._restore_chat()
         self._refresh_chrome()
 

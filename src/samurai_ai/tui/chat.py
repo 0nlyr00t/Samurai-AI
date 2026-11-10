@@ -1034,9 +1034,9 @@ class ChatController:
         self._trim_chat_history()
         journal = self.query_one("#journal", BlockJournal)
         journal.write(Text())
-        self._write_dim(self.translator.t("chat.restored", count=total))
+        self._write_dim(self.translator.t("chat.restored", count=total), process=False)
         if truncated:
-            self._write_dim(self.translator.t("chat.restored-cut"))
+            self._write_dim(self.translator.t("chat.restored-cut"), process=False)
         journal.write(Text())
         for message in messages:
             text = str(message.content)
@@ -1046,7 +1046,7 @@ class ChatController:
                 self._write_dim(text)
             else:
                 self._write_user_message(text)
-        self._write_dim(self.translator.t("chat.restored-end"))
+        self._write_dim(self.translator.t("chat.restored-end"), process=False)
 
     def _clear_chat(self) -> None:
         """Forget the operation's transcript in memory and in the database."""

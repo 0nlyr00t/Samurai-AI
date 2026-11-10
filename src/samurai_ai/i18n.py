@@ -385,7 +385,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.thinking": "thinking · {count}",
         "chat.steer": "steering: {text}",
         "shell.empty": "shell mode: type a command after !",
-        "chat.undone": "last prompt undone",
+        "chat.undone": "last prompt undone — external tools already ran and stay run",
         "chat.undo-empty": "nothing to undo",
         "chat.compact-busy": "wait for the running turn to finish",
         "chat.compact-skip": "nothing to compact yet",
@@ -805,6 +805,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "opening new directions.",
         "app.stop-done": "stopped",
         "app.quit-hint": "press Ctrl+C again to exit",
+        "reconcile.unknown": "interrupted before the result: unknown external result — {runs}",
         "reconcile.report": (
             "actions-marked-unknown={actions} | tool-runs-marked-failed={runs} | "
             "resumable-tasks={tasks} | pending-approvals={approvals}"
@@ -1178,7 +1179,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.autonomy.ask": "",
         "chat.steer": "вброс в текущий ход: {text}",
         "shell.empty": "shell-режим: наберите команду после !",
-        "chat.undone": "последний промпт отменён",
+        "chat.undone": "последний промпт отменён — внешние команды уже выполнились и остаются",
         "chat.undo-empty": "отменять нечего",
         "chat.compact-busy": "дождитесь конца текущего хода",
         "chat.compact-skip": "сжимать пока нечего",
@@ -1601,6 +1602,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "направлений.",
         "app.stop-done": "остановлено",
         "app.quit-hint": "нажмите Ctrl+C ещё раз для выхода",
+        "reconcile.unknown": "прервано до результата: результат снаружи неизвестен — {runs}",
         "reconcile.report": (
             "отмечено-unknown={actions} | tool-runs-failed={runs} | "
             "возобновимые-задачи={tasks} | ожидающие-согласования={approvals}"
