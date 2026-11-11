@@ -53,7 +53,13 @@ from samurai_ai.domain.kernel import (
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
 from samurai_ai.domain.models import ModelCapability, ProviderUnavailableError
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
-from samurai_ai.domain.permission import CommandRisk, classify_command, command_window, decide
+from samurai_ai.domain.permission import (
+    CommandRisk,
+    bound_network_command,
+    classify_command,
+    command_window,
+    decide,
+)
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
@@ -133,6 +139,17 @@ def _bounded(text: str, limit: int) -> str:
 def _one_line(text: str) -> str:
     """Collapse a lesson onto one line: memory digests are line-oriented."""
     return " ".join(text.split())
+
+
+def _bounded_call(call: ToolCall) -> ToolCall:
+    """The command the approval and the process will both actually run."""
+    if call.name != "shell_exec":
+        return call
+    command = str(call.arguments.get("command", ""))
+    bounded = bound_network_command(command)
+    if bounded == command:
+        return call
+    return call.model_copy(update={"arguments": {**call.arguments, "command": bounded}})
 
 
 def _short_tool(tool_id: str, command: str) -> str:
@@ -1176,6 +1193,9 @@ class ChatController:
                 ScopeContract(includes=("127.0.0.1/32",)),
             )
             operation = self.operation
+        # The operator can retry a timed-out command deliberately; its transport
+        # bounds are still the same ones shown in the approval.
+        command = bound_network_command(command)
         self._shell_running = command
         self._shell_background = False
         # Shell-mode output lands in the conversation context, so it is marked
@@ -1757,6 +1777,13 @@ class ChatController:
             blocked_by_plan = self._plan_mode and not self._tool_is_read_only(tool_id or "")
             if tool_id is None or not command or blocked_by_plan:
                 continue
+            if self.execution.timeout_repeat(
+                self.operation.id if self.operation else "", tool_id, command
+            ) is not None:
+                # do not ask the operator to approve a probe that will only be
+                # refused by the anti-repeat guard a moment later
+                allowed_by_id[call.id] = False
+                continue
             risk = classify_command(command, str(self._cwd))
             decision = decide(
                 self.settings.permission_rules(),
@@ -1805,6 +1832,7 @@ class ChatController:
         Results are collected in call order so the model reads a deterministic
         transcript whatever order they finish in.
         """
+        calls = [_bounded_call(call) for call in calls]
         await self._preapprove(calls)
         gate = asyncio.Semaphore(self._PARALLEL_LIMIT)
 
@@ -2698,6 +2726,12 @@ class ChatController:
                     f"calls only (command: {command})"
                 ),
             )
+        if tool_id == "shell.exec" and self.operation is not None:
+            repeated = self.execution.timeout_repeat(self.operation.id, tool_id, command)
+            if repeated is not None:
+                note = self.translator.t("chat.timeout-repeat", run=repeated.id)
+                self._write_dim(note, process=False)
+                return Message(role="user", content=f"[tool {call.name}] {note}")
         risk = classify_command(command, str(self._cwd))
         badge = f"  [{risk.label()}]" if not risk.empty else ""
         # the running command lives in the status bar; the finished one becomes

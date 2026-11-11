@@ -9,6 +9,7 @@ call deserves a confirmation even when a reusable approval exists.
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -275,6 +276,91 @@ _LONG_COMMANDS = frozenset(
 DEFAULT_WINDOW_SECONDS = 120.0
 QUICK_WINDOW_SECONDS = 25.0
 LONG_WINDOW_SECONDS = 900.0
+#: One network probe gets a minute, not two; its own transport timeout fires first.
+TRANSPORT_WINDOW_SECONDS = 60.0
+_TRANSPORT_COMMANDS = frozenset({"nxc", "ssh", "sshpass", "xfreerdp", "xfreerdp3"})
+_NXC_TIMEOUT = "10"
+_SSH_TIMEOUT = "8"
+_COMMAND_SEPARATORS = frozenset({";", "&&", "||", "|"})
+_WRAPPERS = frozenset({"sudo", "timeout", "time", "env", "command", "nice", "stdbuf"})
+
+
+def _insert_timeout(command: str, executable: str, options: str) -> str:
+    """Insert options after the executable, preserving the shell verbatim."""
+    match = re.search(rf"(?<![\w/.-]){re.escape(executable)}(?=\s|$)", command)
+    if match is None:
+        return command
+    return f"{command[:match.end()]} {options}{command[match.end():]}"
+
+
+def _is_probe_executable(tokens: list[str], index: int) -> bool:
+    """Whether a token starts a probe, rather than mentions one in prose."""
+    start = max(
+        (i for i, token in enumerate(tokens[:index]) if token in _COMMAND_SEPARATORS),
+        default=-1,
+    )
+    prefix = tokens[start + 1:index]
+    if not prefix:
+        return True
+    if prefix[0] in _WRAPPERS or prefix[-1] in _WRAPPERS:
+        return True
+    return tokens[index] == "ssh" and "sshpass" in prefix
+
+
+def _has_option(tokens: list[str], *names: str) -> bool:
+    return any(
+        token in names or any(token.startswith(f"{name}=") for name in names)
+        for token in tokens
+    )
+
+
+def bound_network_command(command: str) -> str:
+    """Add missing per-connection timeouts to direct nxc and ssh probes.
+
+    Explicit operator/model values always win. Shell text is edited only after
+    ``shlex`` confirms an executable position, so an ``echo`` or a quoted
+    ``bash -c`` payload is left alone. Existing flags and pipelines keep their
+    exact spelling.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return command
+    bounded = command
+    for index, token in enumerate(tokens):
+        executable = token.rsplit("/", 1)[-1]
+        if executable not in {"nxc", "ssh"} or not _is_probe_executable(tokens, index):
+            continue
+        end = next(
+            (i for i in range(index + 1, len(tokens)) if tokens[i] in _COMMAND_SEPARATORS),
+            len(tokens),
+        )
+        tail = tokens[index + 1:end]
+        if executable == "nxc":
+            options: list[str] = []
+            if not _has_option(tail, "--timeout"):
+                options.extend(("--timeout", _NXC_TIMEOUT))
+            if "rdp" in tail and not _has_option(tail, "--rdp-timeout"):
+                options.extend(("--rdp-timeout", _NXC_TIMEOUT))
+            if options:
+                bounded = _insert_timeout(bounded, token, " ".join(options))
+        else:
+            options = []
+            if not _has_option(tail, "ConnectTimeout"):
+                options.extend(("-o", f"ConnectTimeout={_SSH_TIMEOUT}"))
+            if not _has_option(tail, "ConnectionAttempts"):
+                options.extend(("-o", "ConnectionAttempts=1"))
+            if options:
+                bounded = _insert_timeout(bounded, token, " ".join(options))
+    return bounded
+
+
+def canonical_command(command: str) -> str:
+    """Whitespace-insensitive command identity, without losing shell meaning."""
+    try:
+        return " ".join(shlex.split(command))
+    except ValueError:
+        return " ".join(command.split())
 
 
 def command_window(command: str, *, relayed: bool = False) -> float:
@@ -292,6 +378,8 @@ def command_window(command: str, *, relayed: bool = False) -> float:
     }
     if names & _LONG_COMMANDS:
         window = LONG_WINDOW_SECONDS
+    elif names & _TRANSPORT_COMMANDS:
+        window = TRANSPORT_WINDOW_SECONDS
     elif names & _QUICK_COMMANDS:
         window = QUICK_WINDOW_SECONDS
     else:
