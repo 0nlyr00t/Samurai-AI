@@ -2876,11 +2876,11 @@ class ChatController:
         command: str,
         mode: Any,
     ) -> Message:
-        """The guard refused: show what it was doing, offer it, retry once.
+        """The guard refused: show what it was doing, let the agent decide, retry once.
 
-        A refusal is the boundary working, so it reads as information — and the
-        operator gets one key to authorize the resource instead of paying a
-        model round trip to retype it.
+        A refusal is the boundary working, so it reads as information. The scope
+        agent then decides without stopping the operator; only an unreachable
+        model in ask mode hands the call back as the prompt.
         """
         journal = self.query_one("#journal", BlockJournal)
         journal.write(Text(f"[scope] {exc}", style=self.paint("accent")))
