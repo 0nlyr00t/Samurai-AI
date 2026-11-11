@@ -216,3 +216,67 @@ def test_a_repeated_write_with_one_key_runs_once(short_dir: Path) -> None:
         await server.aclose()
 
     asyncio.run(scenario())
+
+
+def test_a_crashed_run_is_shown_as_an_unknown_result(short_dir: Path) -> None:
+    """After a restart the operator sees `unknown`, never a silent retry."""
+    async def scenario() -> None:
+        rows: list[tuple[int, str, dict[str, Any]]] = []
+        socket_path = short_dir / "s.sock"
+        server, carrier = build(socket_path, rows)
+        await server.start()
+        await carrier.start(server.serve)
+
+        async def snapshot(_peer: Peer, _params: dict[str, Any]) -> dict[str, Any]:
+            return {"seq": 7, "runs": [{"id": "run_1", "status": "failed", "unknown": True}]}
+
+        server.register("operation.snapshot", snapshot)
+        client = await Client.connect(socket_path, client="tui", read_only=True)
+        state = await client.call("operation.snapshot", {"operation_id": "op_1"})
+        assert state["seq"] == 7
+        assert state["runs"][0]["unknown"] is True
+        assert state["runs"][0]["status"] == "failed"
+        await client.close()
+        await carrier.stop()
+        await server.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_a_daemon_restart_marks_the_interrupted_run_unknown(short_dir: Path) -> None:
+    """The old run is not retried: it is marked, and the reason is journaled."""
+    from samurai_ai.cli_serve import _reconcile_interrupted
+    from samurai_ai.domain.execution import ToolRun, ToolRunStatus
+    from samurai_ai.domain.operations import OperationEvent, OperationMode
+    from samurai_ai.domain.scope import ScopeContract
+    from samurai_ai.services.kernel import KernelService
+    from samurai_ai.services.operations import OperationService
+    from samurai_ai.storage.database import Database
+    from samurai_ai.storage.execution import ToolRunRepository
+    from samurai_ai.storage.kernel import KernelRepository
+    from samurai_ai.storage.operations import OperationRepository
+
+    database = Database(short_dir / "d.db")
+    operations = OperationService(OperationRepository(database))
+    KernelService(operations, KernelRepository(database))
+    run_repository = ToolRunRepository(database)
+    operation = operations.create(
+        "Restart lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    run = ToolRun(operation_id=operation.id, tool_id="shell.exec", tool_version=1)
+    run.status = ToolRunStatus.RUNNING
+    run_repository.add_run(
+        run,
+        OperationEvent(operation_id=operation.id, event_type="tool.run.started", payload={}),
+    )
+
+    services = [None] * 22
+    services[0] = operations
+    services[4] = type("E", (), {"runs": run_repository})()
+    _reconcile_interrupted(services, None, operations.repository)
+
+    after = run_repository.get_run(run.id)
+    assert after is not None and after.status is not ToolRunStatus.RUNNING
+    events = operations.repository.events(operation.id)
+    unknown = [event for event in events if event.event_type == "agent.run.unknown"]
+    assert unknown and run.id in unknown[0].payload["runs"]

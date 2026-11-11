@@ -138,6 +138,35 @@ def _socket_of(args: argparse.Namespace) -> Path:
     return Path(given) if given else serve_socket_path()
 
 
+def _reconcile_interrupted(
+    services: Any, journal: Any, repository: Any
+) -> None:
+    """A run the previous daemon owned is gone: say `unknown`, do not retry it.
+
+    Re-running a command whose result nobody saw is a second side effect, so the
+    interrupted runs are marked failed with an explicit unknown flag and the
+    reconciliation is journaled once per operation that had any.
+    """
+    from samurai_ai.domain.operations import OperationEvent
+    from samurai_ai.storage.execution import ToolRunRepository
+
+    execution = services[4]
+    if execution is None:
+        return
+    runs: ToolRunRepository = execution.runs
+    for operation in repository.list_all():
+        marked = runs.mark_in_flight_failed(operation.id, actor="daemon-restart")
+        if not marked:
+            continue
+        repository.append_event(
+            OperationEvent(
+                operation_id=operation.id,
+                event_type="agent.run.unknown",
+                payload={"runs": marked, "reason": "the daemon stopped before the result"},
+            )
+        )
+
+
 # -- daemon ---------------------------------------------------------------
 def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
     from samurai_ai.cli import _make_services
@@ -193,6 +222,7 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
             )
 
     runs = RunRegistry(work, journal)
+    _reconcile_interrupted(services, journal, repository)
 
     async def operation_list(_peer: Peer, _params: dict[str, Any]) -> list[dict[str, Any]]:
         return [
@@ -203,6 +233,12 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
     async def operation_show(_peer: Peer, params: dict[str, Any]) -> dict[str, Any]:
         operation = operations.get(str(params.get("operation_id") or ""))
         return operation.model_dump(mode="json")
+
+    async def operation_snapshot(_peer: Peer, params: dict[str, Any]) -> dict[str, Any]:
+        """The seq a fresh subscriber starts from: state first, then only news."""
+        operation = operations.get(str(params.get("operation_id") or ""))
+        events = repository.events(operation.id)
+        return {"seq": events[-1].id or 0 if events else 0}
 
     async def events_subscribe(_peer: Peer, params: dict[str, Any]) -> dict[str, Any]:
         operation = operations.get(str(params.get("operation_id") or ""))
@@ -300,6 +336,7 @@ def _build_methods(database_path: Path | None) -> tuple[RpcServer, Any]:
     server.register("run.cancel", run_cancel, write=True)
     server.register("operation.list", operation_list)
     server.register("operation.show", operation_show)
+    server.register("operation.snapshot", operation_snapshot)
     server.register("events.subscribe", events_subscribe)
     server.register("send.message", send_message, write=True)
     return server, runs

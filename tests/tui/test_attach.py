@@ -49,3 +49,39 @@ def _capture(app: SamuraiApp, sink: list[str]):
 
     journal = app.query_one("#journal", BlockJournal)
     return patch.object(journal, "write", side_effect=lambda message: sink.append(str(message)))
+
+
+def test_a_resync_frame_reloads_the_snapshot_before_new_events(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A peer told it fell behind reads state first, then continues from there."""
+    monkeypatch.setattr(AttachScreen, "_run_client", lambda self: None)
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    calls: list[tuple[str, int]] = []
+    appended: list[str] = []
+
+    class _Client:
+        async def subscribe(self, operation_id: str, from_seq: int = 0) -> int:
+            calls.append(("subscribe", from_seq))
+            return from_seq
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            screen = AttachScreen(app.translator, Path("/tmp/x.sock"), "op_1")
+            app.push_screen(screen)
+            await pilot.pause()
+            screen.client = _Client()
+            screen._call = lambda method, params: (  # type: ignore[method-assign]
+                41 if method == "operation.snapshot" else {"phase": "recon", "runs": 2}
+            )
+            screen._append = appended.append  # type: ignore[method-assign]
+            screen._post = lambda callback, *args: callback(*args)  # type: ignore[method-assign]
+            await screen._resync()
+            await pilot.pause()
+
+    asyncio.run(exercise())
+    assert calls == [("subscribe", 41)]
+    assert any("snapshot: phase recon" in line for line in appended)
