@@ -145,6 +145,19 @@ def test_nxc_and_ssh_get_transport_timeouts_without_overriding_explicit_ones() -
     assert "ConnectTimeout=20" in explicit
     assert "ConnectTimeout=8" not in explicit
 
+    wrapped = bound_network_command("timeout 20 nxc rdp 10.0.0.5")
+    assert wrapped.startswith("timeout 20 nxc --timeout 10 --rdp-timeout 10 rdp")
+    assert bound_network_command(wrapped) == wrapped  # idempotent
+
+    explicit_ssh = bound_network_command(
+        "ssh -o ConnectTimeout=20 -o ConnectionAttempts=2 user@10.0.0.5 id"
+    )
+    assert explicit_ssh == "ssh -o ConnectTimeout=20 -o ConnectionAttempts=2 user@10.0.0.5 id"
+
+    assert bound_network_command("nxc rdp 10.0.0.5 'unterminated") == (
+        "nxc rdp 10.0.0.5 'unterminated"
+    )
+
 
 def test_transport_bounds_do_not_touch_other_commands_or_quoted_payloads() -> None:
     for command in (
