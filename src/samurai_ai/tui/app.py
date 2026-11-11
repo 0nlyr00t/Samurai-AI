@@ -131,6 +131,7 @@ from samurai_ai.tui.screens import (
     TrustDirectoryScreen,
 )
 from samurai_ai.tui.screens.attach import AttachScreen
+from samurai_ai.tui.screens.scope_menu import ScopeMenuScreen
 from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
 from samurai_ai.tui.sessions import SessionController
 from samurai_ai.tui.theme import (
@@ -147,6 +148,7 @@ from samurai_ai.tui.widgets import (
     HistoryInput,
     OperationTab,
     PlusButton,
+    ScopeList,
     SideBlock,
     ViewTabs,
 )
@@ -455,6 +457,8 @@ class SamuraiApp(
         #: (operation id, literal) the operator already skipped once: do not
         #: reopen the same scope question on every identical probe
         self._scope_declined: set[tuple[str, str]] = set()
+        #: autonomous scope widenings spent this session (bounded by budget)
+        self._scope_auto_spent = 0
         self._unstructured_shells = 0
         self._structure_nudged = False
         self._drift_marks: deque[bool] = deque(maxlen=8)
@@ -721,7 +725,7 @@ class SamuraiApp(
                 yield BlockJournal(id="view-ops")
                 yield BlockJournal(id="view-bounty")
                 yield BlockJournal(id="view-hunt")
-                yield OptionList(id="view-scope")
+                yield ScopeList(id="view-scope")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
                 yield Static(id="side-swarm")
@@ -1714,6 +1718,70 @@ class SamuraiApp(
             note = self.translator.t("scope.rule-excluded", rule=rule)
         self.operation = self.service.replace_scope(self.operation.id, updated)
         self._write_dim(note, process=False)
+        self._refresh_chrome()
+
+    def _scope_rule_menu(self, rule: str) -> None:
+        """Right-click on a scope rule: exclude/restore, remove or edit it."""
+        if self.operation is None or not rule:
+            return
+        excluded = rule in self.operation.scope.excludes
+        self.push_screen(
+            ScopeMenuScreen(self.translator, rule, excluded=excluded),
+            lambda choice: self._on_scope_menu(choice, rule),
+        )
+
+    def _on_scope_menu(self, choice: str | None, rule: str) -> None:
+        from samurai_ai.tui.screens.scope_menu import EDIT, REMOVE, TOGGLE
+
+        if choice == TOGGLE:
+            self._toggle_scope_rule(rule)
+        elif choice == REMOVE:
+            self._remove_scope_rule(rule)
+        elif choice == EDIT:
+            self.run_worker(self._edit_scope_rule(rule), exclusive=False)
+
+    def _remove_scope_rule(self, rule: str) -> None:
+        """Drop a rule from both includes and excludes, applied at once."""
+        if self.operation is None or not rule:
+            return
+        scope = self.operation.scope
+        updated = ScopeContract(
+            includes=tuple(item for item in scope.includes if item != rule),
+            excludes=tuple(item for item in scope.excludes if item != rule),
+            hosts=scope.hosts,
+        )
+        self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._write_dim(self.translator.t("scope.rule-removed", rule=rule), process=False)
+        self._refresh_chrome()
+
+    async def _edit_scope_rule(self, rule: str) -> None:
+        """Rename a scope rule in place, keeping whichever set it was in."""
+        answer = await self.push_screen_wait(
+            ArgumentScreen(
+                self.translator, self.translator.t("scope.edit-prompt"), initial=rule
+            )
+        )
+        if self.operation is None or not answer or not answer.strip():
+            return
+        new = answer.strip()
+        if new == rule:
+            return
+        scope = self.operation.scope
+        includes = tuple(
+            dict.fromkeys(new if item == rule else item for item in scope.includes)
+        )
+        excludes = tuple(
+            dict.fromkeys(new if item == rule else item for item in scope.excludes)
+        )
+        try:
+            updated = ScopeContract(includes=includes, excludes=excludes, hosts=scope.hosts)
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            self._write_line(f"[scope] {exc}")
+            return
+        self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._write_dim(
+            self.translator.t("scope.rule-edited", old=rule, new=new), process=False
+        )
         self._refresh_chrome()
 
     def _scope_options(self) -> list[Option]:
@@ -4240,6 +4308,11 @@ class SamuraiApp(
     def _refresh_operations_strip(self) -> None:
         """One row of open operations; the current one is marked."""
         strip = self.query_one("#operations-strip", Horizontal)
+        # the current operation is always a tab, so the strip shows (and its
+        # right-click menu — rename, close — is reachable) even for a single one.
+        # Nothing else appended _open_tabs, so without this the strip never drew.
+        if self.operation is not None and self.operation.id not in self._open_tabs:
+            self._open_tabs.append(self.operation.id)
         if not self._open_tabs:
             strip.display = False
             return

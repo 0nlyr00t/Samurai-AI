@@ -33,18 +33,25 @@ class ArgumentScreen(ModalScreen[str | None]):
 
     BINDINGS = [Binding("escape", "cancel", show=False)]
 
-    def __init__(self, translator: Translator, label: str) -> None:
+    def __init__(self, translator: Translator, label: str, *, initial: str = "") -> None:
         super().__init__()
         self.translator = translator
         self.label = label
+        self.initial = initial
 
     def compose(self) -> ComposeResult:
         with Vertical(id="argument-dialog"):
             yield Static(self.label, id="argument-label")
-            yield Input(placeholder=self.translator.t("palette.placeholder"), id="argument-input")
+            yield Input(
+                value=self.initial,
+                placeholder=self.translator.t("palette.placeholder"),
+                id="argument-input",
+            )
 
     def on_mount(self) -> None:
-        self.query_one("#argument-input", Input).focus()
+        field = self.query_one("#argument-input", Input)
+        field.focus()
+        field.cursor_position = len(field.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         value = event.value.strip()

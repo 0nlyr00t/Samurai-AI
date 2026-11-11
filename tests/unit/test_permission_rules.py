@@ -69,20 +69,19 @@ def test_without_rules_the_old_behaviour_holds() -> None:
     assert action("cat .env", PermissionMode.ASK, risky, reusable=True) == "ask"
 
 
-def test_a_destructive_command_is_floored_above_yolo_and_never() -> None:
-    """rm -rf, dd, shutdown … never run unprompted on mode alone.
+def test_a_destructive_command_is_denied_headless_but_silent_in_yolo() -> None:
+    """rm -rf, dd, shutdown … in each mode.
 
-    yolo still confirms them (an operator is there); never denies them outright
-    (nobody is). A session approval does not buy them out — only an explicit
-    allow rule does, which is the operator's standing override.
+    yolo is the operator's explicit "do not ask me", so it stays silent even on
+    a destructive shape; never is headless, so there is nobody to answer and it
+    is denied rather than run blind; ask prompts as usual.
     """
     rm = CommandRisk(destructive=("recursive delete",))
 
     def action(mode: PermissionMode, **kwargs: object) -> str:
         return decide((), "shell.exec", "rm -rf x", mode, rm, **kwargs).action
 
-    assert action(PermissionMode.YOLO) == "ask"
-    assert action(PermissionMode.YOLO, reusable=True) == "ask"
+    assert action(PermissionMode.YOLO) == "silent"
     assert action(PermissionMode.NEVER) == "deny"
     assert action(PermissionMode.ASK) == "ask"
     # an explicit allow rule is the operator's own override and still wins

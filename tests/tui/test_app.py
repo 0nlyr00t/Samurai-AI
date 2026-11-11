@@ -9901,3 +9901,170 @@ def test_loot_access_rows_do_not_need_a_scope_hit_field(tmp_path: Path) -> None:
             await pilot.pause()
 
     asyncio.run(exercise())
+
+
+def test_operation_tab_shows_and_renames_via_right_click_menu(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    service, settings = stack[0], stack[2]
+    settings.set_locale("en")
+    operation = service.create(
+        "Old name",
+        OperationMode.CTF_HTB,
+        ScopeContract(includes=("10.0.0.5",)),
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens.tab_menu import RENAME, TabMenuScreen
+        from samurai_ai.tui.widgets import OperationTab
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # the current operation now shows as a tab (nothing populated the
+            # strip before, so the right-click menu had nothing to open)
+            tabs = list(app.query(OperationTab))
+            assert tabs, "the current operation should appear in the strip"
+
+            # right-click opens the tab menu
+            app._tab_menu(operation.id, "Old name")
+            await pilot.pause()
+            assert isinstance(app.screen, TabMenuScreen)
+
+            # choosing rename, then a new name, renames the operation immediately
+            app._on_tab_menu(RENAME, operation.id)
+            await pilot.pause()
+            name_input = app.screen.query_one("#argument-input", Input)
+            name_input.value = "Renamed op"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert service.get(operation.id).name == "Renamed op"
+
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_scope_rule_right_click_menu_edits_and_removes(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    service, settings = stack[0], stack[2]
+    settings.set_locale("en")
+    operation = service.create(
+        "Scope lab",
+        OperationMode.CTF_HTB,
+        ScopeContract(includes=("10.0.0.5", "10.0.0.6")),
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens.scope_menu import EDIT, REMOVE, ScopeMenuScreen
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # right-click a rule opens its menu
+            app._scope_rule_menu("10.0.0.5")
+            await pilot.pause()
+            assert isinstance(app.screen, ScopeMenuScreen)
+
+            # edit renames the rule in place, applied to the operation at once
+            app._on_scope_menu(EDIT, "10.0.0.5")
+            await pilot.pause()
+            field = app.screen.query_one("#argument-input", Input)
+            assert field.value == "10.0.0.5"  # prefilled
+            field.value = "10.0.0.9"
+            await pilot.press("enter")
+            await pilot.pause()
+            includes = service.get(operation.id).scope.includes
+            assert "10.0.0.9" in includes and "10.0.0.5" not in includes
+
+            # remove drops a rule entirely
+            app._on_scope_menu(REMOVE, "10.0.0.6")
+            await pilot.pause()
+            includes = service.get(operation.id).scope.includes
+            assert "10.0.0.6" not in includes
+
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+class _ScopeVerdictProvider(_ChatProvider):
+    """Returns a fixed scope verdict so the scope agent can be exercised."""
+
+    def __init__(self, decision: str = "include") -> None:
+        super().__init__()
+        self.decision = decision
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, Usage
+
+        self.calls += 1
+        return ChatResponse(
+            text=f'{{"decision": "{self.decision}", "reason": "same subnet"}}',
+            usage=Usage(prompt_tokens=3, completion_tokens=2),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=5,
+        )
+
+
+def test_scope_agent_decides_autonomously(tmp_path: Path) -> None:
+    from samurai_ai.domain.execution import ToolScopeError
+    from samurai_ai.domain.permission import PermissionMode
+
+    provider = _ScopeVerdictProvider("include")
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings, vault, models = stack[2], stack[5], stack[-1]
+    settings.set_locale("en")
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Scope agent",
+        OperationMode.CTF_HTB,
+        ScopeContract(includes=("10.0.0.5",), excludes=("10.0.0.99",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            exc = ToolScopeError("out of scope")
+
+            # excluded target: hard no, no model call
+            before = provider.calls
+            included, reason = await app._decide_scope(
+                "10.0.0.99", exc, PermissionMode.YOLO
+            )
+            assert included is False and "excluded" in reason
+            assert provider.calls == before  # model never consulted
+
+            # unrelated target: declined without a model call
+            included, reason = await app._decide_scope(
+                "172.16.0.1", exc, PermissionMode.YOLO
+            )
+            assert included is False and "unrelated" in reason
+            assert provider.calls == before
+
+            # related target (same /24): the agent consults the model and includes
+            included, reason = await app._decide_scope(
+                "10.0.0.90", exc, PermissionMode.YOLO
+            )
+            assert included is True
+            assert app._scope_auto_spent == 1
+
+            # budget exhausted: declined without a model call
+            app._scope_auto_spent = app._SCOPE_AUTO_BUDGET
+            calls = provider.calls
+            included, reason = await app._decide_scope(
+                "10.0.0.91", exc, PermissionMode.YOLO
+            )
+            assert included is False and "budget" in reason
+            assert provider.calls == calls
+
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
