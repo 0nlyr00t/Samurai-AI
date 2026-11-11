@@ -250,6 +250,14 @@ def decide(
         for rule in rules:
             if rule.action == action and rule.matches(tool_id, command):
                 return Decision(action=action, rule=rule)
+    # A destructive shape (rm -rf, dd, mkfs, shutdown, write outside cwd) is the
+    # one class yolo and never do NOT wave through: there is no undo. With an
+    # operator reachable it still asks; headless (never, nobody to answer) it is
+    # denied rather than run blind. Only an explicit `allow` rule above — the
+    # operator's own standing override — lets one through unprompted; a reusable
+    # session approval is not enough, so these confirm every time.
+    if risk.destructive:
+        return Decision(action="deny" if mode is PermissionMode.NEVER else "ask")
     # No rule: the old behaviour, unchanged — a reusable approval keeps quiet
     # unless the command carries a badge, and only `ask` mode prompts at all.
     if not mode.prompts_for_tools:

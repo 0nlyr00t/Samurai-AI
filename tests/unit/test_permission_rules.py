@@ -65,8 +65,29 @@ def test_without_rules_the_old_behaviour_holds() -> None:
 
     assert action("ls", PermissionMode.ASK, clean) == "ask"
     assert action("ls", PermissionMode.ASK, clean, reusable=True) == "silent"
-    assert action("rm -rf x", PermissionMode.ASK, risky, reusable=True) == "ask"
-    assert action("rm -rf x", PermissionMode.YOLO, risky) == "silent"
+    assert action("ls", PermissionMode.YOLO, clean) == "silent"
+    assert action("cat .env", PermissionMode.ASK, risky, reusable=True) == "ask"
+
+
+def test_a_destructive_command_is_floored_above_yolo_and_never() -> None:
+    """rm -rf, dd, shutdown … never run unprompted on mode alone.
+
+    yolo still confirms them (an operator is there); never denies them outright
+    (nobody is). A session approval does not buy them out — only an explicit
+    allow rule does, which is the operator's standing override.
+    """
+    rm = CommandRisk(destructive=("recursive delete",))
+
+    def action(mode: PermissionMode, **kwargs: object) -> str:
+        return decide((), "shell.exec", "rm -rf x", mode, rm, **kwargs).action
+
+    assert action(PermissionMode.YOLO) == "ask"
+    assert action(PermissionMode.YOLO, reusable=True) == "ask"
+    assert action(PermissionMode.NEVER) == "deny"
+    assert action(PermissionMode.ASK) == "ask"
+    # an explicit allow rule is the operator's own override and still wins
+    allowed = (rule("allow shell.exec: *"),)
+    assert decide(allowed, "shell.exec", "rm -rf x", PermissionMode.NEVER, rm).action == "allow"
 
 
 def test_precedence_is_deny_then_ask_then_allow() -> None:

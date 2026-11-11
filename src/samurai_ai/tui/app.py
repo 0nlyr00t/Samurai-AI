@@ -476,6 +476,9 @@ class SamuraiApp(
         #: set by the host when the reviewed catalogue is available
         self.provisioner: Any = None
         self._round_approvals: dict[str, bool] = {}
+        #: tools the operator allowed for the whole session from the prompt
+        #: ("Allow for this session"); risky shapes still surface per decide()
+        self._session_allowed_tools: set[str] = set()
         self._background_results: list[Any] = []
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
@@ -787,7 +790,10 @@ class SamuraiApp(
         self.set_interval(HUNT_REFRESH_SECONDS, self.refresh_hunt)
         self.set_interval(1.0, self._status_tick)
         self.focus_command_input(force=True)
-        self._maybe_prompt_trust()
+        # the directory is its own gate: prompt at startup whenever cwd is not in
+        # the trust lists, independent of yolo (which only governs approvals), and
+        # flag any agent-config in the folder so trust is a seen decision.
+        self._prompt_trust_on_start()
 
     def _retitle_tabs(self) -> None:
         tabs = self.query_one("#view-tabs", Tabs)
@@ -2254,6 +2260,37 @@ class SamuraiApp(
             return False
         cwd = str(self._cwd)
         return cwd in self._session_trusted or cwd in self._stored_trusted_dirs()
+
+    #: files in cwd that can steer what the agent runs — a flag on the trust gate
+    _TRUST_WARNING_FILES = ("plugin.json", "samurai.toml", "samurai.json", ".samurai")
+
+    def _trust_warning_files(self) -> list[str]:
+        """Agent-config files present in cwd, named so the operator can look."""
+        return [name for name in self._TRUST_WARNING_FILES if (self._cwd / name).exists()]
+
+    def _prompt_trust_on_start(self) -> None:
+        """Confirm the launch directory before the first tool runs.
+
+        The lazy prompt only fires when a command first leaves cwd; a launch in
+        an untrusted directory should ask up front (as Claude Code's workspace
+        trust does), and flag any agent-config in the folder that could change
+        what runs. yolo governs approvals, not this: the directory is its own
+        gate, so the stored/session trust lists decide, not ``_directory_trusted``.
+        """
+        cwd = str(self._cwd)
+        if cwd in self._session_trusted or cwd in self._stored_trusted_dirs():
+            self._dir_trusted = True
+            return
+        warned = self._trust_warning_files()
+        warning = (
+            self.translator.t("trust.manifest-warning", files=", ".join(warned))
+            if warned
+            else None
+        )
+        self.push_screen(
+            TrustDirectoryScreen(self.translator, cwd, warning=warning),
+            self._on_trust_chosen,
+        )
 
     def _maybe_prompt_trust(self, force: bool = False) -> None:
         if not force and self._directory_trusted():
@@ -4459,6 +4496,10 @@ class SamuraiApp(
             (self.translator.t("side.workspace"), self.paint("dim text-faint")),
             ("\n" + self._short_cwd(), self.paint("accent")),
         )
+        if not self._directory_trusted():
+            workspace.append(
+                self.translator.t("trust.untrusted-marker"), self.paint("warning")
+            )
         self.query_one("#side-workspace", Static).update(workspace)
         self._refresh_swarm_panel()
         self._refresh_side_blocks()
