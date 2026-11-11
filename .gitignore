@@ -16,3 +16,7 @@ build/
 evidence/
 nmap_full.txt
 .thinkrail/
+
+# Local quality-gate artifacts
+.metrics/
+target/
