@@ -45,36 +45,94 @@ class Method:
     write: bool
 
 
+#: events a slow peer may fall behind before the oldest ones are dropped
+PEER_QUEUE = 256
+
+
 class EventFeed:
-    """Reads the journal forward per subscription; SQLite is the buffer."""
+    """Reads the journal forward per subscription; SQLite is the buffer.
+
+    Each peer gets its own bounded queue and its own writer task, so one slow
+    client cannot stall the others. When the queue overflows the oldest frames
+    are dropped and the peer is told how many, so it re-reads a snapshot
+    instead of quietly believing it saw everything.
+    """
 
     def __init__(
         self, fetch: Callable[[str, int, int], list[tuple[int, str, dict[str, Any]]]]
     ) -> None:
         self.fetch = fetch
         self.subscriptions: dict[Link, dict[str, int]] = {}
+        self.queues: dict[Link, asyncio.Queue[dict[str, Any]]] = {}
+        self.dropped: dict[Link, int] = {}
+        self.writers: dict[Link, asyncio.Task[None]] = {}
 
     def subscribe(self, link: Link, operation_id: str, from_seq: int) -> None:
         self.subscriptions.setdefault(link, {})[operation_id] = from_seq
+        self.queues.setdefault(link, asyncio.Queue(maxsize=PEER_QUEUE))
 
     def drop(self, link: Link) -> None:
         self.subscriptions.pop(link, None)
+        self.queues.pop(link, None)
+        self.dropped.pop(link, None)
+        writer = self.writers.pop(link, None)
+        if writer is not None:
+            writer.cancel()
+
+    def offer(self, link: Link, frame: dict[str, Any]) -> None:
+        """Queue one frame; on overflow the oldest event is sacrificed."""
+        queue = self.queues.get(link)
+        if queue is None:
+            return
+        try:
+            queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            with contextlib.suppress(asyncio.QueueEmpty):
+                queue.get_nowait()
+            queue.put_nowait(frame)
+            self.dropped[link] = self.dropped.get(link, 0) + 1
+
+    def _ensure_writer(
+        self, link: Link, write: Callable[[Link, dict[str, Any]], Awaitable[None]]
+    ) -> None:
+        if link in self.writers:
+            return
+
+        async def drain() -> None:
+            queue = self.queues[link]
+            while True:
+                frame = await queue.get()
+                lost = self.dropped.pop(link, 0)
+                if lost:
+                    # ahead of the frame that survived: the peer must resync
+                    with contextlib.suppress(ConnectionError):
+                        await write(
+                            link,
+                            {"resync": lost, "seq": int(frame.get("seq") or 0),
+                             "operation_id": frame.get("operation_id", "")},
+                        )
+                with contextlib.suppress(ConnectionError):
+                    await write(link, frame)
+
+        self.writers[link] = asyncio.create_task(drain())
 
     async def pump(self, write: Callable[[Link, dict[str, Any]], Awaitable[None]]) -> None:
         while True:
             await asyncio.sleep(EVENT_PUMP_SECONDS)
             for link, watched in list(self.subscriptions.items()):
+                self._ensure_writer(link, write)
                 for operation_id, seq in list(watched.items()):
                     rows = self.fetch(operation_id, seq, 100)
                     for event_id, event_type, payload in rows:
-                        frame = {
-                            "event": event_type,
-                            "seq": event_id,
-                            "operation_id": operation_id,
-                            "payload": payload,
-                        }
-                        with contextlib.suppress(ConnectionError):
-                            await write(link, frame)
+                        self.offer(
+                            link,
+                            {
+                                "event": event_type,
+                                "seq": event_id,
+                                "operation_id": operation_id,
+                                "payload": payload,
+                            },
+                        )
                         watched[operation_id] = event_id
 
 
@@ -84,6 +142,9 @@ class RpcServer:
         self.methods: dict[str, Method] = {}
         self._links: dict[Link, Peer] = {}
         self._pump: asyncio.Task[None] | None = None
+        #: (peer principal, idempotency key) → the first answer, so a second
+        #: Enter or a reconnect retry never runs the same write twice
+        self._seen: dict[tuple[str, str], Response] = {}
 
     async def start(self) -> None:
         if self._pump is None:
@@ -151,6 +212,11 @@ class RpcServer:
         method = self.methods.get(request.method)
         if method is None:
             return Response(request.id, error=ErrorBody("no-method", request.method))
+        key = str(request.params.get("idempotency_key") or "")
+        token = (peer.principal.subject, key) if key and method.write else None
+        if token is not None and token in self._seen:
+            first = self._seen[token]
+            return Response(request.id, result=first.result, error=first.error)
         try:
             require(peer.principal, method.path)
             if method.write and peer.read_only:
@@ -162,6 +228,10 @@ class RpcServer:
             return Response(request.id, error=ErrorBody(exc.code, str(exc)))
         except Exception as exc:  # noqa: BLE001 - the peer must see something
             return Response(request.id, error=ErrorBody(type(exc).__name__, str(exc)))
+        if token is not None:
+            self._seen[token] = Response(request.id, result=result)
+            if len(self._seen) > 512:
+                self._seen.pop(next(iter(self._seen)))
         if request.method == "events.subscribe" and isinstance(result, dict):
             self.feed.subscribe(
                 link,
