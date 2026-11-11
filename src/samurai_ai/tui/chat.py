@@ -204,6 +204,7 @@ class ChatController:
         _running_tools: int
         _cache_share: float
         _round_approvals: dict[str, bool]
+        _session_allowed_tools: set[str]
         _background_results: list[Message]
         _process_block: list[str]
         _DIM_STYLE: str
@@ -1212,7 +1213,8 @@ class ChatController:
             command,
             mode,
             risk,
-            reusable=self._reusable_approval("shell.exec"),
+            reusable=self._reusable_approval("shell.exec")
+            or "shell.exec" in self._session_allowed_tools,
         )
         if decision.is_denied:
             self._write_dim(self.translator.t("chat.tool-denied", command=command), process=False)
@@ -1229,6 +1231,10 @@ class ChatController:
                     meta=self._approval_meta("shell.exec", command, risk),
                 )
             )
+            if allowed == "session":
+                # the operator vouched for the tool, not just this call: ordinary
+                # shell commands go quiet for the session, risky shapes still ask
+                self._session_allowed_tools.add("shell.exec")
             if not allowed:
                 self._write_dim(
                     self.translator.t("chat.tool-denied", command=command), process=False
