@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
+
 from samurai_ai.domain.operations import Operation, OperationEvent
 from samurai_ai.storage.database import Database
+
+_log = logging.getLogger(__name__)
 
 
 class OperationConflictError(RuntimeError):
@@ -68,19 +73,40 @@ class OperationRepository:
 
     def latest(self) -> Operation | None:
         with self.database.connect() as connection:
-            row = connection.execute(
-                "SELECT data FROM operations ORDER BY created_at DESC, id DESC LIMIT 1"
-            ).fetchone()
-        if row is None:
-            return None
-        return Operation.model_validate_json(row["data"])
+            rows = connection.execute(
+                "SELECT id, data FROM operations ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        # a single unreadable row must not brick startup: the welcome screen and
+        # the operations strip both call this on mount, so skip past a corrupt
+        # record to the newest one that still parses
+        for row in rows:
+            operation = self._parse_row(row)
+            if operation is not None:
+                return operation
+        return None
 
     def list_all(self) -> list[Operation]:
         with self.database.connect() as connection:
             rows = connection.execute(
-                "SELECT data FROM operations ORDER BY created_at, id"
+                "SELECT id, data FROM operations ORDER BY created_at, id"
             ).fetchall()
-        return [Operation.model_validate_json(row["data"]) for row in rows]
+        parsed = [self._parse_row(row) for row in rows]
+        return [operation for operation in parsed if operation is not None]
+
+    @staticmethod
+    def _parse_row(row: sqlite3.Row) -> Operation | None:
+        """Validate a stored operation, tolerating a corrupt ``data`` blob.
+
+        A row whose JSON no longer matches the schema (a half-written record, a
+        value clobbered by an older build or outside tampering) is logged and
+        skipped rather than raised, so one bad operation cannot take the whole
+        app down on load.
+        """
+        try:
+            return Operation.model_validate_json(row["data"])
+        except ValidationError as error:
+            _log.warning("skipping unreadable operation %s: %s", row["id"], error)
+            return None
 
     def update(self, operation: Operation, expected_version: int, event: OperationEvent) -> None:
         with self.database.transaction() as connection:
