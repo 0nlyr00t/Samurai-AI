@@ -43,8 +43,8 @@ _HOST_PORT = re.compile(r"([a-z0-9.-]+|\[[0-9a-f:]+\]):\d{1,5}\Z", re.I)
 _FILE_EXTENSIONS = frozenset(
     """
     js jsx ts tsx mjs cjs json py rb go rs php html htm css scss txt md rst yml yaml
-    toml ini conf config sh bash zsh env log csv tsv xml sql db sqlite bak zip tar
-    gz tgz bz2 xz 7z pem crt key pub lock mod sum
+    toml ini conf config sh bash zsh ps1 bat cmd exe dll bin env log csv tsv xml sql
+    db sqlite bak zip tar gz tgz bz2 xz 7z pem crt key pub lock mod sum
     """.split()
 )
 
@@ -166,22 +166,34 @@ def _literals(value: Any) -> list[tuple[str, str]]:
     text = str(value).strip()
     if not text:
         return []
+    if " " not in text:
+        # a lone word may be a file as much as a host: `send.sh` is a script, and
+        # «.sh» is a registered TLD, so the file check has to come first
+        return _words(text)
     found = _scan_text(text)
-    if found or " " not in text:
+    if found:
         return found
+    out = []
     for token in _tokens(text):
-        # key=value flags carry the host on the right side (--resolve=h:443:ip)
-        _, _, kv_value = token.partition("=")
-        candidate = kv_value or token
-        if not kv_value and _looks_like_file(candidate):
+        out.extend(_words(token))
+    return out
+
+
+def _words(token: str) -> list[tuple[str, str]]:
+    """What one token contributes; a file name contributes nothing.
+
+    A quoted tail is a command of its own («bash -c 'nmap 10.0.0.5'»), so it is
+    split again rather than judged as one dotted word.
+    """
+    _, _, kv_value = token.partition("=")
+    if " " not in token:
+        if not kv_value and _looks_like_file(token):
             # a file, not a host: `cat app.js` must not be judged as the .js TLD
-            continue
-        found.extend(_scan_text(candidate))
-        # a quoted tail is a command of its own: «bash -c 'nmap 10.0.0.5'»
-        if " " in token:
-            for inner in _tokens(token):
-                _, _, inner_value = inner.partition("=")
-                found.extend(_scan_text(inner_value or inner))
+            return []
+        return _scan_text(kv_value or token)
+    found: list[tuple[str, str]] = []
+    for inner in _tokens(token):
+        found.extend(_words(inner))
     return found
 
 

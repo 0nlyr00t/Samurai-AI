@@ -105,3 +105,20 @@ def test_a_file_suffix_beats_the_tld() -> None:
     # a URL is still judged as a URL, whatever its path looks like
     with pytest.raises(ScopeGuardError, match="outside.example.org"):
         guard(SCOPE, {"command": "curl https://outside.example.org/app.js"})
+
+
+def test_a_lone_file_name_is_not_a_host() -> None:
+    """`send.sh` on its own was refused: only a second word skipped it.
+
+    The command is a script the operator wrote next to the operation, so the run
+    stopped at the guard and the scope agent called it unrelated.
+    """
+    for command in ("send.sh", "./send.sh", "run.sh", "linpeas.ps1", "patch.cmd"):
+        guard(SCOPE, {"command": command})
+
+
+def test_a_quoted_tail_still_checks_its_words() -> None:
+    """A command in quotes is judged by its words, not dropped over one dot."""
+    with pytest.raises(ScopeGuardError, match="8.8.8.8"):
+        guard(SCOPE, {"command": "bash -c 'cat app.js; nmap 8.8.8.8'"})
+    guard(SCOPE, {"command": "bash -c 'cat app.js; id'"})
