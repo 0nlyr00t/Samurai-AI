@@ -125,32 +125,32 @@ def _is_outside(path: str, cwd: str) -> bool:
         return True
 
 
+def _sensitive_labels(command: str) -> list[str]:
+    for path in _paths_in(command):
+        if any(pattern.search(path) for pattern in _SENSITIVE_TOKENS):
+            return ["credentials/key file"]
+    return []
+
+
+def _destructive_labels(command: str, cwd: str | None) -> list[str]:
+    labels = list(
+        dict.fromkeys(
+            label for pattern, label in _DESTRUCTIVE_PATTERNS if pattern.search(command)
+        )
+    )
+    if cwd is not None and any(
+        _is_outside(match.group(1), cwd)
+        for regex in (_REDIRECT, _WRITE_FLAGS)
+        for match in regex.finditer(command)
+    ):
+        labels.append("write outside cwd")
+    return labels
+
+
 def classify_command(command: str, cwd: str | None = None) -> CommandRisk:
     """Flag sensitive paths and destructive shapes in a shell command line."""
-    sensitive: list[str] = []
-    destructive: list[str] = []
-
-    for pattern, label in _DESTRUCTIVE_PATTERNS:
-        if pattern.search(command) and label not in destructive:
-            destructive.append(label)
-
-    for path in _paths_in(command):
-        for pattern in _SENSITIVE_TOKENS:
-            if pattern.search(path):
-                if "credentials/key file" not in sensitive:
-                    sensitive.append("credentials/key file")
-                break
-
-    if cwd is not None:
-        outside = [
-            match.group(1)
-            for regex in (_REDIRECT, _WRITE_FLAGS)
-            for match in regex.finditer(command)
-            if _is_outside(match.group(1), cwd)
-        ]
-        if outside:
-            destructive.append("write outside cwd")
-
+    sensitive = _sensitive_labels(command)
+    destructive = _destructive_labels(command, cwd)
     return CommandRisk(tuple(sensitive[:MAX_BADGES]), tuple(destructive[:MAX_BADGES]))
 
 
@@ -314,6 +314,38 @@ def _has_option(tokens: list[str], *names: str) -> bool:
     )
 
 
+def _tail(tokens: list[str], index: int) -> list[str]:
+    end = next(
+        (i for i in range(index + 1, len(tokens)) if tokens[i] in _COMMAND_SEPARATORS),
+        len(tokens),
+    )
+    return tokens[index + 1:end]
+
+
+def _bound_nxc(tokens: list[str], index: int, command: str) -> str:
+    tail = _tail(tokens, index)
+    options: list[str] = []
+    if not _has_option(tail, "--timeout"):
+        options.extend(("--timeout", _NXC_TIMEOUT))
+    if "rdp" in tail and not _has_option(tail, "--rdp-timeout"):
+        options.extend(("--rdp-timeout", _NXC_TIMEOUT))
+    if not options:
+        return command
+    return _insert_timeout(command, tokens[index], " ".join(options))
+
+
+def _bound_ssh(tokens: list[str], index: int, command: str) -> str:
+    tail = _tail(tokens, index)
+    options: list[str] = []
+    if not _has_option(tail, "ConnectTimeout"):
+        options.extend(("-o", f"ConnectTimeout={_SSH_TIMEOUT}"))
+    if not _has_option(tail, "ConnectionAttempts"):
+        options.extend(("-o", "ConnectionAttempts=1"))
+    if not options:
+        return command
+    return _insert_timeout(command, tokens[index], " ".join(options))
+
+
 def bound_network_command(command: str) -> str:
     """Add missing per-connection timeouts to direct nxc and ssh probes.
 
@@ -331,27 +363,10 @@ def bound_network_command(command: str) -> str:
         executable = token.rsplit("/", 1)[-1]
         if executable not in {"nxc", "ssh"} or not _is_probe_executable(tokens, index):
             continue
-        end = next(
-            (i for i in range(index + 1, len(tokens)) if tokens[i] in _COMMAND_SEPARATORS),
-            len(tokens),
-        )
-        tail = tokens[index + 1:end]
         if executable == "nxc":
-            options: list[str] = []
-            if not _has_option(tail, "--timeout"):
-                options.extend(("--timeout", _NXC_TIMEOUT))
-            if "rdp" in tail and not _has_option(tail, "--rdp-timeout"):
-                options.extend(("--rdp-timeout", _NXC_TIMEOUT))
-            if options:
-                bounded = _insert_timeout(bounded, token, " ".join(options))
+            bounded = _bound_nxc(tokens, index, bounded)
         else:
-            options = []
-            if not _has_option(tail, "ConnectTimeout"):
-                options.extend(("-o", f"ConnectTimeout={_SSH_TIMEOUT}"))
-            if not _has_option(tail, "ConnectionAttempts"):
-                options.extend(("-o", "ConnectionAttempts=1"))
-            if options:
-                bounded = _insert_timeout(bounded, token, " ".join(options))
+            bounded = _bound_ssh(tokens, index, bounded)
     return bounded
 
 
