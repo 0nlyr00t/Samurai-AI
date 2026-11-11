@@ -120,6 +120,8 @@ uv run samurai tui
 - `src/samurai_ai/cli_models.py` — model providers/list/register/remove/health/complete/budget/usage команды.
 - `src/samurai_ai/cli_agents.py` — agent run/list/show команды.
 - `src/samurai_ai/tui/app.py` — локализованный TUI без доменной логики в обработчиках.
+- `src/samurai_ai/tui/killchain.py`, `tui/coverage.py` — состояния фаз и покрытие из доменных данных (задачи, гейты, артефакты), не из текста модели.
+- `src/samurai_ai/services/killchain.py` — ручной выбор фазы оператором, журналируется с причиной и actor.
 - `tests/unit` — чистое доменное ядро и scope/kernel/recovery/execution/permission/goal edge cases.
 - `tests/tui` — pilot-тесты TUI: палитра, оверлей клавиш, инспектор, пустые состояния, режимы.
 - `tests/integration` — SQLite, recovery, process/http broker, CLI и kernel E2E.
