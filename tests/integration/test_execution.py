@@ -11,12 +11,13 @@ from samurai_ai.domain.execution import (
     ApprovalRequiredError,
     OutputTrust,
     ToolExecutionError,
+    ToolRun,
     ToolRunStatus,
     ToolScopeError,
     ToolStateError,
 )
 from samurai_ai.domain.kernel import ApprovalStatus, RiskClass
-from samurai_ai.domain.operations import Operation, OperationMode
+from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.recovery import RecoveryActionStatus
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.execution import ToolExecutionService
@@ -78,6 +79,66 @@ def make_operation(service: OperationService) -> Operation:
 
 def read_artifact(database_path: Path, artifact_path: str) -> str:
     return (database_path.parent / artifact_path).read_text(encoding="utf-8")
+
+
+def test_a_timeout_repeat_matches_the_same_command_only(tmp_path: Path) -> None:
+    service, _kernel, _recovery, execution = make_stack(tmp_path / "repeat.db")
+    operation = make_operation(service)
+    command = "nxc rdp 10.0.0.5 --timeout 10 --rdp-timeout 10 -u test -p test"
+    run = ToolRun(
+        operation_id=operation.id,
+        tool_id="shell.exec",
+        tool_version=1,
+        parameters={"command": command},
+        status=ToolRunStatus.TIMEOUT,
+    )
+    execution.runs.add_run(
+        run,
+        OperationEvent(
+            operation_id=operation.id, event_type="tool.run.timeout", payload={}
+        ),
+    )
+
+    assert execution.timeout_repeat(operation.id, "shell.exec", command) == run
+    assert execution.timeout_repeat(operation.id, "shell.exec", f"  {command}  ") == run
+    assert execution.timeout_repeat(operation.id, "shell.exec", command + " --shares") is None
+    assert execution.timeout_repeat(operation.id, "shell.exec", "echo ok") is None
+
+
+def test_a_failed_run_does_not_trigger_the_timeout_repeat_guard(tmp_path: Path) -> None:
+    service, _kernel, _recovery, execution = make_stack(tmp_path / "repeat-failed.db")
+    operation = make_operation(service)
+    command = "ssh -o ConnectTimeout=8 user@10.0.0.5 id"
+    run = ToolRun(
+        operation_id=operation.id,
+        tool_id="shell.exec",
+        tool_version=1,
+        parameters={"command": command},
+        status=ToolRunStatus.FAILED,
+    )
+    execution.runs.add_run(
+        run,
+        OperationEvent(
+            operation_id=operation.id, event_type="tool.run.failed", payload={}
+        ),
+    )
+    assert execution.timeout_repeat(operation.id, "shell.exec", command) is None
+
+
+def test_transport_bounds_are_recorded_before_execution(tmp_path: Path) -> None:
+    service, _kernel, _recovery, execution = make_stack(tmp_path / "bounded.db")
+    operation = make_operation(service)
+    # `ssh -V` only prints the client version; no network connection is made.
+    result = execution.run_tool(
+        operation.id,
+        "shell.exec",
+        {"command": "ssh -V"},
+        approval_resolver=lambda _approval_id: True,
+    )
+    assert result.run.exit_code == 0
+    assert result.run.parameters["command"].startswith(
+        "ssh -o ConnectTimeout=8 -o ConnectionAttempts=1 -V"
+    )
 
 
 def test_migration_v4_creates_tool_runs_table(tmp_path: Path) -> None:
