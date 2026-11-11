@@ -9873,3 +9873,31 @@ def test_a_timed_out_command_is_not_run_again(tmp_path: Path, monkeypatch) -> No
             assert len(stack[4].list_runs(operation.id)) == 1
 
     asyncio.run(exercise())
+
+
+def test_loot_access_rows_do_not_need_a_scope_hit_field(tmp_path: Path) -> None:
+    """A confirmed access fact must not crash the side panel refresh."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Access row lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.129.247.82",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            intent = app.graph.open_intent(operation.id, "t-1", "get a shell", origin.id)
+            app.graph.start_intent(intent.id)
+            fact = app.graph.record_fact(intent.id, "user shell on 10.129.247.82")
+            # this exact path used to raise AttributeError: AccessRow.hit
+            app._refresh_side_blocks()
+            entries = app._loot_entries(app._access_rows())
+            assert any(
+                entry.kind == "access" and entry.source_id == f"fact:{fact.id}"
+                for entry in entries
+            )
+            await pilot.pause()
+
+    asyncio.run(exercise())

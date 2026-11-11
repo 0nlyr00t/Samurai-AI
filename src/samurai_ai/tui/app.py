@@ -110,6 +110,7 @@ from samurai_ai.tui.journal import (  # noqa: F401
     entity_span,
 )
 from samurai_ai.tui.keymap import KeyMapController
+from samurai_ai.tui.killchain import AccessRow, LootEntry
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import (
@@ -3997,14 +3998,13 @@ class SamuraiApp(
         ]
         return access_rows(facts, self.operation.scope)
 
-    def _loot_entries(self, access: list[Any]) -> list[Any]:
+    def _loot_entries(self, access: list[AccessRow]) -> list[LootEntry]:
         """LOOT as domain rows: flags, non-service secrets and reached hosts.
 
         Each row carries the id of what proves it, so a click reaches the
         source instead of a copy of the shown string; secrets are listed by
         name and their value stays masked until copied.
         """
-        from samurai_ai.tui.killchain import LootEntry
 
         if self.operation is None:
             return []
@@ -4036,8 +4036,8 @@ class SamuraiApp(
                 )
             )
         for row in access:
-            if not row.hit:
-                continue
+            # _access_rows already contains only confirmed facts; ScopeRow.hit
+            # belongs to the scope board and does not exist on AccessRow
             entries.append(
                 LootEntry(
                     kind="access",
