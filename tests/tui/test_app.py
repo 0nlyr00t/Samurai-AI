@@ -121,7 +121,7 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
         ],
         [StageGate(id="recon-complete", name="Recon complete")],
     )
-    artifact = kernel.register_artifact(
+    kernel.register_artifact(
         operation.id,
         ArtifactKind.NOTE,
         "service exposed on 443",
@@ -296,7 +296,6 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
 
                 for command, expected in (
                     ("/gates", "recon-complete"),
-                    ("/evidence", artifact.id),
                     ("/approvals", approval.id),
                     ("/tools", "local.echo"),
                     ("/tools", "sandbox.exec"),
@@ -336,6 +335,19 @@ def test_tui_loads_operation_and_processes_keyboard_commands(tmp_path: Path) -> 
                     )
                     await pilot.press("escape")
                     await pilot.pause()
+
+                # /evidence opens the evidence-first mode, statuses and all
+                command_input.value = "/evidence"
+                await pilot.press("enter")
+                await pilot.pause()
+                assert isinstance(app.screen, BoardScreen)
+                labels = [
+                    str(option.prompt)
+                    for option in app.screen.query_one("#board-list", OptionList).options
+                ]
+                assert any("[candidate]" in label for label in labels)
+                await pilot.press("escape")
+                await pilot.pause()
 
                 assert not any("tui-secret-plaintext" in message for message in messages)
 
@@ -9622,5 +9634,95 @@ def test_cached_prompt_tokens_are_not_billed_at_full_price(tmp_path: Path) -> No
             await pilot.pause()
             bar = str(app.query_one("#status-bar", Static).render())
             assert "gpt-4o $1.0000" in bar
+
+    asyncio.run(exercise())
+
+
+def test_evidence_mode_separates_a_candidate_from_a_validated_finding(tmp_path: Path) -> None:
+    """A candidate must not read like a validated finding, and a jump exists."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Evidence lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    stack[1].create_finding(
+        operation.id, "Open redirect", FindingSeverity.MEDIUM, summary="maybe"
+    )
+    validated = stack[1].create_finding(
+        operation.id, "SQL injection", FindingSeverity.HIGH, summary="blind"
+    )
+    artifact = stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "proof")
+    stack[1].attach_evidence(validated.id, artifact.id)
+    stack[1].validate_finding(validated.id)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._show_evidence_mode()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            labels = [str(option.prompt) for option in listed.options if not option.disabled]
+            candidate_row = next(label for label in labels if "Open redirect" in label)
+            validated_row = next(label for label in labels if "SQL injection" in label)
+            assert candidate_row.startswith("?") and "[candidate]" in candidate_row
+            assert validated_row.startswith("✓") and "[validated]" in validated_row
+            assert "evidence 1" in validated_row
+            # Enter on the validated one opens its detail, where the artifact id is
+            # highlight indexes options, group headers included
+            listed.highlighted = next(
+                index for index, option in enumerate(listed.options) if option.id == validated.id
+            )
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            body = "\n".join(
+                str(child.render()) for child in app.screen.query("*") if hasattr(child, "render")
+            )
+            assert artifact.id in body
+
+    asyncio.run(exercise())
+
+
+def test_evidence_older_than_a_later_test_is_marked_stale(tmp_path: Path) -> None:
+    from samurai_ai.domain.execution import OutputTrust, ToolRun
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Stale lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+    )
+    finding = stack[1].create_finding(
+        operation.id, "Old proof", FindingSeverity.LOW, summary="from before"
+    )
+    artifact = stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "old")
+    stack[1].attach_evidence(finding.id, artifact.id)
+    seed = ToolRun(
+        operation_id=operation.id,
+        task_id="t-1",
+        tool_id="shell.exec",
+        tool_version=1,
+        trust=OutputTrust.UNTRUSTED_EXTERNAL,
+    )
+    stack[4].runs.add_run(
+        seed,
+        OperationEvent(operation_id=operation.id, event_type="tool.run.started", payload={}),
+    )
+    seed.created_at = artifact.created_at.replace(year=artifact.created_at.year + 1)
+    stack[4].runs.save_run(
+        seed,
+        seed.version,
+        OperationEvent(operation_id=operation.id, event_type="tool.run.done", payload={}),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._show_evidence_mode()
+            await pilot.pause()
+            listed = app.screen.query_one("#board-list", OptionList)
+            labels = [str(option.prompt) for option in listed.options if not option.disabled]
+            assert any("⌛" in label for label in labels)
 
     asyncio.run(exercise())

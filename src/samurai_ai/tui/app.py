@@ -1037,13 +1037,17 @@ class SamuraiApp(
 
     def _after_modal_closed(self) -> None:
         """Restore focus once the dismissed screen is really off the stack."""
-        self.call_after_refresh(self._restore_focus_if_free)
+        try:
+            self.call_after_refresh(self._restore_focus_if_free)
+        except RuntimeError:  # the loop is already closed
+            return
 
     def _restore_focus_if_free(self) -> None:
         # a dismiss that lands during shutdown has no screen left to ask about
         try:
             screen = self.screen
-        except ScreenStackError:
+        except (ScreenStackError, RuntimeError):
+            # shutdown can close the loop before the refresh lands
             return
         if isinstance(screen, ModalScreen):
             # the closing screen opened another one; its own close restores
@@ -1421,7 +1425,10 @@ class SamuraiApp(
                 ok, detail = False, str(exc)[:160]
             key = "relay.canary-ok" if ok else "relay.canary-fail"
             text = self.translator.t(key, detail=detail)
-            self.call_from_thread(self._write_dim, text)
+            try:
+                self.call_from_thread(self._write_dim, text)
+            except RuntimeError:  # the app (or the test) is already gone
+                pass
 
         threading.Thread(target=probe, daemon=True).start()
 
@@ -3299,6 +3306,8 @@ class SamuraiApp(
         return lines
 
     def _show_evidence(self) -> None:
+        """`/evidence` opens the evidence-first board; the flat list stays too."""
+        self._show_evidence_mode()
         journal = self.query_one("#journal", BlockJournal)
         for line in self._evidence_lines():
             journal.write(line)
