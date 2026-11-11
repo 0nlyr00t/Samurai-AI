@@ -1,0 +1,27 @@
+{:entries [
+  {:name "_rule_covers", :namespace "samurai_ai.domain.scope", :complexity 17, :coverage 95.2381, :crap 17.0312}
+  {:name "evaluate_network", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 15, :coverage 100.0, :crap 15.0}
+  {:name "_matches", :namespace "samurai_ai.domain.scope", :complexity 14, :coverage 100.0, :crap 14.0}
+  {:name "_parse_url_rule", :namespace "samurai_ai.domain.scope", :complexity 11, :coverage 71.4286, :crap 13.8221}
+  {:name "_parse_target", :namespace "samurai_ai.domain.scope", :complexity 13, :coverage 90.0, :crap 13.169}
+  {:name "_parse_rule", :namespace "samurai_ai.domain.scope", :complexity 8, :coverage 95.8333, :crap 8.0046}
+  {:name "covers", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 7, :coverage 88.8889, :crap 7.0672}
+  {:name "_is_infra", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 7, :coverage 90.0, :crap 7.049}
+  {:name "evaluate", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 7, :coverage 100.0, :crap 7.0}
+  {:name "_normalize_domain", :namespace "samurai_ai.domain.scope", :complexity 5, :coverage 71.4286, :crap 5.5831}
+  {:name "excluded", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 5, :coverage 85.7143, :crap 5.0729}
+  {:name "_normalize_host", :namespace "samurai_ai.domain.scope", :complexity 4, :coverage 87.5, :crap 4.0312}
+  {:name "_inside", :namespace "samurai_ai.domain.scope", :complexity 3, :coverage 75.0, :crap 3.1406}
+  {:name "_collapse_mapped", :namespace "samurai_ai.domain.scope", :complexity 3, :coverage 100.0, :crap 3.0}
+  {:name "_format_netloc", :namespace "samurai_ai.domain.scope", :complexity 3, :coverage 100.0, :crap 3.0}
+  {:name "_normalize_rules", :namespace "samurai_ai.domain.scope", :complexity 3, :coverage 100.0, :crap 3.0}
+  {:name "validate_hosts", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 3, :coverage 100.0, :crap 3.0}
+  {:name "with_infra", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 2, :coverage 75.0, :crap 2.0625}
+  {:name "_address_of", :namespace "samurai_ai.domain.scope", :complexity 2, :coverage 100.0, :crap 2.0}
+  {:name "_with_alias", :namespace "samurai_ai.domain.scope", :complexity 2, :coverage 100.0, :crap 2.0}
+  {:name "_with_loopback_alias", :namespace "samurai_ai.domain.scope", :complexity 2, :coverage 100.0, :crap 2.0}
+  {:name "_canonical_url", :namespace "samurai_ai.domain.scope", :complexity 1, :coverage 100.0, :crap 1.0}
+  {:name "resolve_host", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 1, :coverage 100.0, :crap 1.0}
+  {:name "validate_excludes", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 1, :coverage 100.0, :crap 1.0}
+  {:name "validate_includes", :namespace "samurai_ai.domain.scope.ScopeContract", :complexity 1, :coverage 100.0, :crap 1.0}
+]}
