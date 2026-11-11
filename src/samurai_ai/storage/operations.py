@@ -18,23 +18,6 @@ class OperationConflictError(RuntimeError):
     pass
 
 
-#: re-armed after a delete; the event log stays append-only
-_EVENTS_NO_UPDATE = """
-CREATE TRIGGER IF NOT EXISTS operation_events_no_update
-BEFORE UPDATE ON operation_events
-BEGIN
-    SELECT RAISE(ABORT, 'operation events are append-only');
-END
-"""
-_EVENTS_NO_DELETE = """
-CREATE TRIGGER IF NOT EXISTS operation_events_no_delete
-BEFORE DELETE ON operation_events
-BEGIN
-    SELECT RAISE(ABORT, 'operation events are append-only');
-END
-"""
-
-
 class OperationRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -198,17 +181,28 @@ class OperationRepository:
         entries scoped to the operation (no FK, and meaningless once the
         operation is gone) are removed by hand, and the row itself last, so a
         failure leaves an operation that is still readable.
+
+        The append-only tables (events, artifacts, snapshots, reports, the
+        ledgers, …) each guard themselves with a ``BEFORE DELETE`` trigger that
+        raises, so the cascade would abort on the first one. Every such guard
+        steps aside for the delete and is rebuilt from its own stored DDL inside
+        the one transaction — SQLite rolls the trigger DDL back with the rest if
+        anything fails, so a half-delete cannot leave the guards down.
         """
         with self.database.transaction() as connection:
-            # the event log refuses UPDATE and DELETE by trigger, so the cascade
-            # from `operations` would abort; the triggers step aside and come back
-            # inside the same transaction (SQLite rolls DDL back with the rest)
-            connection.execute("DROP TRIGGER IF EXISTS operation_events_no_delete")
-            connection.execute("DROP TRIGGER IF EXISTS operation_events_no_update")
+            guards = connection.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND sql LIKE '%RAISE%'"
+            ).fetchall()
+            for guard in guards:
+                connection.execute(f"DROP TRIGGER IF EXISTS {guard['name']}")
             connection.execute(
                 "DELETE FROM secret_entries WHERE operation_id = ?", (operation_id,)
             )
-            cursor = connection.execute("DELETE FROM operations WHERE id = ?", (operation_id,))
-            connection.execute(_EVENTS_NO_UPDATE)
-            connection.execute(_EVENTS_NO_DELETE)
+            cursor = connection.execute(
+                "DELETE FROM operations WHERE id = ?", (operation_id,)
+            )
+            for guard in guards:
+                if guard["sql"]:
+                    connection.execute(guard["sql"])
         return cursor.rowcount > 0
