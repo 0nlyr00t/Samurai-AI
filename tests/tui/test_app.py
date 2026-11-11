@@ -7338,15 +7338,27 @@ def test_a_round_asks_for_all_its_commands_on_one_screen(tmp_path: Path) -> None
     asyncio.run(exercise())
 
 
-def test_a_scope_refusal_offers_the_resource_and_retries(tmp_path: Path) -> None:
-    """A refusal is information: Enter turns it into a rule and runs the command."""
+def test_an_out_of_scope_target_inside_the_domain_is_added_and_retried(
+    tmp_path: Path,
+) -> None:
+    """The agent widens within the boundary instead of stopping for the operator."""
     from samurai_ai.tui.screens.scope_ask import ScopeAskScreen
 
-    stack = _minimal_stack(tmp_path)
-    stack[2].set_locale("en")
-    stack[2].set_value("tui.yolo", "1")
+    provider = _ScopeVerdictProvider("include")
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings, vault, models = stack[2], stack[5], stack[-1]
+    settings.set_locale("en")
+    settings.set_value("tui.yolo", "1")
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
     operation = stack[0].create(
-        "Ask lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+        # the target below is in the same registrable domain but on another host,
+        # so the rule does not cover it and the guard does refuse
+        "Agent lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("a.example.org",)),
     )
 
     async def exercise() -> None:
@@ -7363,22 +7375,17 @@ def test_a_scope_refusal_offers_the_resource_and_retries(tmp_path: Path) -> None
                 ),
                 exclusive=False,
             )
-            for _ in range(60):
-                await pilot.pause()
-                if isinstance(app.screen, ScopeAskScreen):
-                    break
-            # a literal that looks like a host but is not a file tripwire
-            assert isinstance(app.screen, ScopeAskScreen), app.screen
-            assert "example.org" in str(
-                app.screen.query_one("#scope-ask-rule", Static).render()
-            )
-            await pilot.press("enter")  # add + retry
             message = await worker.wait()
+            # nobody was interrupted: the analyst made the call
+            assert not isinstance(app.screen, ScopeAskScreen)
             scope = app.service.get(operation.id).scope
             assert "out.example.org" in scope.includes
             journal = app.query_one("#journal", BlockJournal).text()
             assert "[scope]" in journal  # the boundary reads as information
-            assert "error" not in message.content
+            assert "agent added out.example.org" in journal
+            # the retry really ran: the scope no longer refused it
+            assert "out of scope" not in message.content
+            assert "exit=" in message.content
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -7386,11 +7393,21 @@ def test_a_scope_refusal_offers_the_resource_and_retries(tmp_path: Path) -> None
 
 
 def test_a_scope_refusal_can_be_skipped(tmp_path: Path) -> None:
+    """An unreachable analyst leaves the call to the operator, who may skip."""
+    from samurai_ai.tui.screens.scope_ask import ScopeAskScreen
+
     stack = _minimal_stack(tmp_path)
-    stack[2].set_locale("en")
-    stack[2].set_value("tui.yolo", "1")
+    settings = stack[2]
+    settings.set_locale("en")
+    # ask mode: the operator is there. No model is registered, so the analyst
+    # cannot decide and the question falls through; the command itself is
+    # pre-approved so the scope screen is the only one that opens.
+    settings.set_value("tui.permission_mode", "ask")
+    settings.add_permission_rule("allow shell.exec: curl *")
     operation = stack[0].create(
-        "Skip lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.example.com",))
+        "Skip lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("a.example.org",)),
     )
 
     async def exercise() -> None:
@@ -7407,6 +7424,7 @@ def test_a_scope_refusal_can_be_skipped(tmp_path: Path) -> None:
                 await pilot.pause()
                 if app.screen.__class__.__name__ == "ScopeAskScreen":
                     break
+            assert isinstance(app.screen, ScopeAskScreen), app.screen
             await pilot.press("s")
             message = await worker.wait()
             assert "skipped" in message.content
