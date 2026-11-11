@@ -276,8 +276,10 @@ _LONG_COMMANDS = frozenset(
 DEFAULT_WINDOW_SECONDS = 120.0
 QUICK_WINDOW_SECONDS = 25.0
 LONG_WINDOW_SECONDS = 900.0
-#: One network probe gets a minute, not two; its own transport timeout fires first.
-TRANSPORT_WINDOW_SECONDS = 60.0
+#: A single network probe's own transport timeout (nxc/ssh get 10 s injected)
+#: fires well inside this; the window is only a backstop for a bare probe that
+#: hangs on connect, so 35 s is plenty and saves ~25 s on every dead one.
+TRANSPORT_WINDOW_SECONDS = 35.0
 _TRANSPORT_COMMANDS = frozenset({"nxc", "ssh", "sshpass", "xfreerdp", "xfreerdp3"})
 _NXC_TIMEOUT = "10"
 _SSH_TIMEOUT = "8"
@@ -376,6 +378,93 @@ def canonical_command(command: str) -> str:
         return " ".join(shlex.split(command))
     except ValueError:
         return " ".join(command.split())
+
+
+#: Builtins that ARE their segment's command but carry no attack intent: the
+#: signature records that the segment happened, not the binary name.
+_SIGNATURE_DROP = frozenset(
+    {"cd", "echo", "export", "printf", "true", "false", "test", ":", "["}
+)
+#: Splits a command line into segments on shell separators, so ``;``-joined or
+#: piped commands are each weighed on their own executable (fallback path only).
+_SEGMENT_SPLIT = re.compile(r"\s*(?:;|&&|\|\||\||&)\s*|\s+")
+#: Separator tokens the punctuation lexer emits between segments.
+_SEGMENT_BOUNDARY = frozenset({";", "&&", "||", "|", "&", "&&&", "(", ")"})
+#: An IPv4 literal, optionally after ``user@`` and with a trailing ``:port``.
+_HOST_RE = re.compile(r"(?:^|@)(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$")
+#: Credential-bearing flags whose VALUE (not spelling) decides the attempt.
+_USER_FLAGS = frozenset({"-u", "--user", "--username"})
+_PASS_FLAGS = frozenset({"-p", "--password", "-P"})
+
+
+def command_signature(command: str) -> str:
+    """The intent of a shell command, with cosmetic variation stripped.
+
+    Loop detection keyed on the exact text never fires on the real waste: the
+    model retries the same credential against the same host with a different
+    ``timeout``, an extra ``-o`` or a reordered flag, and every variant looks
+    new. The signature keeps only what makes one attempt the same as another —
+    the tool binaries, the target host, the username and whether a password is
+    offered — so ``sshpass -p x ssh -o ConnectTimeout=8 user@h`` and
+    ``timeout 30 sshpass -p x ssh user@h`` collapse to one call. Flags, ports,
+    paths and ordering drop out. Heuristic by design: it only feeds a nudge, so a
+    loose merge costs nothing and a loose split merely nudges less.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        tokens = [piece for piece in _SEGMENT_SPLIT.split(command) if piece]
+    binaries: set[str] = set()
+    hosts: set[str] = set()
+    user = ""
+    has_password = False
+    expect_exec = True  # the next non-wrapper token opens a segment
+    skip_next = False
+    for index, token in enumerate(tokens):
+        if skip_next:
+            skip_next = False
+            continue
+        if token in _SEGMENT_BOUNDARY:
+            expect_exec = True
+            continue
+        bare = token.rsplit("/", 1)[-1]
+        if token in _USER_FLAGS:
+            if index + 1 < len(tokens):
+                user = tokens[index + 1].strip("'\"").lower()
+            skip_next = True
+            continue
+        if token in _PASS_FLAGS:
+            has_password = True
+            skip_next = True
+            continue
+        for flag in _USER_FLAGS:
+            if token.startswith(f"{flag}="):
+                user = token.split("=", 1)[1].strip("'\"").lower()
+        host = _HOST_RE.search(token)
+        if host:
+            hosts.add(host.group(1))
+            continue
+        if expect_exec:
+            if token.startswith("-") or bare.replace(".", "").isdigit():
+                # a flag or a bare number (``timeout 60 nxc``): the real
+                # executable is still ahead, so keep expecting it
+                continue
+            if bare.rstrip(":") in _WRAPPERS:
+                # a pass-through wrapper (sudo/timeout/env …): weigh what it runs
+                continue
+            if bare not in _SIGNATURE_DROP and bare.replace(".", "").replace(
+                "_", ""
+            ).replace("-", "").isalnum():
+                binaries.add(bare.lower())
+            expect_exec = False
+    parts = sorted(binaries) + sorted(f"@{host}" for host in hosts)
+    if user:
+        parts.append(f"u={user}")
+    if has_password:
+        parts.append("p=*")
+    return " ".join(parts) or canonical_command(command)
 
 
 def command_window(command: str, *, relayed: bool = False) -> float:
