@@ -131,6 +131,7 @@ from samurai_ai.tui.screens import (
     TrustDirectoryScreen,
 )
 from samurai_ai.tui.screens.attach import AttachScreen
+from samurai_ai.tui.screens.scope_menu import ScopeMenuScreen
 from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
 from samurai_ai.tui.sessions import SessionController
 from samurai_ai.tui.theme import (
@@ -147,6 +148,7 @@ from samurai_ai.tui.widgets import (
     HistoryInput,
     OperationTab,
     PlusButton,
+    ScopeList,
     SideBlock,
     ViewTabs,
 )
@@ -455,6 +457,8 @@ class SamuraiApp(
         #: (operation id, literal) the operator already skipped once: do not
         #: reopen the same scope question on every identical probe
         self._scope_declined: set[tuple[str, str]] = set()
+        #: autonomous scope widenings spent this session (bounded by budget)
+        self._scope_auto_spent = 0
         self._unstructured_shells = 0
         self._structure_nudged = False
         self._drift_marks: deque[bool] = deque(maxlen=8)
@@ -476,6 +480,9 @@ class SamuraiApp(
         #: set by the host when the reviewed catalogue is available
         self.provisioner: Any = None
         self._round_approvals: dict[str, bool] = {}
+        #: tools the operator allowed for the whole session from the prompt
+        #: ("Allow for this session"); risky shapes still surface per decide()
+        self._session_allowed_tools: set[str] = set()
         self._background_results: list[Any] = []
         self._auto_title: str | None = None
         self._tab_activations_seen: int = 0
@@ -718,7 +725,7 @@ class SamuraiApp(
                 yield BlockJournal(id="view-ops")
                 yield BlockJournal(id="view-bounty")
                 yield BlockJournal(id="view-hunt")
-                yield OptionList(id="view-scope")
+                yield ScopeList(id="view-scope")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
                 yield Static(id="side-swarm")
@@ -787,7 +794,10 @@ class SamuraiApp(
         self.set_interval(HUNT_REFRESH_SECONDS, self.refresh_hunt)
         self.set_interval(1.0, self._status_tick)
         self.focus_command_input(force=True)
-        self._maybe_prompt_trust()
+        # the directory is its own gate: prompt at startup whenever cwd is not in
+        # the trust lists, independent of yolo (which only governs approvals), and
+        # flag any agent-config in the folder so trust is a seen decision.
+        self._prompt_trust_on_start()
 
     def _retitle_tabs(self) -> None:
         tabs = self.query_one("#view-tabs", Tabs)
@@ -1710,6 +1720,70 @@ class SamuraiApp(
         self._write_dim(note, process=False)
         self._refresh_chrome()
 
+    def _scope_rule_menu(self, rule: str) -> None:
+        """Right-click on a scope rule: exclude/restore, remove or edit it."""
+        if self.operation is None or not rule:
+            return
+        excluded = rule in self.operation.scope.excludes
+        self.push_screen(
+            ScopeMenuScreen(self.translator, rule, excluded=excluded),
+            lambda choice: self._on_scope_menu(choice, rule),
+        )
+
+    def _on_scope_menu(self, choice: str | None, rule: str) -> None:
+        from samurai_ai.tui.screens.scope_menu import EDIT, REMOVE, TOGGLE
+
+        if choice == TOGGLE:
+            self._toggle_scope_rule(rule)
+        elif choice == REMOVE:
+            self._remove_scope_rule(rule)
+        elif choice == EDIT:
+            self.run_worker(self._edit_scope_rule(rule), exclusive=False)
+
+    def _remove_scope_rule(self, rule: str) -> None:
+        """Drop a rule from both includes and excludes, applied at once."""
+        if self.operation is None or not rule:
+            return
+        scope = self.operation.scope
+        updated = ScopeContract(
+            includes=tuple(item for item in scope.includes if item != rule),
+            excludes=tuple(item for item in scope.excludes if item != rule),
+            hosts=scope.hosts,
+        )
+        self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._write_dim(self.translator.t("scope.rule-removed", rule=rule), process=False)
+        self._refresh_chrome()
+
+    async def _edit_scope_rule(self, rule: str) -> None:
+        """Rename a scope rule in place, keeping whichever set it was in."""
+        answer = await self.push_screen_wait(
+            ArgumentScreen(
+                self.translator, self.translator.t("scope.edit-prompt"), initial=rule
+            )
+        )
+        if self.operation is None or not answer or not answer.strip():
+            return
+        new = answer.strip()
+        if new == rule:
+            return
+        scope = self.operation.scope
+        includes = tuple(
+            dict.fromkeys(new if item == rule else item for item in scope.includes)
+        )
+        excludes = tuple(
+            dict.fromkeys(new if item == rule else item for item in scope.excludes)
+        )
+        try:
+            updated = ScopeContract(includes=includes, excludes=excludes, hosts=scope.hosts)
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            self._write_line(f"[scope] {exc}")
+            return
+        self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._write_dim(
+            self.translator.t("scope.rule-edited", old=rule, new=new), process=False
+        )
+        self._refresh_chrome()
+
     def _scope_options(self) -> list[Option]:
         """One option per active include rule: ●/○ hit status, no exclusions."""
         from samurai_ai.tui.killchain import hosts_in, scope_rows
@@ -2254,6 +2328,37 @@ class SamuraiApp(
             return False
         cwd = str(self._cwd)
         return cwd in self._session_trusted or cwd in self._stored_trusted_dirs()
+
+    #: files in cwd that can steer what the agent runs — a flag on the trust gate
+    _TRUST_WARNING_FILES = ("plugin.json", "samurai.toml", "samurai.json", ".samurai")
+
+    def _trust_warning_files(self) -> list[str]:
+        """Agent-config files present in cwd, named so the operator can look."""
+        return [name for name in self._TRUST_WARNING_FILES if (self._cwd / name).exists()]
+
+    def _prompt_trust_on_start(self) -> None:
+        """Confirm the launch directory before the first tool runs.
+
+        The lazy prompt only fires when a command first leaves cwd; a launch in
+        an untrusted directory should ask up front (as Claude Code's workspace
+        trust does), and flag any agent-config in the folder that could change
+        what runs. yolo governs approvals, not this: the directory is its own
+        gate, so the stored/session trust lists decide, not ``_directory_trusted``.
+        """
+        cwd = str(self._cwd)
+        if cwd in self._session_trusted or cwd in self._stored_trusted_dirs():
+            self._dir_trusted = True
+            return
+        warned = self._trust_warning_files()
+        warning = (
+            self.translator.t("trust.manifest-warning", files=", ".join(warned))
+            if warned
+            else None
+        )
+        self.push_screen(
+            TrustDirectoryScreen(self.translator, cwd, warning=warning),
+            self._on_trust_chosen,
+        )
 
     def _maybe_prompt_trust(self, force: bool = False) -> None:
         if not force and self._directory_trusted():
@@ -4203,6 +4308,11 @@ class SamuraiApp(
     def _refresh_operations_strip(self) -> None:
         """One row of open operations; the current one is marked."""
         strip = self.query_one("#operations-strip", Horizontal)
+        # the current operation is always a tab, so the strip shows (and its
+        # right-click menu — rename, close — is reachable) even for a single one.
+        # Nothing else appended _open_tabs, so without this the strip never drew.
+        if self.operation is not None and self.operation.id not in self._open_tabs:
+            self._open_tabs.append(self.operation.id)
         if not self._open_tabs:
             strip.display = False
             return
@@ -4459,6 +4569,10 @@ class SamuraiApp(
             (self.translator.t("side.workspace"), self.paint("dim text-faint")),
             ("\n" + self._short_cwd(), self.paint("accent")),
         )
+        if not self._directory_trusted():
+            workspace.append(
+                self.translator.t("trust.untrusted-marker"), self.paint("warning")
+            )
         self.query_one("#side-workspace", Static).update(workspace)
         self._refresh_swarm_panel()
         self._refresh_side_blocks()
