@@ -548,3 +548,76 @@ def _matches(rule: _Rule, target: _Target) -> bool:
         and target.host == rule_host
         and target.port == rule.port
     )
+
+
+def _registrable_domain(host: str) -> str:
+    """The last two labels of a domain, e.g. a.b.scaffold.htb -> scaffold.htb.
+
+    A heuristic, not a public-suffix lookup: enough to tell "same site" for the
+    scope agent's relatedness check, where a loose match only widens the pool the
+    model then judges, never grants access on its own.
+    """
+    labels = host.strip().strip(".").lower().split(".")
+    if len(labels) < 2:
+        return ""
+    return ".".join(labels[-2:])
+
+
+def _same_24(left: _IPAddress, right: _IPAddress) -> bool:
+    if type(left) is not type(right):
+        return False
+    prefix = 24 if isinstance(left, IPv4Address) else 120
+    return ip_network(f"{left}/{prefix}", strict=False) == ip_network(
+        f"{right}/{prefix}", strict=False
+    )
+
+
+def scope_relatedness(
+    scope: ScopeContract, target: str, *, finding_text: str = "", goal: str = ""
+) -> list[str]:
+    """Why a target is close to the current scope, for the scope agent.
+
+    Returns a human reason per signal, empty when the target is unrelated. This
+    is the *moderate* boundary of autonomous widening: same /24 or same
+    registrable domain as an in-scope rule, a mention in confirmed findings or
+    loot, or a home inside the operation's stated goal range. Excluded targets
+    are the caller's hard stop and are not weighed here. The list only decides
+    whether the model is consulted; it never adds scope by itself.
+    """
+    try:
+        parsed = _parse_target(target)
+    except ScopeValidationError:
+        return []
+    reasons: list[str] = []
+    address = parsed.address
+    if address is not None:
+        for rule in scope.includes:
+            try:
+                network = ip_network(rule, strict=False)
+            except ValueError:
+                rule_address = _address_of(rule)
+                if rule_address is not None and _same_24(address, rule_address):
+                    reasons.append(f"same /24 as {rule}")
+                continue
+            if address in network or _same_24(address, network.network_address):
+                reasons.append(f"same /24 as {rule}")
+    else:
+        registrable = _registrable_domain(parsed.host)
+        if registrable:
+            for rule in scope.includes:
+                bare = rule[2:] if rule.startswith("*.") else rule
+                if _address_of(bare) is None and _registrable_domain(bare) == registrable:
+                    reasons.append(f"same domain as {rule}")
+    haystack = finding_text.lower()
+    if haystack and (parsed.host in haystack or parsed.text in haystack):
+        reasons.append("named in a confirmed finding or loot")
+    if goal:
+        for token in re.split(r"[\s,;]+", goal):
+            try:
+                network = ip_network(token.strip(), strict=False)
+            except ValueError:
+                continue
+            if address is not None and address in network:
+                reasons.append(f"inside the goal range {token.strip()}")
+                break
+    return list(dict.fromkeys(reasons))
