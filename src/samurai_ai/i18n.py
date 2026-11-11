@@ -668,8 +668,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tabs.scope": "Scope",
         "scope.tab-empty": "no include rules — add one with /scope add",
         "scope.tab-excluded": "(excluded)",
-        "scope.rule-excluded": "excluded from the scope: {rule} (click again to return)",
+        "scope.rule-excluded": "excluded from the scope: {rule}; restore with /scope add",
         "scope.rule-back": "back in the scope: {rule}",
+        "scope.skipped-before": (
+            "previously skipped: {target}; not asking again — restore with /scope add"
+        ),
         "hunt.title-stats": "Search progress",
         "hunt.no-searches": "No brute-force, fuzzing or spraying tasks in this plan yet",
         "hunt.quality.refuted": "refuted by evidence",
@@ -1514,8 +1517,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tabs.scope": "Скоуп",
         "scope.tab-empty": "нет правил — добавь через /scope add",
         "scope.tab-excluded": "(исключён)",
-        "scope.rule-excluded": "исключено из скоупа: {rule} (клик вернёт)",
+        "scope.rule-excluded": "исключено из скоупа: {rule}; вернуть через /scope add",
         "scope.rule-back": "вернулось в скоуп: {rule}",
+        "scope.skipped-before": (
+            "раньше уже пропущено: {target}; не спрашиваю снова — вернуть через /scope add"
+        ),
         "hunt.title-stats": "Статистика задач",
         "hunt.no-searches": "В этом плане пока нет задач на брутфорс, фазинг или спрей",
         "hunt.quality.refuted": "опровергнута доказательствами",
