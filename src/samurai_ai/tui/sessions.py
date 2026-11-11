@@ -248,7 +248,7 @@ class SessionController:
             from samurai_ai.tui.screens import AccessPromptScreen
 
             if isinstance(self.screen, AccessPromptScreen):
-                self.screen.dismiss(False)
+                self.screen.dismiss("")  # "" denies; the prompt now returns a string
         # The task goes back to pending right away so it can be replayed; a run
         # that finishes first has already set it DONE and the reset is skipped.
         self.release_task(spawn.task_id)

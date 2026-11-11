@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import re
 import shlex
 import shutil
@@ -55,12 +56,13 @@ from samurai_ai.domain.models import ModelCapability, ProviderUnavailableError
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import (
     CommandRisk,
+    PermissionMode,
     bound_network_command,
     classify_command,
     command_window,
     decide,
 )
-from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.scope import ScopeContract, scope_relatedness
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
 from samurai_ai.i18n import Translator
@@ -159,6 +161,48 @@ def _short_tool(tool_id: str, command: str) -> str:
     return f"{name} · {head} …" if head and len(command.split()) > 1 else name
 
 
+#: The scope agent's whole instruction: one target, one JSON verdict, no prose.
+SCOPE_ANALYST_PROMPT = (
+    "You are the scope analyst of a governed security operation. Decide whether "
+    "one out-of-scope target should be added to the scope so the operation can "
+    "continue without stopping to ask the operator, who may be away.\n"
+    "Target: {target}\n"
+    "Operation goal: {goal}\n"
+    "In-scope rules: {includes}\n"
+    "Excluded rules: {excludes}\n"
+    "Why it looks related to the current scope: {reasons}\n"
+    "Include it only when it is clearly part of the same engagement as the "
+    "in-scope targets — the same host range or domain, or named by the "
+    "operation's own confirmed evidence. Never include anything the exclusions "
+    "or the goal put off-limits. When unsure, decline. Respond with exactly one "
+    'JSON object and no prose: {{"decision": "include" | "decline", "reason": '
+    '"<one short sentence>"}}'
+)
+
+
+def _parse_scope_verdict(text: str) -> tuple[bool, str]:
+    """Read the analyst's JSON verdict; decline on anything unparseable.
+
+    A loose model may wrap the object in prose or omit a field; the only safe
+    default is to decline, so a bad parse never widens the scope by accident.
+    """
+    reason = "no clear verdict"
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except (ValueError, TypeError):
+            parsed = {}
+        if isinstance(parsed, dict):
+            decision = str(parsed.get("decision", "")).strip().lower()
+            reason = str(parsed.get("reason", "") or reason)[:200]
+            if decision == "include":
+                return True, reason
+            if decision == "decline":
+                return False, reason
+    return False, reason
+
+
 class ChatController:
     """Behaviour that needs the app's widgets; mixed into ``SamuraiApp``."""
 
@@ -204,6 +248,7 @@ class ChatController:
         _running_tools: int
         _cache_share: float
         _round_approvals: dict[str, bool]
+        _session_allowed_tools: set[str]
         _background_results: list[Message]
         _process_block: list[str]
         _DIM_STYLE: str
@@ -249,6 +294,7 @@ class ChatController:
         _relay_offered: set[str]
         _scope_offered: set[str]
         _scope_declined: set[tuple[str, str]]
+        _scope_auto_spent: int
         _fresh_task_text: str | None
         _unstructured_shells: int
         _structure_nudged: bool
@@ -289,6 +335,9 @@ class ChatController:
     _MODEL_RETRY_DELAY = 3.0
     #: how long a command may hold the turn before it becomes a background run
     _FOREGROUND_WINDOW = 25.0
+    #: autonomous scope widenings allowed per operation before the agent stops
+    #: deciding on its own and leaves the rest to the operator (scope tab)
+    _SCOPE_AUTO_BUDGET = 20
     #: how many calls of one answer run at the same time
     _PARALLEL_LIMIT = 8
 
@@ -1212,7 +1261,8 @@ class ChatController:
             command,
             mode,
             risk,
-            reusable=self._reusable_approval("shell.exec"),
+            reusable=self._reusable_approval("shell.exec")
+            or "shell.exec" in self._session_allowed_tools,
         )
         if decision.is_denied:
             self._write_dim(self.translator.t("chat.tool-denied", command=command), process=False)
@@ -1229,6 +1279,10 @@ class ChatController:
                     meta=self._approval_meta("shell.exec", command, risk),
                 )
             )
+            if allowed == "session":
+                # the operator vouched for the tool, not just this call: ordinary
+                # shell commands go quiet for the session, risky shapes still ask
+                self._session_allowed_tools.add("shell.exec")
             if not allowed:
                 self._write_dim(
                     self.translator.t("chat.tool-denied", command=command), process=False
@@ -2822,11 +2876,11 @@ class ChatController:
         command: str,
         mode: Any,
     ) -> Message:
-        """The guard refused: show what it was doing, offer it, retry once.
+        """The guard refused: show what it was doing, let the agent decide, retry once.
 
-        A refusal is the boundary working, so it reads as information — and the
-        operator gets one key to authorize the resource instead of paying a
-        model round trip to retype it.
+        A refusal is the boundary working, so it reads as information. The scope
+        agent then decides without stopping the operator; only an unreachable
+        model in ask mode hands the call back as the prompt.
         """
         journal = self.query_one("#journal", BlockJournal)
         journal.write(Text(f"[scope] {exc}", style=self.paint("accent")))
@@ -2838,19 +2892,16 @@ class ChatController:
             note = self.translator.t("scope.skipped-before", target=literal)
             self._write_dim(note, process=False)
             return Message(role="user", content=f"[tool {call.name}] {note}")
-        from samurai_ai.tui.screens.scope_ask import ScopeAskScreen
-
-        allowed = await self.push_screen_wait(
-            ScopeAskScreen(self.translator, literal, getattr(exc, "detail", ""))
-        )
-        if not allowed:
+        target = literal.split("://")[-1].split("/")[0]
+        included, reason = await self._decide_scope(target, exc, mode)
+        if not included:
             self._scope_declined.add(key)
             return Message(
                 role="user",
-                content=f"[tool {call.name}] out of scope (operator skipped): {exc}",
+                content=f"[tool {call.name}] out of scope — {reason}: {exc}",
             )
         self._scope_declined.discard(key)
-        self._extend_scope([literal.split("://")[-1].split("/")[0]])
+        self._extend_scope([target])
         holder: dict[str, str] = {}
         retry = asyncio.ensure_future(
             self._execute_shell(call.name, tool_id, command, mode, holder)
@@ -2878,6 +2929,129 @@ class ChatController:
             self._write_line(f"[error] {again}")
             return Message(role="user", content=f"[tool {call.name}] error: {again}")
         return self._shell_result_message(call.name, tool_id, command, result, approval_id)
+
+    async def _decide_scope(
+        self, target: str, exc: ToolScopeError, mode: Any
+    ) -> tuple[bool, str]:
+        """Decide an out-of-scope target without stopping for the operator.
+
+        The scope agent widens autonomously within the moderate boundary (same
+        /24 or domain, named by evidence, inside the goal range) and leaves the
+        rest to the operator — who can still add anything by hand from the scope
+        tab. Excluded targets are a hard no; an unreachable model falls back to
+        the operator only when one is present (ask mode), else it declines.
+        """
+        if self.operation is None:
+            return False, "no open operation"
+        scope = self.operation.scope
+        if scope.excluded(target):
+            self._scope_event("decline", target, "excluded target")
+            return False, "excluded target"
+        reasons = scope_relatedness(
+            scope,
+            target,
+            finding_text=self._scope_finding_text(),
+            goal=self.operation.goal or "",
+        )
+        if not reasons:
+            self._scope_event("decline", target, "unrelated to the current scope")
+            self._write_dim(
+                self.translator.t("scope.auto-outside", target=target), process=False
+            )
+            return False, "unrelated to the current scope (add it by hand if needed)"
+        if self._scope_auto_spent >= self._SCOPE_AUTO_BUDGET:
+            self._scope_event("decline", target, "auto-scope budget spent")
+            return False, "auto-scope budget spent"
+        self._scope_auto_spent += 1
+        verdict, why = await self._scope_analyst(target, reasons)
+        if verdict is None:
+            if mode is PermissionMode.ASK:
+                return await self._scope_ask_operator(target, exc)
+            self._scope_event("decline", target, "scope agent unavailable")
+            return False, "scope agent unavailable"
+        self._scope_event("include" if verdict else "decline", target, why)
+        self._write_dim(
+            self.translator.t(
+                "scope.auto-included" if verdict else "scope.auto-declined",
+                target=target,
+                reason=why,
+            ),
+            process=False,
+        )
+        return verdict, why
+
+    async def _scope_analyst(
+        self, target: str, reasons: list[str]
+    ) -> tuple[bool | None, str]:
+        """One focused model call: include this target, or decline, with a reason.
+
+        ``None`` means the model could not be reached, so the caller decides how
+        to fall back; a reached-but-unparseable answer declines.
+        """
+        if self.operation is None:
+            return None, "no open operation"
+        model_id = self.models.default_model()
+        if not model_id:
+            return None, "no model configured"
+        scope = self.operation.scope
+        prompt = SCOPE_ANALYST_PROMPT.format(
+            target=target,
+            goal=(self.operation.goal or "(none)")[:400],
+            includes=", ".join(scope.includes) or "(none)",
+            excludes=", ".join(scope.excludes) or "(none)",
+            reasons="; ".join(reasons),
+        )
+        try:
+            response = await self._request_chat_completion(
+                self.operation.id,
+                model_id,
+                "low",
+                (),
+                max_tokens=200,
+                messages=(Message(role="user", content=prompt),),
+            )
+        except Exception:  # noqa: BLE001 - a failed analyst must not crash the turn
+            return None, "scope agent error"
+        if response is None:
+            return None, "scope agent unavailable"
+        return _parse_scope_verdict(response.text)
+
+    async def _scope_ask_operator(
+        self, target: str, exc: ToolScopeError
+    ) -> tuple[bool, str]:
+        """Fallback when the agent cannot decide and an operator is at the keyboard."""
+        from samurai_ai.tui.screens.scope_ask import ScopeAskScreen
+
+        allowed = await self.push_screen_wait(
+            ScopeAskScreen(self.translator, target, getattr(exc, "detail", ""))
+        )
+        if allowed:
+            self._scope_event("include", target, "operator added it")
+            return True, "operator added it"
+        self._scope_event("decline", target, "operator skipped it")
+        return False, "operator skipped it"
+
+    def _scope_finding_text(self) -> str:
+        """Title and summary of the operation's findings, for relatedness."""
+        if self.operation is None:
+            return ""
+        try:
+            findings = self.kernel.kernel.list_findings(self.operation.id)
+        except Exception:  # noqa: BLE001 - a missing table must not block a decision
+            return ""
+        return " ".join(f"{f.title} {f.summary}" for f in findings)
+
+    def _scope_event(self, decision: str, target: str, reason: str) -> None:
+        """Record every autonomous scope verdict for the audit trail."""
+        if self.operation is None:
+            return
+        self.service.repository.append_event(
+            OperationEvent(
+                operation_id=self.operation.id,
+                event_type="operation.scope.auto",
+                payload={"decision": decision, "target": target, "reason": reason},
+            )
+        )
 
     async def _execute_shell(
         self,
