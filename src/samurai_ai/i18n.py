@@ -557,15 +557,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "access.prompt-title": "Access request",
         "question.title": "The agent asks",
         "question.skipped": "question {id} skipped — answer later: `samurai agent answer {call}`",
-        "access.full-hint": "V hide the command · C copy · Enter allow · Esc deny",
-        "access.full-hint-shown": "V show the command · C copy · Enter allow · Esc deny",
+        "access.full-hint": "A allow · S session · D deny · V hide · C copy",
+        "access.full-hint-shown": "A allow · S session · D deny · V show · C copy",
         "access.path": "via {path}",
         "access.path-native": "this host",
         "access.timeout": "timeout {seconds}s",
         "access.batch-count": "{count} in one batch",
         "access.copied": "copied to the clipboard",
-        "access.batch-hint": "A approves all {count} pending calls of this risk",
-        "access.allow": "Allow",
+        "access.batch-hint": "allow covers all {count} pending calls of this risk",
+        "access.allow": "Allow once",
+        "access.allow-session": "Allow for this session",
         "access.deny": "Deny",
         "access.granted": "allowed: {action}",
         "access.denied": "denied: {action}",
@@ -772,7 +773,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "project.missing": "no such directory: {path}",
         "project.current-marker": "  (current)",
         "project.switched": "[project] now working in {path}",
-        "trust.title": "Allow Samurai AI to work in this directory?",
+        "trust.title": (
+            "Trust this directory? Samurai AI will read, edit and run commands here."
+        ),
+        "trust.consequences": (
+            "Only trust a directory you created or control. "
+            "Trusting is remembered until you revoke it with /trust."
+        ),
+        "trust.manifest-warning": (
+            "This directory carries agent config ({files}) that can shape "
+            "what runs. Review it before trusting."
+        ),
         "trust.always": "Trust always",
         "trust.session": "Trust this session only",
         "trust.deny": "Deny",
@@ -1406,15 +1417,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "access.prompt-title": "Запрос доступа",
         "question.title": "Вопрос от агента",
         "question.skipped": "вопрос {id} пропущен — ответить позже: `samurai agent answer {call}`",
-        "access.full-hint": "V свернуть команду · C копировать · Enter разрешить · Esc отказ",
-        "access.full-hint-shown": "V показать команду · C копировать · Enter разрешить · Esc отказ",
+        "access.full-hint": "A разрешить · S на сессию · D отказ · V свернуть · C копировать",
+        "access.full-hint-shown": "A разрешить · S на сессию · D отказ · V показать · C копировать",
         "access.path": "через {path}",
         "access.path-native": "этот хост",
         "access.timeout": "таймаут {seconds}с",
         "access.batch-count": "{count} в одном пакете",
         "access.copied": "скопировано в буфер",
-        "access.batch-hint": "A разрешает все {count} ожидающих вызовов этого риска",
-        "access.allow": "Разрешить",
+        "access.batch-hint": "разрешение покрывает все {count} ожидающих вызовов этого риска",
+        "access.allow": "Разрешить один раз",
+        "access.allow-session": "Разрешить на эту сессию",
         "access.deny": "Запретить",
         "access.granted": "разрешено: {action}",
         "access.denied": "запрещено: {action}",
@@ -1579,7 +1591,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "newop.name": "название операции",
         "newop.scope": "скоуп через запятую (пусто = только 127.0.0.1/32)",
         "newop.created": "новая вкладка операции: {name} ({mode})",
-        "trust.title": "Разрешить Samurai AI работать в этой директории?",
+        "trust.title": (
+            "Довериться директории? Samurai AI будет читать, изменять и выполнять команды здесь."
+        ),
+        "trust.consequences": (
+            "Доверяйте только директории, которую создали или контролируете. "
+            "Доверие сохранится, пока не отзовёте через /trust."
+        ),
+        "trust.manifest-warning": (
+            "В директории есть конфиг агента ({files}) — он влияет на то, "
+            "что запускается. Проверьте перед доверием."
+        ),
         "project.title": "Какой проект?",
         "tabmenu.rename": "Переименовать вкладку",
         "tabmenu.close": "Закрыть вкладку и удалить операцию",
