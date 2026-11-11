@@ -129,7 +129,7 @@ def test_ctf_counter_reads_flags_and_not_verified_findings() -> None:
     assert (bounty.counter_label, bounty.counter_done) == ("verified", 9)
 
 
-def test_scope_rows_mark_touched_targets_and_keep_exclusions_last() -> None:
+def test_scope_rows_mark_touched_targets_and_hide_exclusions() -> None:
     from samurai_ai.domain.scope import ScopeContract
     from samurai_ai.tui.killchain import scope_rows
 
@@ -146,8 +146,18 @@ def test_scope_rows_mark_touched_targets_and_keep_exclusions_last() -> None:
     # the alias is hit through the address it stands for, with the note
     assert by_rule["flight.htb"].hit is True
     assert by_rule["flight.htb"].note == "→ 10.0.0.7"
-    # exclusions trail the list and never count as hit
-    assert rows[-1].rule == "10.0.0.1" and rows[-1].excluded and not rows[-1].hit
+    # excluded targets disappear from TARGETS instead of looking active
+    assert "10.0.0.1" not in by_rule
+
+    # a duplicate include/exclusion pair is hidden by the exclusion too
+    duplicated = scope_rows(
+        ScopeContract(
+            includes=("scaffold.htb", "10.129.246.248"),
+            excludes=("scaffold.htb", "10.129.246.248"),
+        ),
+        {"scaffold.htb", "10.129.246.248"},
+    )
+    assert duplicated == []
 
 
 def test_scope_rows_resolve_a_touched_alias_into_its_rule() -> None:

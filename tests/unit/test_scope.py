@@ -108,7 +108,6 @@ def test_idna_rules_and_targets_are_normalized() -> None:
 @pytest.mark.parametrize(
     "rules",
     [
-        (),
         ("*.",),
         ("192.0.2.1/24",),
         ("ftp://example.com",),
@@ -233,6 +232,24 @@ def test_an_already_authorized_target_is_covered(include: str, candidate: str) -
 )
 def test_a_target_outside_the_rule_is_not_covered(include: str, candidate: str) -> None:
     assert not ScopeContract(includes=(include,)).covers(candidate)
+
+
+def test_an_excluded_target_is_not_covered() -> None:
+    scope = ScopeContract(
+        includes=("*.example.com", "10.129.246.248"),
+        excludes=("example.com", "10.129.246.248"),
+    )
+    assert not scope.covers("example.com")
+    assert not scope.covers("10.129.246.248")
+    # the wildcard still authorizes a different host under the same parent
+    assert scope.covers("www.example.com")
+
+
+def test_an_empty_include_list_is_fail_closed_not_a_validation_error() -> None:
+    scope = ScopeContract(includes=(), excludes=("example.com",))
+    assert not scope.evaluate("example.com").allowed
+    assert not scope.evaluate("other.example.org").allowed
+    assert not scope.covers("example.com")
 
 
 def test_an_alias_counts_as_covered_and_a_narrow_rule_is_no_widening() -> None:
