@@ -58,3 +58,16 @@ def test_the_window_forgets_old_sites() -> None:
     nudge, stop = window.record(site)
     # the early hit fell out of the window, so this is a fresh run of one
     assert (nudge, stop) == (False, False)
+
+
+def test_a_bare_shell_call_keys_on_its_signature() -> None:
+    # only a command, no site key: flag-tweaked retries are one site
+    a = call_site("shell.exec", {"command": "timeout 60 nxc rdp 10.0.0.5 -u x -p y"})
+    b = call_site("shell.exec", {"command": "nxc --timeout 10 rdp 10.0.0.5 -u x -p y"})
+    assert a == b
+
+
+def test_bare_shell_calls_to_different_hosts_differ() -> None:
+    a = call_site("shell.exec", {"command": "nmap -p- 10.0.0.5"})
+    b = call_site("shell.exec", {"command": "nmap -p- 10.0.0.6"})
+    assert a != b

@@ -7,6 +7,7 @@ from samurai_ai.domain.permission import (
     bound_network_command,
     classify_argv,
     classify_command,
+    command_signature,
     command_window,
     next_mode,
     parse_mode,
@@ -123,8 +124,8 @@ def test_probe_families_get_a_short_outer_window() -> None:
         "sshpass -p test ssh user@10.0.0.5 id",
         "timeout 20 xfreerdp3 /v:10.0.0.5",
     ):
-        assert command_window(command) == 60.0
-        assert command_window(command, relayed=True) == 120.0
+        assert command_window(command) == 35.0
+        assert command_window(command, relayed=True) == 70.0
 
 
 def test_nxc_and_ssh_get_transport_timeouts_without_overriding_explicit_ones() -> None:
@@ -167,3 +168,32 @@ def test_transport_bounds_do_not_touch_other_commands_or_quoted_payloads() -> No
         "echo ssh user@10.0.0.5",
     ):
         assert bound_network_command(command) == command
+
+
+def test_command_signature_folds_cosmetic_retries() -> None:
+    # same credential, same host, different timeout/flags/wrapper -> one signature
+    variants = [
+        "cd /home/user; timeout 60 nxc rdp 10.129.247.82 -u contractor -p 'Secret1!' 2>&1",
+        "timeout 25 nxc --timeout 10 --rdp-timeout 10 rdp 10.129.247.82 -u contractor -p 'Secret1!'",
+        "cd /home/user && nxc rdp 10.129.247.82 -u contractor -p Secret1!",
+    ]
+    signatures = {command_signature(command) for command in variants}
+    assert len(signatures) == 1
+    only = signatures.pop()
+    assert "nxc" in only and "10.129.247.82" in only
+    assert "u=contractor" in only and "p=*" in only
+
+
+def test_command_signature_separates_real_differences() -> None:
+    assert command_signature("nmap -p- 10.0.0.5") != command_signature(
+        "nmap -p- 10.0.0.6"
+    )
+    assert command_signature("nxc ssh 10.0.0.5 -u a -p b") != command_signature(
+        "sshpass -p b ssh a@10.0.0.5"
+    )
+
+
+def test_command_signature_ignores_path_prefix_and_builtins() -> None:
+    # cd/echo prefixes and the /home/user path must not pollute the signature
+    assert command_signature("cd /home/user; tail -120 .bash_history") == "tail"
+    assert command_signature("cd /srv && nmap 10.0.0.9") == "nmap @10.0.0.9"
