@@ -136,6 +136,93 @@ class BoardController:
             )
         )
 
+    # -- evidence-first mode ----------------------------------------------
+    _STATUS_MARKS = {
+        "candidate": "?",
+        "validating": "…",
+        "validated": "✓",
+        "false-positive": "✗",
+        "duplicate": "⧉",
+        "reported": "⇧",
+        "fixed": "✔",
+    }
+
+    def _evidence_rows(self, show_all: bool) -> list[Row]:
+        """Findings grouped by what proves them, candidates visibly apart.
+
+        A candidate must not read like a validated one, so the status is a
+        marker plus a word, and anything whose evidence predates a newer test
+        carries a staleness mark instead of a silent pass.
+        """
+        findings = self._findings()
+        if not findings:
+            return []
+        rows: list[Row] = []
+        order = ("candidate", "validating", "validated", "reported", "false-positive",
+                 "duplicate", "fixed")
+        for status in order:
+            group = [item for item in findings if item.status.value == status]
+            if not group:
+                continue
+            rows.append(("group", status, ""))
+            for finding in group:
+                mark = self._STATUS_MARKS.get(status, "?")
+                stale = " ⌛" if self._evidence_stale(finding.id) else ""
+                label = (
+                    f"{mark} [{self.translator.t('ev.status.' + status)}] "
+                    f"{finding.severity.value} · {finding.title}"
+                    f" · evidence {len(finding.evidence_ids)}{stale}"
+                )
+                rows.append(("item", finding.id, label))
+        return rows
+
+    def _evidence_stale(self, finding_id: str) -> bool:
+        """True when a test ran after the newest artifact: the proof is outdated."""
+        finding = self.kernel.kernel.get_finding(finding_id)
+        if finding is None or not finding.evidence_ids:
+            return False
+        newest = max(
+            (
+                artifact.created_at
+                for artifact in (
+                    self.kernel.kernel.get_artifact(artifact_id)
+                    for artifact_id in finding.evidence_ids
+                )
+                if artifact is not None
+            ),
+            default=None,
+        )
+        if newest is None:
+            return False
+        return any(
+            run.created_at > newest
+            for run in self.execution.list_runs(
+                self.operation.id if self.operation is not None else ""
+            )
+            if run.task_id is not None
+        )
+
+    def _show_evidence_mode(self) -> None:
+        if not self._require_operation():
+            return
+        from samurai_ai.tui.screens import BoardScreen
+
+        self.push_screen(
+            BoardScreen(
+                self.translator,
+                self.translator.t("board.evidence-title"),
+                self.translator.t("board.hint", actions="Enter " + self.translator.t("cov.open")),
+                self._evidence_rows,
+                {"v": self._finding_validate, "x": self._finding_false_positive},
+                {
+                    "v": self.translator.t("board.action.v"),
+                    "x": self.translator.t("board.action.x"),
+                },
+                self._show_finding_detail,
+                self.translator.t("ev.empty"),
+            )
+        )
+
     # -- coverage board ---------------------------------------------------
     def _coverage_rows(self, show_all: bool) -> list[Row]:
         """Mirror of the HUD line, with one reason per untested row."""
