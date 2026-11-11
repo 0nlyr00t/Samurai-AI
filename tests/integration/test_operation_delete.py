@@ -63,3 +63,38 @@ def test_deleting_a_missing_operation_says_so(tmp_path) -> None:  # type: ignore
     service, _database = make_service(tmp_path)
     with pytest.raises(OperationNotFoundError):
         service.delete("op_nope")
+
+
+def test_delete_steps_around_every_immutable_guard(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """An operation with artifacts (immutable, like events) still deletes."""
+    service, database = make_service(tmp_path)
+    operation = service.create(
+        "Has artifacts", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            "INSERT INTO artifacts(id, operation_id, kind, sha256, size_bytes, "
+            "path, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "art_test01",
+                operation.id,
+                "stdout",
+                "0" * 64,
+                3,
+                "/tmp/x",
+                "{}",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+    assert _count(database, "artifacts", operation.id) == 1
+
+    service.delete(operation.id)
+
+    assert service.repository.get(operation.id) is None
+    assert _count(database, "artifacts", operation.id) == 0
+    # the immutability guard is back in place after the delete
+    with database.connect() as connection:
+        guard = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='artifacts_no_delete'"
+        ).fetchone()
+    assert guard is not None

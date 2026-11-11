@@ -1,33 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
+
 from samurai_ai.domain.operations import Operation, OperationEvent
 from samurai_ai.storage.database import Database
+
+_log = logging.getLogger(__name__)
 
 
 class OperationConflictError(RuntimeError):
     pass
-
-
-#: re-armed after a delete; the event log stays append-only
-_EVENTS_NO_UPDATE = """
-CREATE TRIGGER IF NOT EXISTS operation_events_no_update
-BEFORE UPDATE ON operation_events
-BEGIN
-    SELECT RAISE(ABORT, 'operation events are append-only');
-END
-"""
-_EVENTS_NO_DELETE = """
-CREATE TRIGGER IF NOT EXISTS operation_events_no_delete
-BEFORE DELETE ON operation_events
-BEGIN
-    SELECT RAISE(ABORT, 'operation events are append-only');
-END
-"""
 
 
 class OperationRepository:
@@ -68,19 +56,40 @@ class OperationRepository:
 
     def latest(self) -> Operation | None:
         with self.database.connect() as connection:
-            row = connection.execute(
-                "SELECT data FROM operations ORDER BY created_at DESC, id DESC LIMIT 1"
-            ).fetchone()
-        if row is None:
-            return None
-        return Operation.model_validate_json(row["data"])
+            rows = connection.execute(
+                "SELECT id, data FROM operations ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+        # a single unreadable row must not brick startup: the welcome screen and
+        # the operations strip both call this on mount, so skip past a corrupt
+        # record to the newest one that still parses
+        for row in rows:
+            operation = self._parse_row(row)
+            if operation is not None:
+                return operation
+        return None
 
     def list_all(self) -> list[Operation]:
         with self.database.connect() as connection:
             rows = connection.execute(
-                "SELECT data FROM operations ORDER BY created_at, id"
+                "SELECT id, data FROM operations ORDER BY created_at, id"
             ).fetchall()
-        return [Operation.model_validate_json(row["data"]) for row in rows]
+        parsed = [self._parse_row(row) for row in rows]
+        return [operation for operation in parsed if operation is not None]
+
+    @staticmethod
+    def _parse_row(row: sqlite3.Row) -> Operation | None:
+        """Validate a stored operation, tolerating a corrupt ``data`` blob.
+
+        A row whose JSON no longer matches the schema (a half-written record, a
+        value clobbered by an older build or outside tampering) is logged and
+        skipped rather than raised, so one bad operation cannot take the whole
+        app down on load.
+        """
+        try:
+            return Operation.model_validate_json(row["data"])
+        except ValidationError as error:
+            _log.warning("skipping unreadable operation %s: %s", row["id"], error)
+            return None
 
     def update(self, operation: Operation, expected_version: int, event: OperationEvent) -> None:
         with self.database.transaction() as connection:
@@ -172,17 +181,28 @@ class OperationRepository:
         entries scoped to the operation (no FK, and meaningless once the
         operation is gone) are removed by hand, and the row itself last, so a
         failure leaves an operation that is still readable.
+
+        The append-only tables (events, artifacts, snapshots, reports, the
+        ledgers, …) each guard themselves with a ``BEFORE DELETE`` trigger that
+        raises, so the cascade would abort on the first one. Every such guard
+        steps aside for the delete and is rebuilt from its own stored DDL inside
+        the one transaction — SQLite rolls the trigger DDL back with the rest if
+        anything fails, so a half-delete cannot leave the guards down.
         """
         with self.database.transaction() as connection:
-            # the event log refuses UPDATE and DELETE by trigger, so the cascade
-            # from `operations` would abort; the triggers step aside and come back
-            # inside the same transaction (SQLite rolls DDL back with the rest)
-            connection.execute("DROP TRIGGER IF EXISTS operation_events_no_delete")
-            connection.execute("DROP TRIGGER IF EXISTS operation_events_no_update")
+            guards = connection.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND sql LIKE '%RAISE%'"
+            ).fetchall()
+            for guard in guards:
+                connection.execute(f"DROP TRIGGER IF EXISTS {guard['name']}")
             connection.execute(
                 "DELETE FROM secret_entries WHERE operation_id = ?", (operation_id,)
             )
-            cursor = connection.execute("DELETE FROM operations WHERE id = ?", (operation_id,))
-            connection.execute(_EVENTS_NO_UPDATE)
-            connection.execute(_EVENTS_NO_DELETE)
+            cursor = connection.execute(
+                "DELETE FROM operations WHERE id = ?", (operation_id,)
+            )
+            for guard in guards:
+                if guard["sql"]:
+                    connection.execute(guard["sql"])
         return cursor.rowcount > 0
