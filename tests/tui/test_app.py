@@ -7375,12 +7375,69 @@ def test_a_scope_refusal_can_be_skipped(tmp_path: Path) -> None:
             message = await worker.wait()
             assert "skipped" in message.content
             assert "out.example.org" not in app.service.get(operation.id).scope.includes
+            # the same literal does not open the prompt again after a skip
+            second = app.run_worker(
+                app._run_shell_tool(
+                    ToolCall(
+                        id="c2",
+                        name="shell_exec",
+                        arguments={"command": "curl https://out.example.org/"},
+                    )
+                ),
+                exclusive=False,
+            )
+            for _ in range(60):
+                await pilot.pause()
+                if app.screen.__class__.__name__ == "ScopeAskScreen":
+                    break
+            assert app.screen.__class__.__name__ != "ScopeAskScreen"
+            second_message = await second.wait()
+            assert "previously skipped" in second_message.content
 
     asyncio.run(exercise())
 
 
-def test_the_scope_tab_excludes_and_restores_by_click(tmp_path: Path) -> None:
-    """Click on the Scope tab moves a rule out of play, a second click brings it back."""
+def test_add_scope_does_not_readd_an_excluded_target(tmp_path: Path) -> None:
+    """The agent cannot undo an operator's exclusion with add_scope."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Excluded lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(
+            includes=("scaffold.htb", "10.129.246.248"),
+            excludes=("scaffold.htb", "10.129.246.248"),
+        ),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.service.replace_scope(
+                operation.id,
+                ScopeContract(
+                    includes=(), excludes=("scaffold.htb", "10.129.246.248")
+                ),
+            )
+            result = await app._run_request_scope_tool(
+                ToolCall(
+                    id="scope-1",
+                    name="add_scope",
+                    arguments={"targets": ["scaffold.htb", "10.129.246.248"]},
+                )
+            )
+            assert "excluded" in result.content
+            scope = app.service.get(operation.id).scope
+            assert scope.excludes == ("scaffold.htb", "10.129.246.248")
+            assert "scaffold.htb" not in scope.includes
+            assert "10.129.246.248" not in scope.includes
+
+    asyncio.run(exercise())
+
+
+def test_the_scope_tab_excludes_and_hides_the_rule(tmp_path: Path) -> None:
+    """Click removes a rule from includes; excluded rows no longer look active."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     operation = stack[0].create(
@@ -7404,15 +7461,15 @@ def test_the_scope_tab_excludes_and_restores_by_click(tmp_path: Path) -> None:
             await pilot.pause()
             scope = app.service.get(operation.id).scope
             assert "10.0.0.0/24" in scope.excludes
+            assert "10.0.0.0/24" not in scope.includes
             listed = app.query_one("#view-scope", OptionList)
             labels = [str(option.prompt) for option in listed.options]
-            assert any(label.startswith("+") for label in labels)  # marked excluded
-            listed.highlighted = next(
-                i for i, label in enumerate(labels) if "10.0.0.0/24" in label
-            )
-            await pilot.press("enter")
-            await pilot.pause()
-            assert "10.0.0.0/24" not in app.service.get(operation.id).scope.excludes
+            assert not any("10.0.0.0/24" in label for label in labels)
+            # the explicit restore path puts the include back and clears the exclusion
+            app._toggle_scope_rule("10.0.0.0/24")
+            restored = app.service.get(operation.id).scope
+            assert "10.0.0.0/24" not in restored.excludes
+            assert "10.0.0.0/24" in restored.includes
 
     asyncio.run(exercise())
 
@@ -9814,5 +9871,33 @@ def test_a_timed_out_command_is_not_run_again(tmp_path: Path, monkeypatch) -> No
             assert "already timed out" in journal
             assert calls == []
             assert len(stack[4].list_runs(operation.id)) == 1
+
+    asyncio.run(exercise())
+
+
+def test_loot_access_rows_do_not_need_a_scope_hit_field(tmp_path: Path) -> None:
+    """A confirmed access fact must not crash the side panel refresh."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Access row lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.129.247.82",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            origin = app.graph.origin(operation.id, "t-1", "root")
+            intent = app.graph.open_intent(operation.id, "t-1", "get a shell", origin.id)
+            app.graph.start_intent(intent.id)
+            fact = app.graph.record_fact(intent.id, "user shell on 10.129.247.82")
+            # this exact path used to raise AttributeError: AccessRow.hit
+            app._refresh_side_blocks()
+            entries = app._loot_entries(app._access_rows())
+            assert any(
+                entry.kind == "access" and entry.source_id == f"fact:{fact.id}"
+                for entry in entries
+            )
+            await pilot.pause()
 
     asyncio.run(exercise())

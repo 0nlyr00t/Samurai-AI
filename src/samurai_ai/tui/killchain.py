@@ -393,11 +393,16 @@ def scope_rows(scope: ScopeContract, touched: Iterable[str]) -> list[ScopeRow]:
         if decision.allowed and decision.matched_rule:
             matched.add(decision.matched_rule)
     rows: list[ScopeRow] = []
+    excluded_rules = set(scope.excludes)
     for rule in scope.includes:
+        if rule in excluded_rules:
+            continue
         rows.append(ScopeRow(rule=rule, excluded=False, hit=rule in matched))
     for name, target in scope.hosts.items():
+        if name in excluded_rules:
+            continue
         hit = name.lower() in hosts or target.lower() in hosts
         rows.append(ScopeRow(rule=name, excluded=False, hit=hit, note=f"→ {target}"))
-    for rule in scope.excludes:
-        rows.append(ScopeRow(rule=rule, excluded=True, hit=False))
+    # an excluded target is not an active target: it disappears from TARGETS
+    # and the Scope tab rather than being shown with a misleading hit marker
     return rows

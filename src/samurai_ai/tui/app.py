@@ -110,6 +110,7 @@ from samurai_ai.tui.journal import (  # noqa: F401
     entity_span,
 )
 from samurai_ai.tui.keymap import KeyMapController
+from samurai_ai.tui.killchain import AccessRow, LootEntry
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import (
@@ -451,6 +452,9 @@ class SamuraiApp(
         self._relay_warned = False
         self._relay_offered: set[str] = set()
         self._scope_offered: set[str] = set()
+        #: (operation id, literal) the operator already skipped once: do not
+        #: reopen the same scope question on every identical probe
+        self._scope_declined: set[tuple[str, str]] = set()
         self._unstructured_shells = 0
         self._structure_nudged = False
         self._drift_marks: deque[bool] = deque(maxlen=8)
@@ -1679,24 +1683,26 @@ class SamuraiApp(
     def _toggle_scope_rule(self, rule: str) -> None:
         """Click on the Scope tab: exclude the rule, or let it back in.
 
-        The contract keeps its includes and grows an exclusion, so the rule
-        stays visible (marked «+») and a second click restores it — nothing is
-        lost by an accidental click.
+        Excluding removes the include and hides the row from TARGETS; restoring
+        is an explicit `/scope add`, not an accidental second click.
         """
         if not rule or self.operation is None:
             return
         scope = self.operation.scope
         if rule in scope.excludes:
             updated = ScopeContract(
-                includes=scope.includes,
+                includes=(
+                    *scope.includes,
+                    *([] if rule in scope.includes else [rule]),
+                ),
                 excludes=tuple(item for item in scope.excludes if item != rule),
                 hosts=scope.hosts,
             )
             note = self.translator.t("scope.rule-back", rule=rule)
         else:
             updated = ScopeContract(
-                includes=scope.includes,
-                excludes=(*scope.excludes, rule),
+                includes=tuple(item for item in scope.includes if item != rule),
+                excludes=tuple(dict.fromkeys((*scope.excludes, rule))),
                 hosts=scope.hosts,
             )
             note = self.translator.t("scope.rule-excluded", rule=rule)
@@ -1705,7 +1711,7 @@ class SamuraiApp(
         self._refresh_chrome()
 
     def _scope_options(self) -> list[Option]:
-        """One option per include rule: ●/○ hit status, «+» for excluded rules."""
+        """One option per active include rule: ●/○ hit status, no exclusions."""
         from samurai_ai.tui.killchain import hosts_in, scope_rows
 
         if self.operation is None:
@@ -3167,12 +3173,15 @@ class SamuraiApp(
         for rule in add or []:
             if rule not in includes:
                 includes.append(rule)
+        # an explicit operator `/scope add` restores an excluded target; the
+        # model-facing add_scope deliberately does not take this path
+        excludes = tuple(rule for rule in scope.excludes if rule not in (add or []))
         for rule in remove or []:
             if rule in includes:
                 includes.remove(rule)
         try:
             updated = ScopeContract(
-                includes=tuple(includes), excludes=scope.excludes, hosts=scope.hosts
+                includes=tuple(includes), excludes=excludes, hosts=scope.hosts
             )
         except Exception as exc:  # noqa: BLE001 - a bad rule is reported, not crashed
             self._write_line(f"[scope] {exc}")
@@ -3989,14 +3998,13 @@ class SamuraiApp(
         ]
         return access_rows(facts, self.operation.scope)
 
-    def _loot_entries(self, access: list[Any]) -> list[Any]:
+    def _loot_entries(self, access: list[AccessRow]) -> list[LootEntry]:
         """LOOT as domain rows: flags, non-service secrets and reached hosts.
 
         Each row carries the id of what proves it, so a click reaches the
         source instead of a copy of the shown string; secrets are listed by
         name and their value stays masked until copied.
         """
-        from samurai_ai.tui.killchain import LootEntry
 
         if self.operation is None:
             return []
@@ -4028,8 +4036,8 @@ class SamuraiApp(
                 )
             )
         for row in access:
-            if not row.hit:
-                continue
+            # _access_rows already contains only confirmed facts; ScopeRow.hit
+            # belongs to the scope board and does not exist on AccessRow
             entries.append(
                 LootEntry(
                     kind="access",
@@ -4318,8 +4326,12 @@ class SamuraiApp(
             if run.exit_code == 0
         )
         rules = scope_rows(self.operation.scope, touched)
-        targets = [row.rule for row in rules if not row.excluded and not row.note]
-        excluded = [row.rule for row in rules if row.excluded]
+        targets = [
+            *[row.rule for row in rules if not row.excluded and not row.note],
+            *self.operation.scope.excludes,
+        ]
+        # TARGETS hides exclusions; coverage still names them as the skip reason
+        excluded = list(self.operation.scope.excludes)
         rows = [
             *surface_rows(targets, touched, excluded),
             *check_rows(self._killchain_tasks()),

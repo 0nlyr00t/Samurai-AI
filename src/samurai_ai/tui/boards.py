@@ -237,8 +237,12 @@ class BoardController:
             if run.exit_code == 0
         )
         rules = scope_rows(self.operation.scope, touched)
-        targets = [row.rule for row in rules if not row.excluded and not row.note]
-        excluded = [row.rule for row in rules if row.excluded]
+        targets = [
+            *[row.rule for row in rules if not row.excluded and not row.note],
+            *self.operation.scope.excludes,
+        ]
+        # coverage keeps its own reason list even though TARGETS hides exclusions
+        excluded = list(self.operation.scope.excludes)
         rows: list[Row] = []
         for group_key, group in (
             ("board.group.surface", surface_rows(targets, touched, excluded)),
