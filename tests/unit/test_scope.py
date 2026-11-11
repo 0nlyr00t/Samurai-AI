@@ -281,3 +281,25 @@ def test_infra_hosts_pass_without_widening_the_contract() -> None:
     assert not contract.evaluate("evil.example.org").allowed
     # the includes are untouched — the board shows targets only
     assert contract.includes == ("10.10.0.0/24",)
+
+
+def test_scope_relatedness_signals_the_moderate_boundary() -> None:
+    from samurai_ai.domain.scope import scope_relatedness
+
+    scope = ScopeContract(includes=("10.129.247.82", "scaffold.htb", "*.corp.htb"))
+    # same /24 as an in-scope IP
+    assert scope_relatedness(scope, "10.129.247.90") == ["same /24 as 10.129.247.82"]
+    # same registrable domain, including through a wildcard rule
+    assert scope_relatedness(scope, "dev.scaffold.htb") == ["same domain as scaffold.htb"]
+    assert scope_relatedness(scope, "api.corp.htb") == ["same domain as *.corp.htb"]
+    # named by confirmed evidence
+    assert scope_relatedness(
+        scope, "10.50.0.9", finding_text="creds reused on 10.50.0.9"
+    ) == ["named in a confirmed finding or loot"]
+    # inside the operation goal range
+    assert scope_relatedness(scope, "10.10.11.5", goal="own the 10.10.11.0/24 lab") == [
+        "inside the goal range 10.10.11.0/24"
+    ]
+    # an unrelated target has no signal
+    assert scope_relatedness(scope, "example.com") == []
+    assert scope_relatedness(scope, "203.0.113.4") == []

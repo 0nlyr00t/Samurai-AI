@@ -30,21 +30,36 @@ class TrustDirectoryScreen(ModalScreen[str | None]):
         color: $warning;
         padding-bottom: 1;
     }
+    #trust-consequences {
+        color: $text-dim;
+        padding-bottom: 1;
+    }
+    #trust-warning {
+        color: $warning;
+        text-style: bold;
+        padding-bottom: 1;
+    }
     #trust-options {
         height: auto;
         background: $panel;
     }
     """
 
-    def __init__(self, translator: Translator, path: str) -> None:
+    def __init__(
+        self, translator: Translator, path: str, *, warning: str | None = None
+    ) -> None:
         super().__init__()
         self.translator = translator
         self.path = path
+        self.warning = warning
 
     def compose(self) -> ComposeResult:
         with Vertical(id="trust-dialog"):
             yield Static(self.translator.t("trust.title"), id="trust-title")
             yield Static(self.path, id="trust-path")
+            yield Static(self.translator.t("trust.consequences"), id="trust-consequences")
+            if self.warning:
+                yield Static(f"⚠ {self.warning}", id="trust-warning")
             yield OptionList(
                 Option(self.translator.t("trust.always"), id="t-always"),
                 Option(self.translator.t("trust.session"), id="t-session"),

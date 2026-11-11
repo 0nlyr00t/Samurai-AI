@@ -7,7 +7,7 @@ from textual.binding import Binding
 from textual.events import Mount
 from textual.selection import Selection
 from textual.strip import Strip
-from textual.widgets import Input, RichLog, Static, Tabs
+from textual.widgets import Input, OptionList, RichLog, Static, Tabs
 
 
 class SelectableRichLog(RichLog, can_focus=False):
@@ -142,6 +142,30 @@ class OperationTab(Static):
         opener = getattr(self.app, "_open_operation", None)
         if opener is not None:
             opener(self.operation_id)
+
+
+class ScopeList(OptionList):
+    """The scope tab's rule list.
+
+    A left-click keeps the old behaviour (toggle the rule's exclusion through
+    the list's own selection). A right-click opens an edit menu for the rule the
+    cursor is on — exclude/restore, remove or rename — applied to the operation
+    at once, so the operator can shape the scope by hand even while the agent
+    widens it on its own.
+    """
+
+    def on_click(self, event: events.Click) -> None:
+        if getattr(event, "button", 1) != 3:
+            return  # left-click falls through to normal selection
+        event.stop()
+        index = self.highlighted
+        if index is None:
+            return
+        option = self.get_option_at_index(index)
+        rule = str(getattr(option, "id", "") or "")
+        menu = getattr(self.app, "_scope_rule_menu", None)
+        if rule and menu is not None:
+            menu(rule)
 
 
 class PlusButton(Static):

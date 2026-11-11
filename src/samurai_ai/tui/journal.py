@@ -18,6 +18,9 @@ from rich.text import Text
 from textual import events
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.content import Content
+from textual.geometry import Offset
+from textual.selection import Selection
 from textual.widgets import Markdown, Static
 
 if TYPE_CHECKING:
@@ -25,6 +28,41 @@ if TYPE_CHECKING:
 
 #: body lines shown when a tool block is opened; the middle is cut
 _TOOL_BODY_LIMIT = 60
+
+
+def _selection_text(visual: Any, selection: Selection) -> tuple[str, str] | None:
+    """Extract a selection from rendered text, surviving an offset past the end.
+
+    Textual records a drag on the widget under the pointer and asks that widget
+    for its own text, so a pointer that lands on a block's trailing blank row
+    points a line beyond it — and `Selection.extract` indexes the start line
+    blindly. Clamping the start to the last line keeps the copy alive, and copies
+    that line rather than nothing.
+    """
+    if isinstance(visual, (Text, Content)):
+        text = str(visual)
+    elif isinstance(visual, str):
+        text = visual
+    else:
+        return None
+    start = selection.start
+    if start is not None:
+        last = max(len(text.splitlines()) - 1, 0)
+        if start.y > last:
+            selection = Selection(start=Offset(0, last), end=selection.end)
+    return selection.extract(text), "\n"
+
+
+class SelectableBlock(Static):
+    """A journal block: selectable text that survives a stale offset.
+
+    A drag that starts on the blank row under a short block, or a layout shift
+    that moves the transcript, points past what the block renders; see
+    `_selection_text` for why that used to raise out of ``Ctrl+C``.
+    """
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        return _selection_text(self._render(), selection)
 
 
 def entity_span(label: str, kind: str, ref: str, *, base_style: str = "") -> Text:
@@ -40,7 +78,7 @@ def entity_span(label: str, kind: str, ref: str, *, base_style: str = "") -> Tex
     )
 
 
-class UserBlock(Static):
+class UserBlock(SelectableBlock):
     """The operator's message: padded, on the panel background, selectable."""
 
     DEFAULT_CSS = """
@@ -53,7 +91,7 @@ class UserBlock(Static):
     """
 
 
-class StreamBlock(Static):
+class StreamBlock(SelectableBlock):
     """Consecutive plain writes merged into one selectable block.
 
     Mounting a widget per line would bury the compositor under thousands of
@@ -75,7 +113,7 @@ class StreamBlock(Static):
         self.update(Text("\n").join(self._parts))
 
 
-class ToolHeader(Static, can_focus=True):
+class ToolHeader(SelectableBlock, can_focus=True):
     """The one-line summary of a tool run; click or Enter toggles the body."""
 
     BINDINGS = [Binding("enter", "toggle_body", show=False)]
@@ -162,7 +200,7 @@ class ToolBlock(Vertical):
 
     def compose(self) -> ComposeResult:
         yield ToolHeader(self._render_title())
-        yield Static(self._render_body(), classes="tool-body")
+        yield SelectableBlock(self._render_body(), classes="tool-body")
 
     def set_title(self, title: Text) -> None:
         """Replace the header line (the thinking counter moves)."""
@@ -229,7 +267,7 @@ class ToolBlock(Vertical):
         return text
 
 
-class InspectSummaryBlock(Static, can_focus=True):
+class InspectSummaryBlock(SelectableBlock, can_focus=True):
     """Inline drill-down summary; Enter opens the full-screen inspector.
 
     First click on an entity link lands here — a few lines in the flow of the
@@ -290,7 +328,7 @@ class BlockJournal(VerticalScroll, can_focus=False):
         elif isinstance(renderable, RichMarkdown):
             self._mount(Markdown(renderable.markup))
         else:
-            self._mount(Static(renderable))
+            self._mount(SelectableBlock(renderable))
 
     def clear(self) -> None:
         self.tool_blocks.clear()
@@ -318,12 +356,9 @@ class BlockJournal(VerticalScroll, can_focus=False):
                 parts.append(str(visual))
         return "\n".join(parts)
 
-    def get_selection(self, selection: Any) -> tuple[str, str] | None:
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
         """A container selects across its blocks, not its own (empty) render."""
-        text = self.text()
-        if not text:
-            return None
-        return selection.extract(text), "\n"
+        return _selection_text(self.text(), selection)
 
     # -- block API ------------------------------------------------------
 
