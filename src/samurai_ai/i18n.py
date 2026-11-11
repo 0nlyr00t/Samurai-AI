@@ -419,6 +419,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "language, keep replies concise, format code as Markdown. "
             "{autonomy}"
         ),
+        "chat.timeout-repeat": (
+            "probe already timed out (run={run}); not repeating it — "
+            "change the hypothesis or parameters"
+        ),
         "chat.tool-denied": "denied by operator: {command}",
         "chat.doctrine": (
             "Work the target like an operator, not a crawler: when a "
@@ -1261,6 +1265,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "инструмента. Отвечай на языке оператора, кратко, код "
             "оформляй в Markdown. "
             "{autonomy}"
+        ),
+        "chat.timeout-repeat": (
+            "probe уже упал по таймауту (run={run}); повтор не запускаю — "
+            "измени гипотезу или параметры"
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
         "chat.doctrine": (

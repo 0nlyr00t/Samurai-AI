@@ -9726,3 +9726,93 @@ def test_evidence_older_than_a_later_test_is_marked_stale(tmp_path: Path) -> Non
             assert any("⌛" in label for label in labels)
 
     asyncio.run(exercise())
+
+
+def test_a_timed_out_command_is_not_run_again(tmp_path: Path, monkeypatch) -> None:
+    """The model gets a refusal instead of another two-minute timeout."""
+    from samurai_ai.domain.execution import ToolRun, ToolRunStatus
+
+    class _RepeatProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            from samurai_ai.agents.provider import ChatResponse, Usage
+
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    text="retrying the same probe",
+                    tool_calls=(
+                        ToolCall(
+                            id="repeat-1",
+                            name="shell_exec",
+                            arguments={"command": "nxc rdp 10.129.247.82 -u test -p test"},
+                        ),
+                    ),
+                    usage=Usage(prompt_tokens=3, completion_tokens=2),
+                    model_id=request.model_id,
+                    provider_id="gpt",
+                    latency_ms=1,
+                )
+            return ChatResponse(
+                text="done",
+                usage=Usage(prompt_tokens=3, completion_tokens=1),
+                model_id=request.model_id,
+                provider_id="gpt",
+                latency_ms=1,
+            )
+
+    provider = _RepeatProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/test-model")
+    stack[2].set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Repeat lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.129.247.82",))
+    )
+    old_command = "nxc --timeout 10 --rdp-timeout 10 rdp 10.129.247.82 -u test -p test"
+    old = ToolRun(
+        operation_id=operation.id,
+        tool_id="shell.exec",
+        tool_version=1,
+        parameters={"command": old_command},
+        status=ToolRunStatus.TIMEOUT,
+    )
+    stack[4].runs.add_run(
+        old,
+        OperationEvent(operation_id=operation.id, event_type="tool.run.timeout", payload={}),
+    )
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def forbidden(operation_id: str, tool_id: str, params: dict[str, object]) -> None:
+        calls.append((operation_id, tool_id, params))
+        raise AssertionError("a timed-out command was executed again")
+
+    monkeypatch.setattr(stack[4], "run_tool", forbidden)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "try the probe again"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = "\n".join(
+                line.text for line in app.query_one("#journal", BlockJournal).lines
+            )
+            assert "already timed out" in journal
+            assert calls == []
+            assert len(stack[4].list_runs(operation.id)) == 1
+
+    asyncio.run(exercise())

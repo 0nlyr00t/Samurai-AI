@@ -4,6 +4,7 @@ from samurai_ai.domain.permission import (
     QUICK_WINDOW_SECONDS,
     CommandRisk,
     PermissionMode,
+    bound_network_command,
     classify_argv,
     classify_command,
     command_window,
@@ -114,3 +115,55 @@ def test_the_command_family_sets_the_window() -> None:
     assert command_window("id; uname -a") == DEFAULT_WINDOW_SECONDS
     # the far side of a VPN answers on its own schedule
     assert command_window("nmap -p- 10.0.0.5", relayed=True) == LONG_WINDOW_SECONDS * 2
+
+
+def test_probe_families_get_a_short_outer_window() -> None:
+    for command in (
+        "nxc rdp 10.0.0.5 -u test -p test",
+        "sshpass -p test ssh user@10.0.0.5 id",
+        "timeout 20 xfreerdp3 /v:10.0.0.5",
+    ):
+        assert command_window(command) == 60.0
+        assert command_window(command, relayed=True) == 120.0
+
+
+def test_nxc_and_ssh_get_transport_timeouts_without_overriding_explicit_ones() -> None:
+    nxc = bound_network_command("nxc rdp 10.0.0.5 -u test -p test 2>&1 | tail -20")
+    assert "--timeout 10" in nxc
+    assert "--rdp-timeout 10" in nxc
+    assert nxc.endswith("2>&1 | tail -20")
+
+    already = bound_network_command("nxc rdp 10.0.0.5 --timeout 30 --rdp-timeout 40")
+    assert already.split().count("--timeout") == 1
+    assert "--rdp-timeout 40" in already
+
+    ssh = bound_network_command("sshpass -p test ssh user@10.0.0.5 id")
+    assert "-o ConnectTimeout=8" in ssh
+    assert "-o ConnectionAttempts=1" in ssh
+
+    explicit = bound_network_command("ssh -o ConnectTimeout=20 user@10.0.0.5 id")
+    assert "ConnectTimeout=20" in explicit
+    assert "ConnectTimeout=8" not in explicit
+
+    wrapped = bound_network_command("timeout 20 nxc rdp 10.0.0.5")
+    assert wrapped.startswith("timeout 20 nxc --timeout 10 --rdp-timeout 10 rdp")
+    assert bound_network_command(wrapped) == wrapped  # idempotent
+
+    explicit_ssh = bound_network_command(
+        "ssh -o ConnectTimeout=20 -o ConnectionAttempts=2 user@10.0.0.5 id"
+    )
+    assert explicit_ssh == "ssh -o ConnectTimeout=20 -o ConnectionAttempts=2 user@10.0.0.5 id"
+
+    assert bound_network_command("nxc rdp 10.0.0.5 'unterminated") == (
+        "nxc rdp 10.0.0.5 'unterminated"
+    )
+
+
+def test_transport_bounds_do_not_touch_other_commands_or_quoted_payloads() -> None:
+    for command in (
+        "nmap -Pn 10.0.0.5",
+        "echo nxc rdp 10.0.0.5",
+        "bash -c 'nxc rdp 10.0.0.5'",
+        "echo ssh user@10.0.0.5",
+    ):
+        assert bound_network_command(command) == command
