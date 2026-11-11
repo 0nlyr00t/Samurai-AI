@@ -23,6 +23,8 @@ from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.permission import (
     Decision,
     PermissionRule,
+    bound_network_command,
+    canonical_command,
     classify_command,
     decide,
     parse_mode,
@@ -92,6 +94,25 @@ class ToolExecutionService:
         self.operations.get(operation_id)
         return self.runs.mark_in_flight_failed(operation_id, actor)
 
+    def timeout_repeat(
+        self, operation_id: str, tool_id: str, command: str
+    ) -> ToolRun | None:
+        """The previous run if this exact command already died on a timeout.
+
+        Only a timeout is sticky: a normal failure may be worth retrying after
+        the environment changed, but repeating a timed-out probe unchanged only
+        buys the same wait again. Parameters are compared after redaction, as
+        they are stored in the run history.
+        """
+        candidate = canonical_command(self.redactor.redact(command).text)
+        for run in reversed(self.runs.list_runs(operation_id)):
+            if run.tool_id != tool_id or run.status is not ToolRunStatus.TIMEOUT:
+                continue
+            previous = str(run.parameters.get("command", ""))
+            if previous and canonical_command(previous) == candidate:
+                return run
+        return None
+
     def run_tool(
         self,
         operation_id: str,
@@ -119,6 +140,13 @@ class ToolExecutionService:
         check_tool(definition, operation.offline)
         self._apply_relay(operation, adapter)
         validated = self.registry.validate_params(definition, params or {})
+        if definition.id == "shell.exec" and validated.get("command"):
+            # approval, scope review and execution must all see the same command:
+            # transport bounds are added before any of them, never silently after.
+            validated = {
+                **validated,
+                "command": bound_network_command(str(validated["command"])),
+            }
         # the rule book answers before anything is prepared: a denied call must
         # not fail on a missing image first
         decision = self.rule_decision(definition, validated)
