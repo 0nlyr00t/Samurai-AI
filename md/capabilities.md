@@ -68,6 +68,11 @@
 - RU/EN first-run выбор языка и переключение через `/lang`;
 - SQLite migrations v1–v17, append-only events и optimistic concurrency;
 - CLI и TUI с реальными kernel/recovery/tool/agent/playbook-представлениями;
+- Kill Chain HUD на доказанном состоянии: состояния фаз с критериями из gates и
+  артефактов, LOOT со ссылкой на источник, гипотезы с evidence и планом
+  проверки, покрытие методологии, evidence-first доска находок;
+- полный approval (команда целиком, риск, cwd, путь исполнения, таймаут), `@file`
+  с trust/лимитом/redaction, стриминг с отменой, стоимость по маршрутам с `n/a`;
 - 1193 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции

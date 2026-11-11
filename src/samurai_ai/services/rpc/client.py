@@ -64,8 +64,16 @@ class Client:
             raise RpcFailure(ErrorBody(**welcome["error"]))
         return cls(link, welcome)
 
-    async def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        idempotency_key: str = "",
+    ) -> Any:
         request_id = next(self._ids)
+        if idempotency_key:
+            params = {**(params or {}), "idempotency_key": idempotency_key}
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
         await self.link.write({"id": request_id, "method": method, "params": params or {}})
@@ -91,7 +99,9 @@ class Client:
                         )
                 await self.events.put(None)
                 return
-            if "event" in frame:
+            if "event" in frame or "resync" in frame:
+                # a resync frame says how many events this peer missed; the
+                # consumer re-reads a snapshot instead of pretending it is current
                 await self.events.put(frame)
                 continue
             waiting = self._pending.pop(int(frame.get("id", 0)), None)
