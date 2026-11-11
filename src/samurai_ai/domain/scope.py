@@ -98,10 +98,9 @@ class ScopeContract(BaseModel):
     @field_validator("includes")
     @classmethod
     def validate_includes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        rules = _normalize_rules(value)
-        if not rules:
-            raise ScopeValidationError("at least one include rule is required")
-        return rules
+        # an empty include list is a valid, fully denied contract: excluding
+        # the last target must not be impossible just to keep a placeholder
+        return _normalize_rules(value)
 
     @field_validator("excludes")
     @classmethod
@@ -173,6 +172,24 @@ class ScopeContract(BaseModel):
             detail="target does not match any inclusion rule",
         )
 
+    def excluded(self, raw_target: str) -> bool:
+        """Whether an exclusion matches this target with evaluate's semantics."""
+        text = raw_target.strip()
+        try:
+            target = _parse_target(text)
+        except ScopeValidationError:
+            # a wildcard is a rule shape, not a hostname: only an identical
+            # exclusion is meaningful; do not accidentally block its children
+            return text in self.excludes
+        for raw_rule in self.excludes:
+            try:
+                rule = _parse_rule(raw_rule)
+            except ScopeValidationError:
+                continue
+            if _matches(rule, target):
+                return True
+        return False
+
     def covers(self, raw_target: str) -> bool:
         """Does the contract already authorize this target without changing scope?
 
@@ -180,6 +197,8 @@ class ScopeContract(BaseModel):
         question "was it already reachable": only a genuine widening deserves a
         confirmation prompt, and repeating a rule deserves none.
         """
+        if self.excluded(raw_target):
+            return False
         candidate_text = raw_target.strip()
         if self.hosts.get(candidate_text) is not None:
             return True
