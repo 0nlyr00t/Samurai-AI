@@ -671,6 +671,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "scope.tab-excluded": "(excluded)",
         "scope.rule-excluded": "excluded from the scope: {rule}; restore with /scope add",
         "scope.rule-back": "back in the scope: {rule}",
+        "scope.rule-removed": "removed from the scope: {rule}",
+        "scope.rule-edited": "scope rule changed: {old} -> {new}",
+        "scope.menu-exclude": "Exclude this rule",
+        "scope.menu-restore": "Restore this rule",
+        "scope.menu-edit": "Edit this rule",
+        "scope.menu-remove": "Remove this rule",
+        "scope.edit-prompt": "edit the scope rule",
+        "scope.auto-included": "[scope] agent added {target}: {reason}",
+        "scope.auto-declined": "[scope] agent kept {target} out: {reason}",
+        "scope.auto-outside": (
+            "[scope] {target} is unrelated to the scope — add it by hand if it belongs"
+        ),
         "scope.skipped-before": (
             "previously skipped: {target}; not asking again — restore with /scope add"
         ),
@@ -1531,6 +1543,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "scope.tab-excluded": "(исключён)",
         "scope.rule-excluded": "исключено из скоупа: {rule}; вернуть через /scope add",
         "scope.rule-back": "вернулось в скоуп: {rule}",
+        "scope.rule-removed": "удалено из скоупа: {rule}",
+        "scope.rule-edited": "правило скоупа изменено: {old} -> {new}",
+        "scope.menu-exclude": "Исключить правило",
+        "scope.menu-restore": "Вернуть правило",
+        "scope.menu-edit": "Редактировать правило",
+        "scope.menu-remove": "Удалить правило",
+        "scope.edit-prompt": "изменить правило скоупа",
+        "scope.auto-included": "[скоуп] агент добавил {target}: {reason}",
+        "scope.auto-declined": "[скоуп] агент не стал добавлять {target}: {reason}",
+        "scope.auto-outside": (
+            "[скоуп] {target} не связан со скоупом — добавьте вручную, если нужно"
+        ),
         "scope.skipped-before": (
             "раньше уже пропущено: {target}; не спрашиваю снова — вернуть через /scope add"
         ),

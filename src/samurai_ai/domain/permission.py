@@ -250,14 +250,13 @@ def decide(
         for rule in rules:
             if rule.action == action and rule.matches(tool_id, command):
                 return Decision(action=action, rule=rule)
-    # A destructive shape (rm -rf, dd, mkfs, shutdown, write outside cwd) is the
-    # one class yolo and never do NOT wave through: there is no undo. With an
-    # operator reachable it still asks; headless (never, nobody to answer) it is
-    # denied rather than run blind. Only an explicit `allow` rule above — the
-    # operator's own standing override — lets one through unprompted; a reusable
-    # session approval is not enough, so these confirm every time.
-    if risk.destructive:
-        return Decision(action="deny" if mode is PermissionMode.NEVER else "ask")
+    # `never` is headless: nobody can answer, so a destructive shape (rm -rf, dd,
+    # mkfs, shutdown, write outside cwd) is denied rather than run blind. yolo is
+    # the operator's explicit "don't ask me" — it stays silent even here, because
+    # a yolo that still interrupts on every chmod -R or docker rm is not yolo.
+    # `ask` falls through and prompts as usual; an explicit allow rule above wins.
+    if risk.destructive and mode is PermissionMode.NEVER:
+        return Decision(action="deny")
     # No rule: the old behaviour, unchanged — a reusable approval keeps quiet
     # unless the command carries a badge, and only `ask` mode prompts at all.
     if not mode.prompts_for_tools:
