@@ -75,6 +75,8 @@
   с trust/лимитом/redaction, стриминг с отменой, стоимость по маршрутам с `n/a`;
 - transport-таймауты для `nxc`/`ssh` и запрет повторного запуска идентичной
   команды после `TIMEOUT` с run id; явный повтор оператором через `!cmd` остаётся;
+- exclusion скрывает цель из TARGETS, не отменяется `add_scope` модели и не
+  вызывает повторный ScopeAskScreen после skipped; LOOT не падает на AccessRow;
 - 1193 unit/integration/CLI/TUI tests.
 
 Еще не реализовано: PDF reports (нет stdlib-пути), live API интеграции

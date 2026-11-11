@@ -248,6 +248,7 @@ class ChatController:
         def push_screen_wait(self, screen: Any) -> Any: ...
         _relay_offered: set[str]
         _scope_offered: set[str]
+        _scope_declined: set[tuple[str, str]]
         _fresh_task_text: str | None
         _unstructured_shells: int
         _structure_nudged: bool
@@ -2045,19 +2046,21 @@ class ChatController:
             return
         self._extend_scope(targets)
 
-    def _extend_scope(self, added: list[str]) -> None:
-        """Widen the contract and say what landed; invalid entries are skipped."""
+    def _extend_scope(self, added: list[str]) -> list[str]:
+        """Widen only on genuinely new, non-excluded targets; return what landed."""
         assert self.operation is not None
         scope = self.operation.scope
         valid: list[str] = []
         for target in added:
+            if scope.excluded(target) or scope.covers(target):
+                continue
             try:
                 ScopeContract(includes=(target,))  # parse and normalize one rule
             except Exception:  # noqa: BLE001 - an unparseable name is skipped, not fatal
                 continue
             valid.append(target)
         if not valid:
-            return
+            return []
         scope = self.operation.scope
         updated = ScopeContract(
             includes=(*scope.includes, *valid), excludes=scope.excludes, hosts=scope.hosts
@@ -2067,6 +2070,7 @@ class ChatController:
             self.translator.t("scope.extended", rules=", ".join(valid)), process=False
         )
         self._refresh_chrome()
+        return valid
 
     async def _run_check_scope_tool(self, call: ToolCall) -> Message:
         """The model asks before touching: is this resource inside the scope?"""
@@ -2115,11 +2119,19 @@ class ChatController:
             added = [rule, *rest]
         else:
             added = fresh
-        self._extend_scope(added)
+        actually_added = self._extend_scope(added)
+        if not actually_added:
+            return Message(
+                role="user",
+                content=(
+                    "[tool add_scope] nothing added: every target is already "
+                    "covered or excluded by the operator; exclusions are not re-added"
+                ),
+            )
         return Message(
             role="user",
             content=(
-                f"[tool add_scope] added: {', '.join(added)} — the operator can "
+                f"[tool add_scope] added: {', '.join(actually_added)} — the operator can "
                 "revert any rule with /scope rm"
             ),
         )
@@ -2821,16 +2833,23 @@ class ChatController:
         literal = getattr(exc, "literal", "")
         if not literal:
             return Message(role="user", content=f"[tool {call.name}] out of scope: {exc}")
+        key = (self.operation.id if self.operation else "", literal.lower())
+        if key in self._scope_declined:
+            note = self.translator.t("scope.skipped-before", target=literal)
+            self._write_dim(note, process=False)
+            return Message(role="user", content=f"[tool {call.name}] {note}")
         from samurai_ai.tui.screens.scope_ask import ScopeAskScreen
 
         allowed = await self.push_screen_wait(
             ScopeAskScreen(self.translator, literal, getattr(exc, "detail", ""))
         )
         if not allowed:
+            self._scope_declined.add(key)
             return Message(
                 role="user",
                 content=f"[tool {call.name}] out of scope (operator skipped): {exc}",
             )
+        self._scope_declined.discard(key)
         self._extend_scope([literal.split("://")[-1].split("/")[0]])
         holder: dict[str, str] = {}
         retry = asyncio.ensure_future(
