@@ -174,7 +174,7 @@ def test_command_signature_folds_cosmetic_retries() -> None:
     # same credential, same host, different timeout/flags/wrapper -> one signature
     variants = [
         "cd /home/user; timeout 60 nxc rdp 10.129.247.82 -u contractor -p 'Secret1!' 2>&1",
-        "timeout 25 nxc --timeout 10 --rdp-timeout 10 rdp 10.129.247.82 -u contractor -p 'Secret1!'",
+        "timeout 25 nxc --timeout 10 --rdp-timeout 10 rdp 10.129.247.82 -u contractor -p x",
         "cd /home/user && nxc rdp 10.129.247.82 -u contractor -p Secret1!",
     ]
     signatures = {command_signature(command) for command in variants}
