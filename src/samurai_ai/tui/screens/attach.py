@@ -68,6 +68,7 @@ class AttachScreen(ModalScreen[None]):
     ) -> None:
         super().__init__()
         self.translator = translator
+        self.last_seq = 0
         self.socket_path = socket_path
         self.operation_id = operation_id
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -100,15 +101,39 @@ class AttachScreen(ModalScreen[None]):
                 self.socket_path, client="tui", read_only=False
             )
         except RpcFailure as exc:
-            self.app.call_from_thread(self._append, f"error: {exc}")
+            self._post(self._append, f"error: {exc}")
             return
-        self.app.call_from_thread(self._append, self.translator.t("attach.connected"))
+        self._post(self._append, self.translator.t("attach.connected"))
         try:
-            await self.client.subscribe(self.operation_id, 0)
+            await self._resync()
             async for frame in self.client.stream():
-                self.app.call_from_thread(self._append, self._format(frame))
+                if "resync" in frame:
+                    # the queue overflowed: a snapshot first, then only the new
+                    # events — never a hole the operator would read as "nothing
+                    # happened"
+                    self._post(
+                        self._append, self.translator.t("attach.resync", count=frame["resync"])
+                    )
+                    await self._resync()
+                    continue
+                self._post(self._append, self._format(frame))
         finally:
             await self.client.close()
+
+    async def _resync(self) -> None:
+        """Re-read the operation from scratch and continue from its last seq."""
+        self.last_seq = self._call("operation.snapshot", {"operation_id": self.operation_id}) or 0
+        snapshot = self._call("operation.show", {"operation_id": self.operation_id}) or {}
+        self._post(
+            self._append,
+            self.translator.t(
+                "attach.snapshot",
+                phase=str(snapshot.get("phase") or "-"),
+                runs=str(snapshot.get("runs") or 0),
+                findings=str(snapshot.get("findings") or 0),
+            ),
+        )
+        await self.client.subscribe(self.operation_id, int(self.last_seq))
 
     def _format(self, frame: dict[str, Any]) -> str:
         payload = frame.get("payload") or {}
@@ -117,6 +142,13 @@ class AttachScreen(ModalScreen[None]):
 
     def _append(self, line: str) -> None:
         self.query_one("#attach-log", SelectableRichLog).write(line)
+
+    def _post(self, callback: Any, *args: Any) -> None:
+        """Hop to the app thread when there is one, call inline in tests."""
+        try:
+            self.app.call_from_thread(callback, *args)
+        except RuntimeError:  # same thread as the app (a test harness)
+            callback(*args)
 
     def _call(self, method: str, params: dict[str, Any]) -> Any:
         if self.loop is None or self.client is None:
