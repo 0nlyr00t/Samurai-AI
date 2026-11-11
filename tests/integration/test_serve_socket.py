@@ -156,3 +156,63 @@ def test_no_daemon_is_a_clean_refusal(short_dir: Path) -> None:
             raise AssertionError("connected to nothing")
 
     asyncio.run(scenario())
+
+
+def test_a_second_peer_sees_the_same_approval_and_cancel(short_dir: Path) -> None:
+    """Both clients watch one operation: neither event is a private matter."""
+    async def scenario() -> None:
+        rows: list[tuple[int, str, dict[str, Any]]] = []
+        socket_path = short_dir / "s.sock"
+        server, carrier = build(socket_path, rows)
+        await server.start()
+        await carrier.start(server.serve)
+        first = await Client.connect(socket_path, client="one", read_only=True)
+        second = await Client.connect(socket_path, client="two", read_only=True)
+        await first.subscribe("op_1", 0)
+        await second.subscribe("op_1", 0)
+        rows.append((1, "approval.requested", {"approval": "ap_1"}))
+        rows.append((2, "run.cancelled", {"run": "run_1"}))
+        seen = [
+            (await asyncio.wait_for(client.events.get(), 5))["event"]
+            for client in (first, second, first, second)
+        ]
+        assert seen == [
+            "approval.requested",
+            "approval.requested",
+            "run.cancelled",
+            "run.cancelled",
+        ]
+        await first.close()
+        await second.close()
+        await carrier.stop()
+        await server.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_a_repeated_write_with_one_key_runs_once(short_dir: Path) -> None:
+    """A double Enter (or a reconnect retry) must not duplicate the write."""
+    async def scenario() -> None:
+        socket_path = short_dir / "s.sock"
+        server, carrier = build(socket_path, [])
+        calls = {"n": 0}
+
+        async def counted(_peer: Peer, params: dict[str, Any]) -> dict[str, Any]:
+            calls["n"] += 1
+            return {"n": calls["n"]}
+
+        server.register("run.start", counted, write=True)
+        await server.start()
+        await carrier.start(server.serve)
+        client = await Client.connect(socket_path, client="one")
+        first = await client.call("run.start", {}, idempotency_key="enter-1")
+        second = await client.call("run.start", {}, idempotency_key="enter-1")
+        third = await client.call("run.start", {}, idempotency_key="enter-2")
+        assert first == second == {"n": 1}
+        assert third == {"n": 2}
+        assert calls["n"] == 2
+        await client.close()
+        await carrier.stop()
+        await server.aclose()
+
+    asyncio.run(scenario())
