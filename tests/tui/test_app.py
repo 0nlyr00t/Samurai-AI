@@ -72,6 +72,7 @@ from samurai_ai.tui.app import SamuraiApp
 from samurai_ai.tui.journal import (
     BlockJournal,
     InspectSummaryBlock,
+    StreamBlock,
     ToolHeader,
     UserBlock,
 )
@@ -5646,6 +5647,41 @@ def test_without_a_selection_ctrl_c_still_stops_and_quits(tmp_path: Path) -> Non
             await pilot.press("ctrl+c")
             await pilot.pause()
             assert not app.is_running
+
+    asyncio.run(exercise())
+
+
+def test_a_selection_below_a_block_copies_its_last_line(tmp_path: Path) -> None:
+    """A pointer one row under a block must not blow up Ctrl+C.
+
+    The drag is recorded on the block under the pointer and resolved against
+    that block's own text, so a pointer on its trailing blank row points past it.
+    """
+    from textual.geometry import Offset
+    from textual.selection import Selection
+
+    stack = _minimal_stack(tmp_path)
+    operation = stack[0].create(
+        "Copy lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            journal.clear()
+            journal.add_block(StreamBlock())
+            block = journal.children[0]
+            assert isinstance(block, StreamBlock)
+            block.append(Text("первая"))
+            block.append(Text("последняя"))
+            await pilot.pause()
+
+            text, break_line = block.get_selection(Selection(Offset(0, 5), None))
+
+            assert text == "последняя"
+            assert break_line == "\n"
 
     asyncio.run(exercise())
 
