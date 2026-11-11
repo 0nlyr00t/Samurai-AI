@@ -66,6 +66,7 @@ from samurai_ai.domain.kernel import (
 )
 from samurai_ai.domain.models import CapabilityError, ModelCapability, ModelError
 from samurai_ai.domain.operations import OperationEvent
+from samurai_ai.domain.permission import command_signature
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
@@ -118,8 +119,17 @@ def call_site(tool_id: str, params: dict[str, Any]) -> str:
     ``web_request(path=/nslookup.php, cmd=dir)`` and the same call with ``cmd=type
     C:\\boot.ini`` are one site: only a per-place window catches that loop, because
     every payload gives the argument-keyed detector a fresh signature.
+
+    ``shell.exec`` carries its target inside one ``command`` string, none of the
+    site keys, so the argument-keyed view sees ``{}`` for every shell call — blind
+    to the real loop (same credential, same host, a tweaked ``timeout`` or flag).
+    When no site key names the place, the command's normalized signature stands
+    in for it; an explicit site key still wins, so a tool that passes a payload
+    beside a ``target`` keeps judging by the place, not the payload.
     """
     where = {key: params[key] for key in _SITE_KEYS if key in params}
+    if not where and isinstance(params.get("command"), str):
+        return tool_id + "|" + command_signature(params["command"])
     return tool_id + "|" + json.dumps(where, sort_keys=True, default=str)
 
 
@@ -198,7 +208,19 @@ _EXECUTOR_INSTRUCTION = (
     "A task that ends at the landing page is not done: when a registration form "
     "exists, register and log in; after logging in enumerate what changed; on a "
     "login form try the obvious defaults; follow the app's own links and forms "
-    "before concluding there is nothing."
+    "before concluding there is nothing. "
+    "Attack the target, not the harness or the host: never read or query the "
+    "harness's own state (~/.config/samurai, samurai.db, scope or rules files) — "
+    "the in-scope targets are already given above, so a scope block is not a "
+    "mystery to investigate, it is a target to drop. Do not fight the host "
+    "environment: no chmod/chown on system paths, no pip/package surgery, no "
+    "python-version or sudo spelunking. A missing or broken binary is one "
+    "request_tool_provision, not a shell workaround. "
+    "A credential or a probe that already answered (see the already-run digest) "
+    "is spent: build on its output, do not re-issue it with a new timeout or a "
+    "reordered flag — a retry that only changes cosmetics is a wasted step. Put "
+    "independent read-only recon for one step in a single batched command rather "
+    "than one tiny call per round."
 )
 
 
@@ -774,8 +796,22 @@ class AgentOrchestrator:
         counts: dict[str, int],
         notes: list[str] | None,
     ) -> None:
-        """The same tool call over and over earns a note, once per command."""
-        key = f"{command.type}:{repr(sorted(command.model_dump().items()))}"
+        """The same tool call over and over earns a note, once per command.
+
+        For a shell call the key is the normalized signature, not the literal
+        text: a retry with a new ``timeout`` or a reordered flag is the same
+        attempt and must not reset the count.
+        """
+        params = getattr(command, "params", None)
+        shell_command: str | None = None
+        if isinstance(params, dict) and not any(key in params for key in _SITE_KEYS):
+            candidate = params.get("command")
+            if isinstance(candidate, str):
+                shell_command = candidate
+        if shell_command is not None:
+            key = f"{command.type}:shell:{command_signature(shell_command)}"
+        else:
+            key = f"{command.type}:{repr(sorted(command.model_dump().items()))}"
         counts[key] = counts.get(key, 0) + 1
         if counts[key] != REPEAT_THRESHOLD:
             return
@@ -891,12 +927,16 @@ class AgentOrchestrator:
             tools = self._tools_excerpt() if level < 2 else ""
             relay = self._relay_notice(operation_id)
             scope_line = self._scope_notice(operation_id)
+            # the already-run digest is memory the per-step guards lack; drop it
+            # first when the window is tight (level 2+) since it is advisory
+            tried = self._recent_commands_notice(operation_id) if level < 2 else ""
             prompt = (
                 f"{_EXECUTOR_INSTRUCTION}{profile_for(run.specialization).executor_focus}\n"
                 f"{genes}"
                 f"{tools}\n"
                 f"{scope_line}"
                 f"{relay}"
+                f"{tried}"
                 f"{rejection_notes}"
                 f"Current step: {step}\n"
                 f"Blackboard:\n{excerpt or '(empty)'}"
@@ -1337,6 +1377,46 @@ class AgentOrchestrator:
         if scope.excludes:
             line += f"excluded: {', '.join(scope.excludes)}.\n"
         return line + "]\n"
+
+    def _recent_commands_notice(self, operation_id: str) -> str:
+        """What shell calls already ran this operation, and how they ended.
+
+        The per-step loop guards reset every goal step, so the model forgets it
+        already tried a credential or a probe and runs it again a step later —
+        the single biggest time sink in a long run. This digest survives steps
+        because it reads the tool-run log, and keying it by signature folds the
+        flag-tweaked retries into one line: the model sees ``timeout x3`` and
+        stops instead of varying the flags a fourth time.
+        """
+        try:
+            runs = self.execution.list_runs(operation_id)
+        except Exception:  # noqa: BLE001 — a nudge must never break a step
+            return ""
+        outcome = {"completed": "ok", "failed": "fail", "timeout": "timeout"}
+        seen: dict[str, tuple[str, int]] = {}
+        for run in runs[-80:]:
+            command = run.parameters.get("command")
+            if run.tool_id != "shell.exec" or not isinstance(command, str):
+                continue
+            label = outcome.get(run.status.value)
+            if label is None:  # queued / running — not yet a result to learn from
+                continue
+            sig = command_signature(command)
+            _, count = seen.get(sig, ("", 0))
+            seen[sig] = (label, count + 1)
+        if not seen:
+            return ""
+        recent = list(seen.items())[-12:]
+        lines = "\n".join(
+            f"- {status}{f' x{count}' if count > 1 else ''}: {sig}"
+            for sig, (status, count) in recent
+        )
+        return (
+            "[already run this operation — do NOT repeat these; read their saved "
+            "output or change approach instead of re-issuing a variant:\n"
+            f"{lines}\n"
+            "A line marked timeout or fail more than once is a dead end — stop.]\n"
+        )
 
     def _relay_notice(self, operation_id: str) -> str:
         """Tell the agent its sandbox tools already travel through the relay.
