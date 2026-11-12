@@ -5648,6 +5648,30 @@ def test_verbose_mode_keeps_a_block_per_run(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_autonomy_command_toggles_the_setting_and_badge(tmp_path: Path) -> None:
+    """/autonomy flips the opt-in and shows the posture in the status bar."""
+    stack, operation = _chat_ready_stack(tmp_path, _TwoToolRoundsProvider())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            assert app._autonomy_enabled() is False  # off by default
+            app.query_one("#command-input", Input).value = "/autonomy on"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._autonomy_enabled() is True
+            assert stack[2].get_value("agent.autonomy") == "1"
+            assert "auto" in str(app.query_one("#status-bar", Static).render())
+            app.query_one("#command-input", Input).value = "/autonomy off"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._autonomy_enabled() is False
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_important_events_land_as_tracked_notices(tmp_path: Path) -> None:
     """Findings and errors set apart as notices; badge counts; /last jumps."""
     from samurai_ai.tui.journal import NoticeBlock

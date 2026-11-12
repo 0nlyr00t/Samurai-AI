@@ -508,6 +508,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-background-done": "[bg] done: {command}…",
         "chat.expand-empty": "nothing to expand yet — no folded process or output",
         "chat.notice-none": "no findings, secrets or errors yet",
+        "autonomy.on": (
+            "autonomy on — the agent may install and run within its workspace "
+            "(trusted dir + scope); destructive and credential shapes still gated"
+        ),
+        "autonomy.off": "autonomy off — installs outside the trusted dir are blocked again",
         "chat.process-block": "{lines} step(s) folded — Ctrl+E, Enter or a click to open",
         "chat.process-title": "process log",
         "chat.empty-reply": "(empty model reply)",
@@ -1395,6 +1400,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.thinking": "думаю · {count}",
         "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",
         "chat.notice-none": "пока нет находок, кредов или ошибок",
+        "autonomy.on": (
+            "автономия вкл — агент может ставить и выполнять внутри рабочей папки "
+            "(trusted dir + scope); деструктивные и кредовые формы по-прежнему под гейтом"
+        ),
+        "autonomy.off": "автономия выкл — установки вне trusted-дира снова заблокированы",
         "chat.process-block": "{lines} шаг(ов) свёрнуто — Ctrl+E, Enter или клик, чтобы открыть",
         "chat.process-title": "журнал процесса",
         "chat.empty-reply": "(пустой ответ модели)",
