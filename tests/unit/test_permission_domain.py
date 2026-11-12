@@ -131,8 +131,6 @@ def test_the_command_family_sets_the_window() -> None:
     assert command_window(curl) == QUICK_WINDOW_SECONDS
     assert command_window("dig +short x.htb") == QUICK_WINDOW_SECONDS
     assert command_window("id; uname -a") == DEFAULT_WINDOW_SECONDS
-    # the far side of a VPN answers on its own schedule
-    assert command_window("nmap -p- 10.0.0.5", relayed=True) == LONG_WINDOW_SECONDS * 2
 
 
 def test_probe_families_get_a_short_outer_window() -> None:
@@ -142,7 +140,6 @@ def test_probe_families_get_a_short_outer_window() -> None:
         "timeout 20 xfreerdp3 /v:10.0.0.5",
     ):
         assert command_window(command) == 35.0
-        assert command_window(command, relayed=True) == 70.0
 
 
 def test_nxc_and_ssh_get_transport_timeouts_without_overriding_explicit_ones() -> None:

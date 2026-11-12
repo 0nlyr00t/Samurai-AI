@@ -103,7 +103,7 @@ class BenchRunner:
 
     # --- the environment -------------------------------------------------
 
-    def canary(self, hosts: tuple[str, ...], relay: str, scenario: BenchScenario) -> None:
+    def canary(self, hosts: tuple[str, ...], scenario: BenchScenario) -> None:
         """Prove the target answers before spending a run on it.
 
         A benchmark that cannot reach the box measures the VPN, not the harness,
@@ -115,9 +115,9 @@ class BenchRunner:
             return
         for host in hosts:
             command = self._probe_command(host, probe)
-            argv = [*shlex.split(relay), command] if relay else ["bash", "-lc", command]
+            argv = ["bash", "-lc", command]
             try:
-                done = subprocess.run(  # noqa: S603 - operator-supplied relay
+                done = subprocess.run(  # noqa: S603 - fixed probe command
                     argv, capture_output=True, text=True, timeout=probe.timeout_seconds + 10
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
@@ -146,7 +146,7 @@ class BenchRunner:
     # --- one scenario ----------------------------------------------------
 
     def run_scenario(
-        self, scenario: BenchScenario, *, hosts: tuple[str, ...], relay: str, model_id: str = ""
+        self, scenario: BenchScenario, *, hosts: tuple[str, ...], model_id: str = ""
     ) -> BenchResult:
         model_id = model_id or self.models.default_model() or self._fallback_model()
         if not model_id:
@@ -161,7 +161,6 @@ class BenchRunner:
             f"bench:{scenario.id}",
             scenario.mode,
             ScopeContract(includes=includes),
-            relay=relay,
             objective=scenario.objective,
         )
         self.goals.create(
@@ -386,7 +385,6 @@ class BenchRunner:
         suite_path: Path,
         *,
         hosts: tuple[str, ...],
-        relay: str = "",
         model_id: str = "",
         only: tuple[str, ...] = (),
     ) -> BenchReport:
@@ -406,7 +404,7 @@ class BenchRunner:
         results: list[BenchResult] = []
         for scenario in scenarios:
             try:
-                self.canary(hosts, relay, scenario)
+                self.canary(hosts, scenario)
             except BenchError as exc:
                 results.append(
                     BenchResult(
@@ -415,14 +413,13 @@ class BenchRunner:
                 )
                 continue
             results.append(
-                self.run_scenario(scenario, hosts=hosts, relay=relay, model_id=resolved_model)
+                self.run_scenario(scenario, hosts=hosts, model_id=resolved_model)
             )
         return BenchReport(
             suite=suite.name,
             suite_version=suite.version,
             samurai_version=__version__,
             model_id=resolved_model,
-            relay=relay,
             hosts=hosts,
             started_at=started,
             finished_at=datetime.now(UTC),
@@ -446,7 +443,6 @@ def save_report(report: BenchReport) -> Path:
                     "version": report.suite_version,
                     "samurai": report.samurai_version,
                     "model": report.model_id,
-                    "relay": bool(report.relay),
                     "hosts": list(report.hosts),
                     "passed": report.passed,
                     "results": [

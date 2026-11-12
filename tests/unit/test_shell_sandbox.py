@@ -47,16 +47,6 @@ def test_sandbox_off_runs_natively(monkeypatch) -> None:  # type: ignore[no-unty
     assert manager.argv[0] in ("bash", "sh")
 
 
-def test_a_relayed_command_is_not_sandboxed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(native_sandbox, "bwrap_available", lambda: True)
-    tool, manager = _tool()
-    tool.relay = "prlctl exec uuid"
-    tool.sandbox_mode = "write"
-    tool.sandbox_roots = ("/home/op/work",)
-    tool.invoke({"command": "id"}, ScopeContract(includes=("10.0.0.5",)))
-    assert manager.argv[0] in ("bash", "sh")  # the far side has its own filesystem
-
-
 def test_missing_bwrap_falls_back_to_native(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(native_sandbox, "bwrap_available", lambda: False)
     tool, manager = _tool()
