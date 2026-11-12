@@ -23,7 +23,7 @@ from samurai_ai.domain.execution import (
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessResult
-from samurai_ai.execution.registry import ToolOutput
+from samurai_ai.execution.registry import ToolOutput, stall_as_timeout
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 from samurai_ai.execution.security import _ScopedSandboxTool
 from samurai_ai.execution.tunnel import ScopedTunnel
@@ -118,7 +118,8 @@ class _RemoteTool(_ScopedSandboxTool):
             await tunnel.stop()
         result: ProcessResult = outcome.result
         events = tunnel.events
-        stderr = result.stderr
+        timed_out, note = stall_as_timeout(result)
+        stderr = (result.stderr + note).lstrip() if note else result.stderr
         if events:
             summary = ", ".join(f"{event.host} {event.verdict}" for event in events)
             stderr = (
@@ -129,7 +130,7 @@ class _RemoteTool(_ScopedSandboxTool):
             stdout=result.stdout,
             stderr=stderr,
             exit_code=result.exit_code if result.exit_code is not None else -1,
-            timed_out=result.timed_out,
+            timed_out=timed_out,
             egress_events=tuple(
                 {
                     "host": event.host,
