@@ -48,6 +48,7 @@ from samurai_ai.domain.kernel import (
     TaskStatus,
 )
 from samurai_ai.domain.lessons import LessonMode
+from samurai_ai.domain.models import parse_model_id
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import (
     PermissionMode,
@@ -114,10 +115,10 @@ from samurai_ai.tui.killchain import AccessRow, LootEntry
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import (
-    ADD_CUSTOM_ID,
     REASONING_LEVELS,
     AccessPromptScreen,
     ArgumentScreen,
+    ConnectScreen,
     CustomEndpointScreen,
     HelpScreen,
     InspectorScreen,
@@ -4916,31 +4917,59 @@ class SamuraiApp(
         self._refresh_chrome()
 
     def _show_model_picker(self) -> None:
-        self.run_worker(self._open_model_picker(), exclusive=True)
+        self.run_worker(self._open_connect(), exclusive=True)
 
-    async def _open_model_picker(self) -> None:
+    async def _open_connect(self) -> None:
+        """Step one of /connect: pick a provider (or a custom endpoint)."""
         providers = self.models.list_providers()
-        configured = {
-            provider["id"]
+        self._key_secret_by_provider = {
+            provider["id"]: provider["secret_name"]
             for provider in providers
-            if provider["local"] or provider["auth"] in ("configured", "none")
+            if provider["secret_name"]
         }
-        model_ids: list[str] = [
-            model.id for model in self.models.list_models() if model.provider_id in configured
-        ]
-        for provider in providers:
-            if provider["id"] not in configured:
-                continue
-            try:
-                discovered = await asyncio.to_thread(self.models.discover_models, provider["id"])
-                for model in discovered:
-                    if model.id not in model_ids:
-                        model_ids.append(model.id)
-            except Exception:  # noqa: BLE001 - discovery is best-effort
-                continue
         current = self.models.default_model()
-        if current and current not in model_ids:
+        current_provider = parse_model_id(current)[0] if current else None
+        self.push_screen(
+            ConnectScreen(self.translator, providers, current_provider),
+            self._on_provider_chosen,
+        )
+
+    def _on_provider_chosen(self, choice: tuple[str, str] | None) -> None:
+        if choice is None:
+            self.query_one("#command-input", Input).focus()
+            return
+        action, provider_id = choice
+        if action == "custom":
+            self.push_screen(
+                CustomEndpointScreen(self.translator, self.models, self.vault, self.settings),
+                self._on_custom_endpoint_done,
+            )
+            return
+        if action == "key":
+            self.run_worker(self._ask_provider_key(provider_id), exclusive=False)
+            return
+        self.run_worker(self._open_model_picker(provider_id), exclusive=True)
+
+    async def _open_model_picker(self, provider_id: str) -> None:
+        """Step two of /connect: pick a model of the chosen provider."""
+        model_ids: list[str] = [
+            model.id
+            for model in self.models.list_models(provider_id)
+        ]
+        try:
+            discovered = await asyncio.to_thread(self.models.discover_models, provider_id)
+            for model in discovered:
+                if model.id not in model_ids:
+                    model_ids.append(model.id)
+        except Exception:  # noqa: BLE001 - discovery is best-effort
+            pass
+        current = self.models.default_model()
+        if current and parse_model_id(current)[0] == provider_id and current not in model_ids:
             model_ids.append(current)
+        if not model_ids:
+            self._write_line("[model] " + self.translator.t("model.empty"))
+            await self._open_connect()
+            return
         reasoning_by_model = {
             model_id: stored
             for model_id in model_ids
@@ -4950,28 +4979,14 @@ class SamuraiApp(
         reasoning = (
             reasoning_by_model.get(current or "") or self.models.default_reasoning_effort() or "off"
         )
-        # providers without a key stay visible: the operator can set it right here
-        needs_key = [
-            (provider["id"], provider["id"])
-            for provider in providers
-            if provider["auth"] == "missing" and provider["secret_name"]
-        ]
-        self._key_secret_by_provider = {
-            provider["id"]: provider["secret_name"]
-            for provider in providers
-            if provider["secret_name"]
-        }
         self.push_screen(
             ModelPickerScreen(
                 self.translator,
                 model_ids,
                 current,
                 reasoning,
-                add_custom_label=self.translator.t("model.picker-add-custom"),
                 current_marker=self.translator.t("model.current-marker"),
                 reasoning_by_model=reasoning_by_model,
-                needs_key=needs_key,
-                needs_key_label=self.translator.t("model.needs-key"),
             ),
             self._on_model_chosen,
         )
@@ -4980,15 +4995,6 @@ class SamuraiApp(
         if choice is None:
             return
         model_id, reasoning = choice
-        if model_id.startswith("key:"):
-            self.run_worker(self._ask_provider_key(model_id[4:]), exclusive=False)
-            return
-        if model_id == ADD_CUSTOM_ID:
-            self.push_screen(
-                CustomEndpointScreen(self.translator, self.models, self.vault, self.settings),
-                self._on_custom_endpoint_done,
-            )
-            return
         self.settings.set_value("model.default", model_id)
         self.settings.set_value("model.reasoning_effort", reasoning)
         self.settings.set_value(f"model.reasoning_effort.{model_id}", reasoning)
@@ -4999,7 +5005,7 @@ class SamuraiApp(
         self.query_one("#command-input", Input).focus()
 
     async def _ask_provider_key(self, provider_id: str) -> None:
-        """Take the provider's key once, store it masked, then reopen /model."""
+        """Take the provider's key once, store it masked, then reopen /connect."""
         secret = getattr(self, "_key_secret_by_provider", {}).get(provider_id)
         if secret is None:
             return
@@ -5014,7 +5020,7 @@ class SamuraiApp(
         self.vault.add(secret, answer.strip(), created_by=self._actor())
         self._write_dim(self.translator.t("model.key-saved", provider=provider_id))
         self._refresh_chrome()
-        await self._open_model_picker()
+        await self._open_connect()
 
     def _on_custom_endpoint_done(self, model_id: str | None) -> None:
         if model_id:
