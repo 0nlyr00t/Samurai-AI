@@ -4666,6 +4666,10 @@ class SamuraiApp(
                 bar.append(
                     f" | ▶ {self._current_tool[:32]}", style=self.paint("dim $text-dim")
                 )
+        notices = len(self.query_one("#journal", BlockJournal).notices)
+        if notices:
+            # findings / secrets / errors set apart; /last jumps to the newest
+            bar.append(f" | ⚑ {notices}", style=self.paint("bold $accent-alt"))
         bar.append(" | /help")
         self.query_one("#status-bar", Static).update(bar)
         self._refresh_ops_strip()
