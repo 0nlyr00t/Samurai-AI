@@ -76,16 +76,18 @@ def build_bwrap_argv(
         "--unshare-pid",
         "--unshare-uts",
         "--unshare-cgroup-try",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
     ]
+    # The read-only base filesystem goes down FIRST. bwrap applies mounts in
+    # order, so a whole-host `--ro-bind / /` listed after `--dev /dev` re-binds
+    # the host's read-only /dev over the virtual one — leaving /dev/null and the
+    # pty unusable, which breaks ssh (and anything that opens /dev/null). The
+    # virtual /proc and /dev and the private /tmp are overlaid *after* the base.
     if strict:
         for directory in _STRICT_SYSTEM_DIRS:
             argv += ["--ro-bind-try", directory, directory]
     else:
         argv += ["--ro-bind", "/", "/"]
+    argv += ["--proc", "/proc", "--dev", "/dev"]
     # a private /tmp (and /var/tmp) so scratch files never touch the host's
     argv += ["--tmpfs", "/tmp", "--tmpfs", "/var/tmp"]
     for root in roots:
