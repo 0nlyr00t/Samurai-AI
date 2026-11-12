@@ -490,6 +490,15 @@ class SamuraiApp(
         # bench, eval) so its extra model call never desyncs a scripted provider
         # or lands in the measured metrics. A headless test may force it on.
         self._auto_title_enabled: bool | None = None
+        # quiet exec rendering: successful runs fold into one rolling group
+        # block so a burst of commands can't bury the narrative. None = decide on
+        # first use: quiet in the real interactive app, off (a block per run, the
+        # verbose behaviour) under a headless drive. /quiet and /verbose flip it.
+        self._exec_quiet: bool | None = None
+        self._exec_group: Any = None
+        self._exec_group_rows: list[str] = []
+        self._exec_group_ok = 0
+        self._exec_group_fail = 0
         self._tab_activations_seen: int = 0
         self._selection_copy_timer: Timer | None = None
         self._last_auto_copy: str | None = None
@@ -687,11 +696,13 @@ class SamuraiApp(
         return Text("Samurai AI", style=self.paint("bold accent"))
 
     def _write_user_message(self, text: str) -> None:
+        self._close_exec_group()
         journal = self.query_one("#journal", BlockJournal)
         journal.write(Text())
         journal.add_block(UserBlock(text))
 
     def _write_ai_message(self, response) -> None:  # type: ignore[no-untyped-def]
+        self._close_exec_group()
         journal = self.query_one("#journal", BlockJournal)
         header = (
             f"{response.model_id} · {response.latency_ms}ms · "
