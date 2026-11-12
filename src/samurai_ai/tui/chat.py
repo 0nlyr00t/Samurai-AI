@@ -832,6 +832,45 @@ class ChatController:
         except Exception:  # noqa: BLE001 - a count must never break a turn
             return 0
 
+    def _run_outcome_counts(self, operation_id: str) -> dict[str, int]:
+        """Terminal tool-run tallies for the operation: completed/failed/timeout.
+
+        Read from the governed run history, so a sub-agent's runs count the same
+        as the operator's. Queued/running rows are left out — only a settled run
+        tells us whether work actually landed.
+        """
+        counts = {"completed": 0, "failed": 0, "timeout": 0}
+        if not operation_id:
+            return counts
+        try:
+            runs = self.execution.list_runs(operation_id)
+        except Exception:  # noqa: BLE001 - a tally must never break a turn
+            return counts
+        for run in runs:
+            key = run.status.value
+            if key in counts:
+                counts[key] += 1
+        return counts
+
+    def _completion_reason(
+        self, operation_id: str, runs_at_start: dict[str, int]
+    ) -> TerminalReason:
+        """COMPLETED, unless this turn's tool runs collapsed with nothing to show.
+
+        A turn that ran tools, saw every one of them fail or time out, and left
+        the operation with no finding did not meet the goal — the run collapsed
+        (a dead VPN/VM, an open circuit breaker). Reporting that as COMPLETED is
+        exactly how an operator mistakes a fallen run for a finished one, so it
+        ends BLOCKED with a visible reason instead.
+        """
+        now = self._run_outcome_counts(operation_id)
+        ran = sum(now[key] - runs_at_start.get(key, 0) for key in now)
+        completed = now["completed"] - runs_at_start.get("completed", 0)
+        if ran > 0 and completed <= 0 and self._finding_count() == 0:
+            self._write_dim(self.translator.t("chat.run-collapsed"), process=False)
+            return TerminalReason.BLOCKED
+        return TerminalReason.COMPLETED
+
     #: tools whose job starts after the foothold: their long prose is wasted on
     #: recon, and the whole block rides in every request
     _LATER_TOOLS = frozenset(
@@ -1063,7 +1102,11 @@ class ChatController:
         if reason is TerminalReason.MODEL_ERROR and self._last_user_text:
             # a dead gateway must not cost the operator their question
             self._write_retry_offer()
-        if reason in (TerminalReason.ROUNDS, TerminalReason.MODEL_ERROR):
+        if reason in (
+            TerminalReason.ROUNDS,
+            TerminalReason.MODEL_ERROR,
+            TerminalReason.BLOCKED,
+        ):
             # without a visible note the end of a turn reads as a freeze
             self._write_dim(self.translator.t(f"chat.ended-{reason.value}"), process=False)
         if self.operation is None:
@@ -1502,6 +1545,9 @@ class ChatController:
             or self.models.default_reasoning_effort()
         )
         operation_id = self.operation.id if self.operation else ""
+        # a baseline for the collapse check: a turn whose runs all fail from here
+        # must not sign off as "completed" (see _completion_reason)
+        runs_at_start = self._run_outcome_counts(operation_id)
         if not self._chat_history:
             # rebuilt every launch, never persisted
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
@@ -1533,7 +1579,7 @@ class ChatController:
                     verdict = await self._judge_goal(operation_id, model_id)
                     if verdict == goal_judge.STOP:
                         self._write_dim(self.translator.t("chat.goal-met"))
-                        return TerminalReason.COMPLETED
+                        return self._completion_reason(operation_id, runs_at_start)
                 stretches_used += 1
                 self._write_dim(
                     self.translator.t(
@@ -1631,10 +1677,11 @@ class ChatController:
                     verdict = await self._judge_goal(operation_id, model_id)
                     if verdict == goal_judge.STOP:
                         self._write_dim(self.translator.t("chat.goal-met"))
-                        return TerminalReason.COMPLETED
+                        return self._completion_reason(operation_id, runs_at_start)
                     if verdict is None:
-                        # a broken judge never stalls a run: fall back to accepting
-                        return TerminalReason.COMPLETED
+                        # a broken judge never stalls a run: fall back to accepting,
+                        # but a turn whose runs all collapsed is still not a success
+                        return self._completion_reason(operation_id, runs_at_start)
                     # CONTINUE or unclear: no sign-off without a clear STOP
                     self._write_dim(self.translator.t("chat.goal-not-met"))
                     self._remember(
@@ -1644,7 +1691,7 @@ class ChatController:
                         )
                     )
                     continue
-                return TerminalReason.COMPLETED
+                return self._completion_reason(operation_id, runs_at_start)
             if response.text.strip():
                 self._remember(Message(role="assistant", content=response.text))
                 # reasoning between tool calls is narrative, not an answer: it

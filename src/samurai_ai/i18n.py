@@ -472,6 +472,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "(raise the ceiling in /settings) —"
         ),
         "chat.ended-model-error": "— turn ended: the model errored —",
+        "chat.ended-blocked": (
+            "— turn ended: every tool run failed or timed out and nothing was "
+            "found; check the VPN/VM is alive before retrying —"
+        ),
+        "chat.run-collapsed": (
+            "⚠ the run collapsed: all tool runs this turn failed or timed out with "
+            "no finding — marking the turn blocked, not completed"
+        ),
         "chat.model-retry": "[retry] model unavailable — attempt {attempt}/{total}",
         "chat.retry-hint": "the last question never reached an answer — Ctrl+R resends it as-is",
         "journal.follow-on": "follow the tail: on",
@@ -527,6 +535,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.prev-cancelled": (
             "[previous turn] the operator stopped the turn; continue from what was established"
+        ),
+        "chat.prev-blocked": (
+            "[previous turn] every tool run failed or timed out — the transport, not "
+            "the commands; confirm the VPN/VM and target are reachable before retrying"
         ),
         "chat.restored": "restored {count} messages of this operation",
         "chat.restored-cut": (
@@ -1331,6 +1343,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "(потолок — в /settings) —"
         ),
         "chat.ended-model-error": "— ход завершён: ошибка модели —",
+        "chat.ended-blocked": (
+            "— ход завершён: все прогоны инструментов упали или вышли по таймауту, "
+            "находок нет; проверь, что VPN/VM живы, прежде чем повторять —"
+        ),
+        "chat.run-collapsed": (
+            "⚠ прогон обвалился: за ход все прогоны инструментов упали или вышли по "
+            "таймауту без находок — помечаю ход как заблокированный, не выполненный"
+        ),
         "chat.model-retry": "[повтор] модель недоступна — попытка {attempt}/{total}",
         "chat.retry-hint": "последний вопрос не дошёл — Ctrl+R отправит его заново как есть",
         "journal.follow-on": "слежение за хвостом: вкл",
@@ -1397,6 +1417,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.prev-cancelled": (
             "[прошлый ход] оператор остановил ход; продолжай от уже установленного"
+        ),
+        "chat.prev-blocked": (
+            "[прошлый ход] все прогоны инструментов упали или вышли по таймауту — это "
+            "транспорт, а не команды; убедись, что VPN/VM и цель доступны, прежде чем повторять"
         ),
         "copy.done": "скопировано символов: {chars}",
         "copy.empty": "пока нечего копировать — отправьте сообщение",

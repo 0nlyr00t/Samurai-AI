@@ -9,7 +9,11 @@ from samurai_ai.domain.sandbox import SandboxError
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.registry import SandboxExecTool, ToolRegistry
-from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
+from samurai_ai.execution.sandbox import (
+    DockerSandboxRunner,
+    get_profile,
+    sign_allowlist,
+)
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -178,3 +182,47 @@ def test_sandbox_exec_redacts_vault_secrets_in_output(tmp_path: Path) -> None:
     )
     assert secret not in result.stdout
     assert result.redaction_count >= 1
+
+
+def test_enforce_output_limit_keeps_the_stalled_flag() -> None:
+    """A stalled run must not lose its flag when the output cap is applied.
+
+    The flag is how a hung ssh/shell is told apart from a clean exit downstream;
+    rebuilding the result used to drop it, so the stall vanished silently.
+    """
+    stalled = ProcessResult(
+        exit_code=-15, stdout="partial", stderr="", stalled=True
+    )
+    kept = DockerSandboxRunner._enforce_output_limit(get_profile(PROFILE_ID), stalled)
+    assert kept.stalled is True
+
+
+def test_a_stalled_sandbox_run_is_recorded_as_a_timeout(tmp_path: Path) -> None:
+    """A hung command (killed on the stall watchdog) lands as TIMEOUT, not FAILED.
+
+    Recording it as a timeout is what lets the repeat-guard dedupe the hung
+    command instead of the agent re-running the same dead transport.
+    """
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    # the watchdog kills the group, so the exit code is a signal, but the stall
+    # is the real cause — it must win over the raw exit code
+    manager = FakeManager(
+        ProcessResult(exit_code=-15, stdout="", stderr="", stalled=True)
+    )
+    service, kernel, execution = make_stack(tmp_path / "stall.db", manager)
+    operation = make_operation(service)
+    with pytest.raises(ApprovalRequiredError) as caught:
+        execution.run_tool(
+            operation.id,
+            "sandbox.exec",
+            {"profile": PROFILE_ID, "executable": "echo"},
+        )
+    kernel.approve(caught.value.approval_id, decided_by="operator")
+    result = execution.run_tool(
+        operation.id,
+        "sandbox.exec",
+        {"profile": PROFILE_ID, "executable": "echo"},
+        approval_id=caught.value.approval_id,
+    )
+    assert result.run.status == ToolRunStatus.TIMEOUT
+    assert "stalled" in result.stderr

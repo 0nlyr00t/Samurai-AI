@@ -33,6 +33,9 @@ class TerminalReason(StrEnum):
     MODEL_ERROR = "model-error"
     DENIED = "denied"
     CANCELLED = "cancelled"
+    #: the turn's tool runs all failed/timed out and nothing was found — the run
+    #: collapsed (dead VPN/VM, open circuit breaker), it did not "complete"
+    BLOCKED = "blocked"
 
 
 def direction(command: str) -> str | None:
