@@ -70,6 +70,7 @@ from samurai_ai.services import goal_judge, title_smith
 from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
+from samurai_ai.services.tool_digest import summarize_for_model
 from samurai_ai.services.vault import VaultService
 from samurai_ai.tui.journal import BlockJournal, ToolBlock, entity_span
 from samurai_ai.tui.progress import Stagnation, TerminalReason
@@ -3108,14 +3109,21 @@ class ChatController:
             result.stderr,
             run_id=result.run.id,
         )
-        stdout = result.stdout[: self._TOOL_OUTPUT_FEEDBACK_LIMIT]
-        stderr = result.stderr[:1000]
+        # The model gets a distilled summary, not the raw dump: structured
+        # facts for known tools, a cleaned head-and-tail slice otherwise. The
+        # operator keeps the full output in the block above and the run record.
+        digest = summarize_for_model(
+            command,
+            result.stdout,
+            result.stderr,
+            exit_code,
+            run_id=result.run.id,
+            raw_limit=self._TOOL_OUTPUT_FEEDBACK_LIMIT,
+        )
         mark = " (background)" if background else ""
         return Message(
             role="user",
-            content=(
-                f"[tool result {name} exit={exit_code}]{mark}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            ),
+            content=f"[tool result {name} exit={exit_code}]{mark}\n{digest}",
         )
 
     def _write_tool_block(

@@ -7333,6 +7333,40 @@ def test_a_slow_command_goes_to_the_background_instead_of_holding_the_turn(
     asyncio.run(exercise())
 
 
+def test_model_gets_a_digest_while_the_block_keeps_full_output(tmp_path: Path) -> None:
+    """The model sees a distilled summary; the operator's block keeps it all."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Digest lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.0/24",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_shell_tool(
+                ToolCall(
+                    id="c1",
+                    name="shell_exec",
+                    arguments={"command": "for i in $(seq 1 50); do echo same; done"},
+                )
+            )
+            content = str(message.content)
+            # the model gets the collapsed digest with a pointer, not 50 lines
+            assert "(×50)" in content
+            assert "collapsed" in content
+            assert "full output in UI" in content
+            assert content.count("same") < 5
+            # the operator's block still carries every line
+            journal = app.query_one("#journal")
+            blocks = _tool_blocks_text(journal)
+            assert blocks.count("same") >= 50
+
+    asyncio.run(exercise())
+
+
 def test_shell_calls_of_one_round_run_together(tmp_path: Path) -> None:
     """Sequential awaits made four commands cost four commands' time."""
     stack = _minimal_stack(tmp_path)
@@ -7374,10 +7408,11 @@ def test_shell_calls_of_one_round_run_together(tmp_path: Path) -> None:
             assert overlap["peak"] == 4
             # each command may be seen twice: the approval dance re-runs it
             assert sorted(set(calls_seen)) == [f"echo {i}" for i in range(4)]
-            # results keep the call order even though they finish together
+            # results keep the call order even though they finish together:
+            # each digest's first body line is that command's own echo
             assert [m.content.split("\n")[1] for m in messages] == [
-                "stdout:",
-            ] * 4
+                str(i) for i in range(4)
+            ]
             assert ["hello" not in m.content for m in messages]
             assert app._running_tools == 0
 
