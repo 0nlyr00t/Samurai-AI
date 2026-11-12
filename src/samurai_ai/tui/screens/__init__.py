@@ -3,13 +3,13 @@
 from samurai_ai.tui.screens.access import AccessPromptScreen
 from samurai_ai.tui.screens.argument import ArgumentScreen
 from samurai_ai.tui.screens.board import BoardScreen, ItemDetailScreen
+from samurai_ai.tui.screens.connect import CUSTOM_ID, ConnectScreen
 from samurai_ai.tui.screens.custom_endpoint import CustomEndpointScreen
 from samurai_ai.tui.screens.help import HelpScreen
 from samurai_ai.tui.screens.inspector import InspectorScreen, Section
 from samurai_ai.tui.screens.key_capture import KeyCaptureScreen
 from samurai_ai.tui.screens.language import LanguagePromptScreen
 from samurai_ai.tui.screens.model_picker import (
-    ADD_CUSTOM_ID,
     REASONING_LEVELS,
     ModelPickerScreen,
 )
@@ -27,10 +27,11 @@ __all__ = [
     "ItemDetailScreen",
     "SessionDetailScreen",
     "SessionsScreen",
-    "ADD_CUSTOM_ID",
+    "CUSTOM_ID",
     "REASONING_LEVELS",
     "AccessPromptScreen",
     "ArgumentScreen",
+    "ConnectScreen",
     "CustomEndpointScreen",
     "HelpScreen",
     "InspectorScreen",
