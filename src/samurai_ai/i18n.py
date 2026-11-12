@@ -791,11 +791,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "project.current-marker": "  (current)",
         "project.switched": "[project] now working in {path}",
         "trust.title": (
-            "Trust this directory? Samurai AI will read, edit and run commands here."
+            "Trust this directory? Samurai AI runs commands here as your user."
         ),
         "trust.consequences": (
-            "Only trust a directory you created or control. "
-            "Trusting is remembered until you revoke it with /trust."
+            "Writes are confined to this directory; commands still run on the host "
+            "as you and can read elsewhere (use the sandbox for full isolation). "
+            "Trust only a directory you control; remembered until /trust."
         ),
         "trust.manifest-warning": (
             "This directory carries agent config ({files}) that can shape "
@@ -1626,11 +1627,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "newop.scope": "скоуп через запятую (пусто = только 127.0.0.1/32)",
         "newop.created": "новая вкладка операции: {name} ({mode})",
         "trust.title": (
-            "Довериться директории? Samurai AI будет читать, изменять и выполнять команды здесь."
+            "Довериться директории? Samurai AI выполняет команды здесь от вашего пользователя."
         ),
         "trust.consequences": (
-            "Доверяйте только директории, которую создали или контролируете. "
-            "Доверие сохранится, пока не отзовёте через /trust."
+            "Запись ограничена этой директорией; команды всё равно идут по хосту "
+            "от вас и могут читать шире (для полной изоляции — песочница). "
+            "Доверяйте только директории, которую контролируете; помнится до /trust."
         ),
         "trust.manifest-warning": (
             "В директории есть конфиг агента ({files}) — он влияет на то, "

@@ -84,11 +84,28 @@ def test_destructive_shapes_are_flagged() -> None:
         assert label in classify_command(command).destructive, command
 
 
-def test_write_outside_cwd_only_counts_with_a_cwd() -> None:
+def test_a_write_outside_the_trusted_roots_is_an_escape() -> None:
     command = "nmap -oX /tmp/scan.xml 10.10.10.10"
-    assert "write outside cwd" in classify_command(command, cwd="/work/op").destructive
-    assert "write outside cwd" not in classify_command(command, cwd="/tmp").destructive
-    assert classify_command(command).destructive == ()
+    # outside the only root -> flagged as a filesystem escape
+    assert classify_command(command, cwd="/work/op").escape == ("/tmp/scan.xml",)
+    # the write lands inside a trusted root -> no escape
+    assert classify_command(command, cwd="/tmp").escape == ()
+    # a second trusted root covers it too
+    assert (
+        classify_command(command, allowed_roots=("/work/op", "/tmp")).escape == ()
+    )
+    # with no boundary at all nothing can escape
+    assert classify_command(command).escape == ()
+
+
+def test_create_verbs_outside_the_boundary_are_escapes() -> None:
+    roots = ("/work/op",)
+    assert classify_command("mkdir -p /opt/evil", allowed_roots=roots).escape == (
+        "/opt/evil",
+    )
+    assert classify_command("touch /work/op/run/x", allowed_roots=roots).escape == ()
+    # a relative path stays in the working directory, never an escape
+    assert classify_command("mkdir work && touch out.txt", allowed_roots=roots).escape == ()
 
 
 def test_badges_are_bounded_and_deduplicated() -> None:

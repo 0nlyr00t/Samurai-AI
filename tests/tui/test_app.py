@@ -5275,7 +5275,7 @@ def _chat_ready_stack(tmp_path: Path, provider: object):
 
 async def _wait_busy(app, pilot) -> None:  # type: ignore[no-untyped-def]
     """Let the turn actually start; a press before that only arms the exit."""
-    for _ in range(300):  # a loaded CI box can take a while to schedule it
+    for _ in range(900):  # a loaded CI box can take a while to schedule it
         if app._chat_busy:
             return
         await asyncio.sleep(0.02)
@@ -10118,6 +10118,41 @@ def test_scope_agent_decides_autonomously(tmp_path: Path) -> None:
             assert included is False and "budget" in reason
             assert provider.calls == calls
 
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_write_outside_the_trusted_dir_is_blocked_in_yolo(tmp_path: Path) -> None:
+    """Filesystem confinement: mkdir outside the trusted dir is denied, not run."""
+    stack = _minimal_stack(tmp_path)  # trusts cwd by default
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Confine lab",
+        OperationMode.CTF_HTB,
+        ScopeContract(includes=("10.0.0.5",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            message = await app._run_shell_tool(
+                ToolCall(
+                    id="c1",
+                    name="shell_exec",
+                    arguments={"command": "mkdir /opt/evil"},
+                )
+            )
+            assert "denied" in message.content
+            # nothing was executed: no tool run was created for the blocked command
+            runs = stack[4].list_runs(operation.id)
+            assert all("/opt/evil" not in r.parameters.get("command", "") for r in runs)
+            # a write that stays inside cwd is not blocked by this gate
+            assert app._allowed_roots()[0] == str(app._cwd)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
