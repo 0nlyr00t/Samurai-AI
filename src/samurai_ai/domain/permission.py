@@ -306,17 +306,26 @@ def decide(
     risk: CommandRisk,
     *,
     reusable: bool = False,
+    autonomy: bool = False,
 ) -> Decision:
     """Order: deny → ask → allow → risk badge → mode.
 
     ``deny`` and ``ask`` are operator guards and outrank ``allow``; ``allow``
     outranks the advisory badge and the mode. Without a matching rule the
     behaviour is exactly the old one: a badge or the mode decides.
+
+    ``autonomy`` is the operator's explicit "the agent may set itself up"
+    (off by default). It lets a plain install — a filesystem escape that is
+    neither destructive nor credential-touching — proceed, so the agent can
+    provision its own tools inside an autonomy session. Destructive and
+    sensitive shapes stay gated, and the network scope is enforced elsewhere.
     """
     for action in ("deny", "ask", "allow"):
         for rule in rules:
             if rule.action == action and rule.matches(tool_id, command):
                 return Decision(action=action, rule=rule)
+    if autonomy and risk.escape and not risk.destructive and not risk.sensitive:
+        return Decision(action="allow")
     # A write outside the trusted directory is a boundary violation, not a risk
     # badge: the filesystem scope is enforced like the network scope. `ask`
     # offers it to the operator; yolo and never deny it — yolo means "don't ask
