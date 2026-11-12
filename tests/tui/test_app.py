@@ -5563,6 +5563,66 @@ def test_grey_process_lines_fold_into_one_line(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_quiet_mode_folds_successful_runs_into_one_group(tmp_path: Path) -> None:
+    """A burst of successful runs becomes one foldable group, not N blocks."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._exec_quiet = True  # the interactive default; forced under headless
+            app.query_one("#command-input", Input).value = "проверь вход"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            groups = [
+                b for b in journal.tool_blocks if "commands" in b._title.plain
+            ]
+            assert len(groups) == 1, "the two runs fold into a single group block"
+            group = groups[0]
+            # both commands are listed in the group body, collapsed by default
+            body = "\n".join(group._body)
+            assert "first-result" in body and "second-result" in body
+            assert not group.expanded
+            # no standalone per-run exec block was written in quiet mode
+            assert not any(
+                b._title.plain.startswith("⚙ exec") for b in journal.tool_blocks
+            )
+            # the model's answer closed the group
+            assert app._exec_group is None
+
+    asyncio.run(exercise())
+
+
+def test_verbose_mode_keeps_a_block_per_run(tmp_path: Path) -> None:
+    """/verbose restores a separate collapsible block for each run."""
+    provider = _TwoToolRoundsProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._exec_quiet = False
+            app.query_one("#command-input", Input).value = "проверь вход"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            exec_blocks = [
+                b for b in journal.tool_blocks if b._title.plain.startswith("⚙ exec")
+            ]
+            assert len(exec_blocks) == 2, "one block per run in verbose mode"
+            assert not any(
+                "commands" in b._title.plain for b in journal.tool_blocks
+            )
+
+    asyncio.run(exercise())
+
+
 def test_enter_on_an_empty_line_opens_the_folded_block(tmp_path: Path) -> None:
     provider = _TwoToolRoundsProvider()
     stack, operation = _chat_ready_stack(tmp_path, provider)
