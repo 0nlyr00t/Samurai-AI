@@ -816,7 +816,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chooser.title": "Choose your language / Выберите язык",
         "chooser.english": "English",
         "chooser.russian": "Русский",
-        "model.needs-key": "no key, Enter to set it",
         "oauth.usage": "[oauth] usage: /oauth <provider>",
         "oauth.not-configured": (
             "[oauth] {provider}: set model.oauth.{provider}.issuer and .client_id first"
@@ -832,7 +831,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.picker-hint": "Arrows to move, Tab switches column, Enter applies, Esc cancels",
         "model.selected": "default model: {model} | reasoning: {reasoning}",
         "model.empty": "No models available; check provider health",
-        "model.picker-add-custom": "+ Add custom OpenAI-compatible endpoint…",
         "model.current-marker": " (current)",
         "model.custom-title": "Add custom OpenAI-compatible endpoint",
         "model.custom-id": "endpoint id (lowercase, e.g. giga)",
@@ -851,6 +849,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.custom-manual": "or type a model name and press Enter",
         "model.custom-invalid": "endpoint id and base URL are required",
         "model.custom-failed": "failed: {error}",
+        "connect.title": "Connect a provider",
+        "connect.hint": "Arrows to move, Enter to connect, Esc cancels",
+        "connect.add-custom": "+ Other — custom OpenAI-compatible endpoint…",
+        "connect.status-local": "local",
+        "connect.status-connected": "connected",
+        "connect.status-needs-key": "needs API key",
+        "connect.current-marker": " (current)",
         "app.stop-hint": "stopping after the current results are checked — Ctrl+C again to exit",
         "chat.stop-note": "The operator stopped the run: check the results of every "
         "open hypothesis, show what they mean and finish this answer without "
@@ -1679,11 +1684,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Enter — применить, Esc — отмена"
         ),
         "model.selected": "модель по умолчанию: {model} | рассуждения: {reasoning}",
-        "model.needs-key": "нет ключа, Enter чтобы задать",
         "model.key-prompt": "API-ключ для {provider} (хранится в сейфе)",
         "model.key-saved": "[model] ключ сохранён для {provider}",
         "model.empty": "Нет доступных моделей; проверьте health провайдеров",
-        "model.picker-add-custom": "+ Добавить свой OpenAI-совместимый endpoint…",
         "model.current-marker": " (текущая)",
         "model.custom-title": "Добавление своего OpenAI-совместимого endpoint",
         "model.custom-id": "id endpoint'а (строчными, например giga)",
@@ -1704,6 +1707,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.custom-manual": "или введите имя модели и нажмите Enter",
         "model.custom-invalid": "нужны endpoint id и base URL",
         "model.custom-failed": "ошибка: {error}",
+        "connect.title": "Подключение провайдера",
+        "connect.hint": "Стрелки — выбор, Enter — подключить, Esc — отмена",
+        "connect.add-custom": "+ Другой — свой OpenAI-совместимый endpoint…",
+        "connect.status-local": "локальный",
+        "connect.status-connected": "подключён",
+        "connect.status-needs-key": "нужен API-ключ",
+        "connect.current-marker": " (текущий)",
         "app.stop-hint": (
             "останавливаю после проверки текущих результатов — Ctrl+C ещё раз для выхода"
         ),
