@@ -156,6 +156,8 @@ COMMANDS: tuple[CommandSpec, ...] = (
     # takes an optional word ("code") but must not open a prompt for it
     _spec("/copy", GROUP_VIEW, "_copy_last", argument=True),
     _spec("/expand", GROUP_VIEW, "_expand_outputs"),
+    _spec("/quiet", GROUP_VIEW, "_set_exec_quiet"),
+    _spec("/verbose", GROUP_VIEW, "_set_exec_verbose"),
     _spec(
         "/goal",
         GROUP_CONTROL,
