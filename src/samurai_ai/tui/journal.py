@@ -91,6 +91,26 @@ class UserBlock(SelectableBlock):
     """
 
 
+class NoticeBlock(SelectableBlock):
+    """An important event — a finding, a captured secret, an error — set apart.
+
+    A burst of runs can bury a one-line finding; a notice gets a thick accent
+    rail and padding so it stays visible in the flow, is tracked by the journal
+    so the operator can jump to the latest one, and still carries any entity
+    link in its text.
+    """
+
+    DEFAULT_CSS = """
+    NoticeBlock {
+        height: auto;
+        padding: 0 2;
+        margin: 0 1;
+        border-left: thick $accent-alt;
+        background: $panel;
+    }
+    """
+
+
 class StreamBlock(SelectableBlock):
     """Consecutive plain writes merged into one selectable block.
 
@@ -315,6 +335,9 @@ class BlockJournal(VerticalScroll, can_focus=False):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.tool_blocks: list[ToolBlock] = []
+        #: important events (findings, secrets, errors) set apart as NoticeBlocks,
+        #: tracked so the operator can jump to the latest one
+        self.notices: list[NoticeBlock] = []
         #: the stream block still being appended to. Read from `children[-1]`
         #: it was lost whenever a mount had not landed yet, and the lines
         #: written in that window started a second, orphaned block
@@ -332,6 +355,7 @@ class BlockJournal(VerticalScroll, can_focus=False):
 
     def clear(self) -> None:
         self.tool_blocks.clear()
+        self.notices.clear()
         self._last_stream = None
         self.remove_children()
 
@@ -411,6 +435,25 @@ class BlockJournal(VerticalScroll, can_focus=False):
                 block.toggle()
                 return block
         return None
+
+    def add_notice(self, renderable: Any) -> NoticeBlock:
+        """An important event, set apart with an accent rail and tracked."""
+        block = NoticeBlock(renderable)
+        self.notices.append(block)
+        self._mount(block)
+        return block
+
+    def last_notice(self) -> NoticeBlock | None:
+        return self.notices[-1] if self.notices else None
+
+    def scroll_to_notice(self) -> NoticeBlock | None:
+        """Bring the most recent notice into view (turns follow off)."""
+        block = self.last_notice()
+        if block is None:
+            return None
+        self._follow = False
+        self.call_after_refresh(lambda: self.scroll_to_widget(block, animate=False))
+        return block
 
     # -- internals ------------------------------------------------------
 
