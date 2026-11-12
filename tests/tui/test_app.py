@@ -821,6 +821,42 @@ def test_tabs_switch_views(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_loot_tab_shows_findings_creds_and_flags(tmp_path: Path) -> None:
+    """The Loot tab gathers findings, captured credentials and flags in one view."""
+    stack = _minimal_stack(tmp_path)
+    service, kernel, settings = stack[0], stack[1], stack[2]
+    vault, ctf = stack[5], stack[10]
+    settings.set_locale("en")
+    operation = service.create(
+        "Loot lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    kernel.create_finding(operation.id, "SQLi on /login")
+    vault.add("admin-password", "hunter2", operation.id)
+    ctf.ctf.add_flag(
+        FlagRecord(operation_id=operation.id, name="user", value="HTB{l00t}"),
+        OperationEvent(operation_id=operation.id, event_type="flag.captured", payload={}),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            tabs = app.query_one("#view-tabs", Tabs)
+            switcher = app.query_one("#views", ContentSwitcher)
+            tabs.active = "tab-loot"
+            await pilot.pause()
+            assert switcher.current == "view-loot"
+            loot_log = app.query_one("#view-loot", BlockJournal)
+            text = "\n".join(strip.text for strip in loot_log.lines)
+            assert "FINDINGS" in text and "SQLi on /login" in text
+            assert "CREDENTIALS" in text and "admin-password" in text
+            assert "FLAGS" in text and "HTB{l00t}" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_command_suggestions(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
