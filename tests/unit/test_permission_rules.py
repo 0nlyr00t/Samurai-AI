@@ -162,3 +162,21 @@ def test_a_broken_stored_line_does_not_take_the_others_down(tmp_path: Path) -> N
         "permission.rules", json.dumps(["allow shell.exec: git *", "nonsense", 42])
     )
     assert [r.format() for r in settings.permission_rules()] == ["allow shell.exec: git *"]
+
+
+def test_a_write_outside_the_trusted_dir_is_confined() -> None:
+    """The filesystem boundary is enforced: ask prompts, yolo/never deny."""
+    escape = CommandRisk(escape=("/opt/evil",))
+
+    def action(mode: PermissionMode, **kwargs: object) -> str:
+        return decide((), "shell.exec", "mkdir /opt/evil", mode, escape, **kwargs).action
+
+    assert action(PermissionMode.ASK) == "ask"
+    assert action(PermissionMode.YOLO) == "deny"
+    assert action(PermissionMode.YOLO, reusable=True) == "deny"
+    assert action(PermissionMode.NEVER) == "deny"
+    # an explicit allow rule is the operator's own override and still wins
+    allowed = (rule("allow shell.exec: *"),)
+    assert decide(
+        allowed, "shell.exec", "mkdir /opt/evil", PermissionMode.YOLO, escape
+    ).action == "allow"
