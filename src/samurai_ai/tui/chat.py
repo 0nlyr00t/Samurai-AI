@@ -1897,6 +1897,7 @@ class ChatController:
                 mode,
                 risk,
                 reusable=self._reusable_approval(tool_id),
+                autonomy=self._autonomy_enabled(),
             )
             if decision.is_denied:
                 allowed_by_id[call.id] = False
@@ -2774,6 +2775,7 @@ class ChatController:
                 mode,
                 risk,
                 reusable=self._reusable_approval(tool_id),
+                autonomy=self._autonomy_enabled(),
             )
             if decision.is_denied:
                 self._write_dim(
@@ -3292,6 +3294,29 @@ class ChatController:
         self._exec_quiet = False
         self._close_exec_group()
         self._write_dim(self.translator.t("chat.verbose-on"), process=False)
+
+    def _autonomy_enabled(self) -> bool:
+        """Operator opt-in (off by default): the agent may install and run
+        freely within its trusted dir + scope. Only relaxes non-destructive,
+        non-sensitive filesystem escapes (installs); scope and destructive
+        shapes stay gated."""
+        value = (self.settings.get_value("agent.autonomy") or "").strip().lower()
+        return value in ("1", "true", "on", "yes")
+
+    def _toggle_autonomy(self, argument: str = "") -> None:
+        """`/autonomy [on|off]`: flip the agent's workspace autonomy."""
+        arg = argument.strip().lower()
+        if arg in ("on", "1", "true", "yes"):
+            new = True
+        elif arg in ("off", "0", "false", "no"):
+            new = False
+        else:
+            new = not self._autonomy_enabled()
+        self.settings.set_value("agent.autonomy", "1" if new else "0")
+        self._write_dim(
+            self.translator.t("autonomy.on" if new else "autonomy.off"), process=False
+        )
+        self._refresh_chrome()
 
     def _copy_last(self, what: str = "text") -> None:
         """`/copy` takes the last answer; `/copy code` only its code block."""

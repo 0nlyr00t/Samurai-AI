@@ -4631,6 +4631,8 @@ class SamuraiApp(
         bar.append(f" {mode.value}")
         if self._plan_mode:
             bar.append(" | plan", style=self.paint("$accent"))
+        if self._autonomy_enabled():
+            bar.append(" | auto", style=self.paint("bold risk-mid"))
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
             bar.append(f" | model={model} reasoning={reasoning}")
