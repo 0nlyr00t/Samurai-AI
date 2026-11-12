@@ -24,6 +24,18 @@ def test_write_profile_binds_root_read_only_and_roots_writable() -> None:
     assert _pair(argv, "--chdir") == ["--chdir", "/home/op/work"]
 
 
+def test_dev_and_proc_overlay_after_the_readonly_root() -> None:
+    """A whole-host ro-bind must not shadow the virtual /dev (breaks ssh)."""
+    argv = build_bwrap_argv(["bash", "-lc", "id"], ("/home/op/work",))
+    ro_root = argv.index("--ro-bind")
+    assert argv[ro_root + 1 : ro_root + 3] == ["/", "/"]
+    # /dev and /proc are overlaid AFTER the read-only root, or the host's
+    # read-only /dev re-binds over them and /dev/null + the pty become unusable
+    assert argv.index("--dev") > ro_root
+    assert argv.index("--proc") > ro_root
+    assert _pair(argv, "--dev") == ["--dev", "/dev"]
+
+
 def test_strict_profile_exposes_only_system_dirs_not_the_whole_host() -> None:
     argv = build_bwrap_argv(["bash", "-lc", "id"], ("/home/op/work",), strict=True)
     # no blanket read-only root in strict mode: home outside the root is invisible
