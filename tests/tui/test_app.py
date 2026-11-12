@@ -1630,6 +1630,28 @@ def test_plus_button_creates_operation_tab(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_long_operation_title_is_clamped_in_the_chat_tab(tmp_path: Path) -> None:
+    """A long auto-title must not eat the tab row and hide the Loot tab."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._auto_title = "Root the very long HTB target box with everything"
+            label = app._chat_tab_label()
+            assert len(label) <= app._CHAT_TAB_LABEL_MAX
+            assert label.endswith("…")
+            # all six view tabs are present, Loot included
+            tabs = app.query_one("#view-tabs", Tabs)
+            ids = {str(t.id) for t in tabs.query(Tab)}
+            assert "tab-loot" in ids
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_mouse_toggle_switches_capture_setting(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     settings = stack[2]
