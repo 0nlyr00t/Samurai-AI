@@ -744,6 +744,8 @@ class SamuraiApp(
 
     def on_mount(self) -> None:
         self._thread_id = threading.get_ident()
+        # host shell.exec is confined to the trusted roots when bwrap is available
+        self.execution.sandbox_policy = self._sandbox_policy
         self._apply_mouse()
         # a finished drag copies itself — the operator should never think
         # about *how* to copy; like Claude Code, selection IS the copy
@@ -2077,10 +2079,35 @@ class SamuraiApp(
 
         The working directory plus every trusted directory (stored or this
         session). A write to an absolute path outside all of these is confined
-        by ``decide`` — the filesystem counterpart of the network scope.
+        by ``decide`` (Layer 1) and by the bwrap sandbox (Layer 2) — the
+        filesystem counterpart of the network scope.
         """
         roots = [str(self._cwd), *self._stored_trusted_dirs(), *sorted(self._session_trusted)]
         return tuple(dict.fromkeys(roots))
+
+    def _sandbox_mode(self) -> str:
+        """Host-shell confinement profile from settings: off | write | strict."""
+        value = (self.settings.get_value("tui.sandbox") or "write").strip().lower()
+        return value if value in ("off", "write", "strict") else "write"
+
+    def _sandbox_policy(self) -> tuple[str, tuple[str, ...]]:
+        """What the execution service hands the host shell before each run."""
+        return self._sandbox_mode(), self._allowed_roots()
+
+    def _cycle_sandbox(self) -> None:
+        """`/sandbox`: cycle host-shell confinement off -> write -> strict."""
+        from samurai_ai.execution.native_sandbox import bwrap_available
+
+        order = ("off", "write", "strict")
+        nxt = order[(order.index(self._sandbox_mode()) + 1) % len(order)]
+        self.settings.set_value("tui.sandbox", nxt)
+        if nxt != "off" and not bwrap_available():
+            self._write_line(
+                "[sandbox] " + self.translator.t("sandbox.unavailable", mode=nxt)
+            )
+        else:
+            self._write_line("[sandbox] " + self.translator.t("sandbox.mode", mode=nxt))
+        self._refresh_chrome()
 
     @property
     def _permission_mode(self) -> PermissionMode:
