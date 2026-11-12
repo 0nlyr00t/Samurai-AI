@@ -5286,6 +5286,61 @@ def _chat_ready_stack(tmp_path: Path, provider: object):
     return stack, operation
 
 
+class _TitleProvider:
+    """Answers any call with a fixed gist — stands in for the fast title model."""
+
+    def __init__(self, title: str = "Root the HTB target") -> None:
+        self.title = title
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, Usage
+
+        return ChatResponse(
+            text=self.title,
+            usage=Usage(prompt_tokens=3, completion_tokens=2),
+            model_id=request.model_id, provider_id="gpt", latency_ms=1,
+        )
+
+
+def test_refine_title_replaces_the_first_words_with_a_gist(tmp_path: Path) -> None:
+    """A cheap model turns the first-words placeholder into the task's gist."""
+    stack, operation = _chat_ready_stack(tmp_path, _TitleProvider())
+    placeholder = "получить user.txt и"
+    # mirror _start_chat: the operation and tab start named after the first words
+    stack[0].rename(operation.id, placeholder)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._auto_title = placeholder
+            await app._refine_title(
+                "получи user.txt и root.txt на HTB", "gpt/test-model@v1",
+                operation.id, placeholder,
+            )
+            assert app.service.get(operation.id).name == "Root the HTB target"
+            assert app._auto_title == "Root the HTB target"
+            # an operator rename is never clobbered by a late title
+            stack[0].rename(operation.id, "My own name")
+            app._auto_title = "My own name"
+            await app._refine_title(
+                "получи user.txt и root.txt на HTB", "gpt/test-model@v1",
+                operation.id, placeholder,
+            )
+            assert app.service.get(operation.id).name == "My own name"
+            assert app._auto_title == "My own name"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_ctrl_c_stops_the_run_and_a_second_press_leaves(tmp_path: Path) -> None:
     """A stop finishes the round; an idle press only arms the exit."""
     provider = _TwoToolRoundsProvider()
