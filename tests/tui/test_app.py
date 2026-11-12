@@ -5550,7 +5550,10 @@ def test_a_tool_handler_error_becomes_a_result_not_a_crash(tmp_path: Path) -> No
                     ToolCall(id="1", name="close_intent", arguments={"intent": "x"})
                 )
             assert "error: boom" in message.content
-            assert any("boom" in _message_text(m) for m in messages)
+            # errors now land as a tracked notice, not a plain stream line
+            assert any("boom" in str(b._render()) for b in journal.notices) or any(
+                "boom" in _message_text(m) for m in messages
+            )
 
     asyncio.run(exercise())
 
@@ -5641,6 +5644,35 @@ def test_verbose_mode_keeps_a_block_per_run(tmp_path: Path) -> None:
             assert not any(
                 "commands" in b._title.plain for b in journal.tool_blocks
             )
+
+    asyncio.run(exercise())
+
+
+def test_important_events_land_as_tracked_notices(tmp_path: Path) -> None:
+    """Findings and errors set apart as notices; badge counts; /last jumps."""
+    from samurai_ai.tui.journal import NoticeBlock
+
+    stack, operation = _chat_ready_stack(tmp_path, _TwoToolRoundsProvider())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            # a finding-style notice with an entity link, and a captured secret
+            app._write_notice("◆ finding f1", kind="finding", ref="f1")
+            app._write_notice("🔑 secret db-pass")
+            await pilot.pause()
+            assert len(journal.notices) == 2
+            assert all(isinstance(b, NoticeBlock) for b in journal.notices)
+            text = "\n".join(str(b._render()) for b in journal.notices)
+            assert "finding f1" in text and "db-pass" in text
+            # the status bar carries the notice badge
+            app._refresh_chrome()
+            assert "⚑ 2" in str(app.query_one("#status-bar", Static).render())
+            # /last scrolls to the most recent notice
+            assert journal.scroll_to_notice() is journal.notices[-1]
+            await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
 
@@ -5738,7 +5770,8 @@ def test_a_failed_turn_shows_its_process_log_without_a_press(tmp_path: Path) -> 
                 await pilot.pause()
             text = "\n".join(_message_text(m) for m in messages)
             blocks = _tool_blocks_text(journal)
-            assert "boom" in text + blocks
+            notices = "\n".join(str(b._render()) for b in journal.notices)
+            assert "boom" in text + blocks + notices
             assert any(
                 b.expanded and "thinking ·" in b._title.plain for b in journal.tool_blocks
             ), "the thinking block opens on its own after a failed turn"

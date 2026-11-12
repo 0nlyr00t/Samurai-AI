@@ -2458,7 +2458,8 @@ class ChatController:
         refresh = getattr(self, "_refresh_side_blocks", None)
         if refresh is not None:
             refresh()
-        self._write_dim(self.translator.t("side.secret-saved", name=name), process=False)
+        # a captured credential is loot — set it apart, not a grey status line
+        self._write_notice("🔑 " + self.translator.t("side.secret-saved", name=name))
         return Message(
             role="user",
             content=f"[tool remember_secret] stored as {{{{{name}}}}} (operation vault)",
@@ -2534,11 +2535,11 @@ class ChatController:
             return Message(role="user", content=f"[tool propose_finding] {exc}")
         self._progress.finding_seen()
         self._note_structure_written()
-        self._write_entity_line(
+        self._write_notice(
             "◆ " + self.translator.t("graph.finding", finding=finding.id, title=finding.title),
-            "finding",
-            finding.id,
-            self.translator.t("inspect.more"),
+            kind="finding",
+            ref=finding.id,
+            label=self.translator.t("inspect.more"),
         )
         # a finding is the one thing worth showing the moment it lands
         self.refresh_hunt()
@@ -3229,6 +3230,45 @@ class ChatController:
                 entity_span(label, kind, ref, base_style=self.paint("accent")),
             )
         )
+
+    def _write_notice(
+        self,
+        text: str,
+        *,
+        kind: str | None = None,
+        ref: str | None = None,
+        label: str | None = None,
+        style: str = "bold $accent-alt",
+    ) -> None:
+        """An important event, set apart so a burst of runs can't bury it.
+
+        Findings, captured secrets and errors land as an accent-railed block the
+        journal tracks; the status bar counts them and `/last` jumps to the most
+        recent. An optional entity link keeps the drill-in.
+        """
+        journal = self.query_one("#journal", BlockJournal)
+        body = Text(text, style=self.paint(style) if style else "")
+        if kind and ref:
+            body.append("  ")
+            body.append_text(
+                entity_span(
+                    label or self.translator.t("inspect.more"),
+                    kind,
+                    ref,
+                    base_style=self.paint("accent"),
+                )
+            )
+        journal.add_notice(body)
+        try:
+            self._refresh_chrome()
+        except Exception:  # noqa: BLE001 - the badge is a nicety, never a blocker
+            pass
+
+    def _jump_to_last_notice(self) -> None:
+        """`/last`: scroll to the most recent important block."""
+        journal = self.query_one("#journal", BlockJournal)
+        if journal.scroll_to_notice() is None:
+            self._write_dim(self.translator.t("chat.notice-none"), process=False)
 
     @property
     def _collapsed(self) -> list[ToolBlock]:
