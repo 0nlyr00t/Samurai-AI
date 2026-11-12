@@ -484,6 +484,11 @@ class SamuraiApp(
         self._session_allowed_tools: set[str] = set()
         self._background_results: list[Any] = []
         self._auto_title: str | None = None
+        # the cosmetic fast-model tab rename. None means "decide on first use":
+        # on in the real interactive app, off under a headless drive (tests,
+        # bench, eval) so its extra model call never desyncs a scripted provider
+        # or lands in the measured metrics. A headless test may force it on.
+        self._auto_title_enabled: bool | None = None
         self._tab_activations_seen: int = 0
         self._selection_copy_timer: Timer | None = None
         self._last_auto_copy: str | None = None
