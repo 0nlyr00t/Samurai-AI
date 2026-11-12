@@ -266,6 +266,11 @@ class ChatController:
         _plan_mode: bool
         _auto_title: str | None
         _auto_title_enabled: bool | None
+        _exec_quiet: bool | None
+        _exec_group: Any
+        _exec_group_rows: list[str]
+        _exec_group_ok: int
+        _exec_group_fail: int
         is_headless: bool
         # properties on the app, so declared loosely here
         _permission_mode: Any
@@ -3095,23 +3100,34 @@ class ChatController:
         """The journal block and the model-facing result of a finished run."""
         exit_code = result.run.exit_code
         self._progress.last_stuck = None if self._graph_used else self._progress.record(command)
-        # The run lands as a collapsible block; a failure opens on its own.
-        self._write_tool_block(
-            self.translator.t(
-                "chat.tool-collapsed",
-                command=_short_tool(tool_id, command),
-                code=exit_code,
-                code_mark="" if exit_code == 0 else f" ✗{exit_code}",
-                lines=len(result.stdout.strip().splitlines()),
-            ),
-            exit_code,
-            result.stdout,
-            result.stderr,
-            run_id=result.run.id,
-        )
-        # The model gets a distilled summary, not the raw dump: structured
-        # facts for known tools, a cleaned head-and-tail slice otherwise. The
-        # operator keeps the full output in the block above and the run record.
+        failed = exit_code not in (0, None)
+        if self._exec_quiet is None:
+            # quiet in the real interactive app, a block per run under a headless
+            # drive so existing per-run assertions keep holding
+            self._exec_quiet = not self.is_headless
+        lines = len(result.stdout.strip().splitlines())
+        if self._exec_quiet and not failed:
+            # a successful run folds into the rolling group, not its own block
+            self._append_exec_group(command, lines)
+        else:
+            # a failure (or verbose mode) speaks for itself and ends the group
+            self._close_exec_group()
+            self._write_tool_block(
+                self.translator.t(
+                    "chat.tool-collapsed",
+                    command=_short_tool(tool_id, command),
+                    code=exit_code,
+                    code_mark="" if exit_code == 0 else f" ✗{exit_code}",
+                    lines=lines,
+                ),
+                exit_code,
+                result.stdout,
+                result.stderr,
+                run_id=result.run.id,
+            )
+        # The model gets a distilled summary, not the raw dump: structured facts
+        # for known tools, a cleaned head-and-tail slice otherwise. The operator
+        # keeps the full output in the block/group above and the run record.
         digest = summarize_for_model(
             command,
             result.stdout,
@@ -3164,6 +3180,46 @@ class ChatController:
         )
         self._current_tool = ""
 
+    def _exec_group_title(self) -> str:
+        return self.translator.t("chat.exec-group", count=self._exec_group_ok)
+
+    def _append_exec_group(self, command: str, lines: int) -> None:
+        """Fold a successful run into the rolling group block (quiet mode).
+
+        A burst of commands becomes one foldable entry — `⚙ 7 commands` — that
+        opens to the per-command list, so routine runs never bury the narrative.
+        The full output stays in the run record (reachable from Loot/inspector).
+        """
+        journal = self.query_one("#journal", BlockJournal)
+        # the group row keeps the real (bounded) command, unlike the heavily
+        # abbreviated status-bar form, so the folded list stays readable
+        row = self.translator.t(
+            "chat.exec-group-row", command=_one_line(_bounded(command, 72)), lines=lines
+        )
+        if self._exec_group is None or not getattr(self._exec_group, "is_mounted", False):
+            self._exec_group_rows = []
+            self._exec_group_ok = 0
+            self._exec_group_fail = 0
+            self._exec_group = journal.add_tool_block(
+                Text(self._exec_group_title(), style=self.paint(self._DIM_STYLE)),
+                [],
+                body_style=self.paint(self._DIM_STYLE),
+            )
+        self._exec_group_rows.append(row)
+        self._exec_group_ok += 1
+        self._exec_group.set_title(
+            Text(self._exec_group_title(), style=self.paint(self._DIM_STYLE))
+        )
+        self._exec_group.set_body(self._exec_group_rows, self.paint(self._DIM_STYLE))
+        self._current_tool = ""
+
+    def _close_exec_group(self) -> None:
+        """End the current run group; the next run starts a fresh one."""
+        self._exec_group = None
+        self._exec_group_rows = []
+        self._exec_group_ok = 0
+        self._exec_group_fail = 0
+
     def _write_entity_line(self, prefix: str, kind: str, ref: str, label: str) -> None:
         """A journal line whose tail is a clickable entity link."""
         journal = self.query_one("#journal", BlockJournal)
@@ -3185,6 +3241,17 @@ class ChatController:
         journal = self.query_one("#journal", BlockJournal)
         if journal.expand_oldest() is None:
             self._write_dim(self.translator.t("chat.expand-empty"))
+
+    def _set_exec_quiet(self) -> None:
+        """`/quiet`: fold routine successful runs into one group block."""
+        self._exec_quiet = True
+        self._write_dim(self.translator.t("chat.quiet-on"), process=False)
+
+    def _set_exec_verbose(self) -> None:
+        """`/verbose`: a separate collapsible block per run, as it was."""
+        self._exec_quiet = False
+        self._close_exec_group()
+        self._write_dim(self.translator.t("chat.verbose-on"), process=False)
 
     def _copy_last(self, what: str = "text") -> None:
         """`/copy` takes the last answer; `/copy code` only its code block."""
