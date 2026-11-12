@@ -51,7 +51,7 @@ class ApprovalMeta:
     #: catalogue version of the tool, when the tool comes from a recipe
     tool_version: int = 0
     cwd: str = ""
-    #: native host, relay (with its command) or the pinned container
+    #: native host or the pinned container
     execution_path: str = ""
     timeout_s: float = 0.0
     destructive: tuple[str, ...] = ()

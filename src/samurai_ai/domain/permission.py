@@ -353,8 +353,7 @@ _LONG_COMMANDS = frozenset(
         "subfinder", "amass", "testssl.sh", "enum4linux",
     }
 )
-#: Short leash for quick families, long for sweeps; a relayed run doubles both
-#: because the far side of a VPN answers on its own schedule.
+#: Short leash for quick families, long for sweeps.
 DEFAULT_WINDOW_SECONDS = 120.0
 QUICK_WINDOW_SECONDS = 25.0
 LONG_WINDOW_SECONDS = 900.0
@@ -549,7 +548,7 @@ def command_signature(command: str) -> str:
     return " ".join(parts) or canonical_command(command)
 
 
-def command_window(command: str, *, relayed: bool = False) -> float:
+def command_window(command: str) -> float:
     """How long to give a command before it is a timeout rather than work.
 
     A flat 120 s killed every `nmap -p-` after two minutes of real scanning (six
@@ -570,4 +569,4 @@ def command_window(command: str, *, relayed: bool = False) -> float:
         window = QUICK_WINDOW_SECONDS
     else:
         window = DEFAULT_WINDOW_SECONDS
-    return window * (2 if relayed else 1)
+    return window
