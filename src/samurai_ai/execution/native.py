@@ -10,7 +10,6 @@ summary, and a missing binary is its own status instead of a generic failure.
 from __future__ import annotations
 
 import asyncio
-import shlex
 import shutil
 from pathlib import Path
 from typing import Any
@@ -86,7 +85,6 @@ def _env_allowlist() -> dict[str, str]:
 class NativeTool:
     """A catalogue recipe bound to its typed adapter's definition."""
 
-    relay_supported = True
     #: tells the service this adapter builds its own argv (no sandbox runner)
     is_native = True
 
@@ -104,7 +102,6 @@ class NativeTool:
         self._runner = runner
         self._path = executable_path
         self._script_dir = script_dir
-        self.relay = ""
 
     @property
     def definition(self) -> ToolDefinition:
@@ -129,9 +126,6 @@ class NativeTool:
         return self.recipe.limits.timeout_seconds
 
     def resolved_available(self) -> bool:
-        if self.relay:
-            # the tool lives on the far side: the local binary proves nothing
-            return True
         if self.recipe.execution.project_local:
             script = self.script
             return bool(self.path and script is not None and script.exists())
@@ -140,9 +134,6 @@ class NativeTool:
     def _runner_manager(self) -> ProcessManager:
         if self._runner is None:
             allowed = {self.recipe.executable}
-            if self.relay:
-                # the relay prefix is the executable that actually spawns here
-                allowed.add(shlex.split(self.relay)[0].rsplit("/", 1)[-1])
             self._runner = ProcessManager(allowed_executables=frozenset(allowed))
         return self._runner
 
@@ -157,16 +148,14 @@ class NativeTool:
     def preflight(self, params: dict[str, Any]) -> None:
         """Everything that can fail is checked before the approval is asked."""
         render_native_argv(self.recipe, self._with_script(params))
-        if not self.path and not self.relay:
+        if not self.path:
             raise MissingBinaryError(self.recipe.id, self.recipe.executable)
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         executable = self.path or self.recipe.executable
-        if not self.path and not self.relay:
+        if not self.path:
             raise MissingBinaryError(self.recipe.id, self.recipe.executable)
         argv = [executable, *render_native_argv(self.recipe, self._with_script(params))]
-        if self.relay:
-            argv = [*shlex.split(self.relay), *argv]
         if any("\x00" in argument for argument in argv):
             raise ToolValidationError(f"{self.recipe.id}: argv cannot contain NUL")
         result = asyncio.run(

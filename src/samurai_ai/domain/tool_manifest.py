@@ -143,7 +143,6 @@ class ManifestExecution(BaseModel):
     native_preferred: bool = True
     project_local: bool = False
     container: bool = True
-    relay_supported: bool = False
     #: working directory, relative to the operation's, when one is needed
     workdir: str = ""
 

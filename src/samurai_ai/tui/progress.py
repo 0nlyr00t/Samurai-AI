@@ -50,10 +50,10 @@ def direction(command: str) -> str | None:
     binary = tokens[0].rsplit("/", 1)[-1].lower()
     rest = tokens[1:]
     if binary == "prlctl":
-        # a relay wrapper: the interesting command is the one it runs remotely,
-        # and its uuid would otherwise be the same for every call — but only a
-        # uuid-shaped token goes, not a remote command that happens to carry
-        # dashes (`bash -c 'nmap -p- …'` is not a uuid)
+        # a guest-exec wrapper: the interesting command is the one it runs
+        # remotely, and its uuid would otherwise be the same for every call — but
+        # only a uuid-shaped token goes, not a remote command that happens to
+        # carry dashes (`bash -c 'nmap -p- …'` is not a uuid)
         rest = [
             token
             for token in rest

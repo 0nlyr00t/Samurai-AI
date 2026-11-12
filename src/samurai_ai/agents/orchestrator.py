@@ -93,8 +93,6 @@ MAX_CONSECUTIVE_REJECTS = 5
 REPEAT_THRESHOLD = 3
 #: the same *place* called this often inside the window earns a note (a changing
 #: payload still counts), and this often again after the note ends the run
-#: a relayed command line (prlctl over ssh, a wrapper script) makes every call
-#: look alike, so the window is wider than the plain-shell case needs
 SITE_WINDOW = 16
 SITE_NUDGE = 8
 SITE_STOP = 14
@@ -925,7 +923,6 @@ class AgentOrchestrator:
             )
             genes = self._genes_excerpt() if level < 1 else ""
             tools = self._tools_excerpt() if level < 2 else ""
-            relay = self._relay_notice(operation_id)
             scope_line = self._scope_notice(operation_id)
             # the already-run digest is memory the per-step guards lack; drop it
             # first when the window is tight (level 2+) since it is advisory
@@ -935,7 +932,6 @@ class AgentOrchestrator:
                 f"{genes}"
                 f"{tools}\n"
                 f"{scope_line}"
-                f"{relay}"
                 f"{tried}"
                 f"{rejection_notes}"
                 f"Current step: {step}\n"
@@ -1416,26 +1412,6 @@ class AgentOrchestrator:
             "output or change approach instead of re-issuing a variant:\n"
             f"{lines}\n"
             "A line marked timeout or fail more than once is a dead end — stop.]\n"
-        )
-
-    def _relay_notice(self, operation_id: str) -> str:
-        """Tell the agent its sandbox tools already travel through the relay.
-
-        Without this line the model "works around" an unreachable host with raw
-        shell commands and host loopback URLs, burning rejections on the way.
-        """
-        relay = self.operations.get(operation_id).relay.strip()
-        if not relay:
-            return ""
-        return (
-            f"[network tools are relayed through `{relay}`. The sandbox adapters "
-            "(scan.nmap, recon.httpx-probe, fuzz.ffuf, scan.nuclei) and http.fetch "
-            "already go through it — call those. shell.exec runs on the host, which has NO "
-            "route to the target: a bare curl/nmap there shows 'filtered' and is "
-            "a dead end unless it prefixes the same relay. Address the target by "
-            "its own IP. 127.0.0.1 under a relay is the VM itself, not the "
-            "target — use it only if the target really is the VM. The blackboard "
-            "`shared.relay.tools` lists what exists there: a missing tool fails.]\n"
         )
 
     def _genes_excerpt(self) -> str:
