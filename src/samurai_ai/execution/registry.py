@@ -345,10 +345,15 @@ class ShellExecTool:
     relay_supported = True
 
     def __init__(self, manager: ProcessManager | None = None) -> None:
+        # bwrap is allowed so a sandboxed run can front the shell with it
         self.manager = manager or ProcessManager(
-            allowed_executables=frozenset({"bash", "sh"})
+            allowed_executables=frozenset({"bash", "sh", "bwrap"})
         )
         self.relay = ""
+        #: OS-level confinement set per run by the host: "off" | "write" | "strict"
+        self.sandbox_mode = "off"
+        #: directories a sandboxed command may write under (the trusted roots)
+        self.sandbox_roots: tuple[str, ...] = ()
         self._definition = ToolDefinition(
             id="shell.exec",
             version=1,
@@ -390,9 +395,22 @@ class ShellExecTool:
         else:
             self.manager.stall_seconds = DEFAULT_STALL_SECONDS
         shell = "bash" if shutil.which("bash") else "sh"
+        argv = [shell, "-lc", command]
+        # a relayed command runs on the far side, where this host's sandbox does
+        # not apply; natively, confine it to the trusted roots when asked and able
+        if not self.relay and self.sandbox_mode != "off" and self.sandbox_roots:
+            from samurai_ai.execution.native_sandbox import (
+                build_bwrap_argv,
+                bwrap_available,
+            )
+
+            if bwrap_available():
+                argv = build_bwrap_argv(
+                    argv, self.sandbox_roots, strict=self.sandbox_mode == "strict"
+                )
         result = asyncio.run(
             self.manager.run(
-                [shell, "-lc", command],
+                argv,
                 # a live sweep gets minutes, a banner grab seconds: one flat 120 s
                 # window killed every `nmap -p-` while stalling every `curl`
                 timeout_seconds=command_window(command, relayed=bool(self.relay)),
