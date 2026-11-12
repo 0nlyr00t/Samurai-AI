@@ -738,8 +738,7 @@ class DockerSandboxRunner:
             network=network,
         )
         await self.preflight(profile)
-        # the watcher is per profile: nmap and a browser legitimately go quiet;
-        # a relay runner keeps its own (output arrives at process end there)
+        # the watcher is per profile: nmap and a browser legitimately go quiet
         previous_stall = self.manager.stall_seconds
         if getattr(self, "honor_profile_stall", True):
             self.manager.stall_seconds = float(profile.stall_seconds)

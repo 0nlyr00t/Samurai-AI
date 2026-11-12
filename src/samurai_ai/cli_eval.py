@@ -72,11 +72,6 @@ def register_eval_commands(
         default=[],
         help="target host or address in scope (repeatable); required",
     )
-    bench.add_argument(
-        "--relay",
-        default="",
-        help="relay prefix every command goes through, e.g. 'ssh -F conf vm'",
-    )
     bench.add_argument("--model", default="", help="model id; the app default when omitted")
     bench.add_argument(
         "--only", action="append", default=[], help="run only this scenario id (repeatable)"
@@ -146,7 +141,6 @@ def _handle_bench(args: argparse.Namespace, services: tuple[Any, ...]) -> int:
         report = runner.run(
             args.suite,
             hosts=tuple(args.host),
-            relay=args.relay,
             model_id=args.model,
             only=tuple(args.only),
         )

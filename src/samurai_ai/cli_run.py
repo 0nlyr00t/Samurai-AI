@@ -30,24 +30,12 @@ def add_run_command(subcommands: Any, add_parser: Any) -> None:
     run.add_argument("--task", action="append", dest="tasks", default=[], metavar="TITLE")
     run.add_argument("--objective", default="")
     run.add_argument(
-        "--relay",
-        default="",
-        metavar="PREFIX",
-        help="run network tools through this prefix, e.g. prlctl exec <vm-uuid>",
-    )
-    run.add_argument(
         "--fallback",
         action="append",
         default=[],
         dest="fallbacks",
         metavar="MODEL_ID",
         help="try this model when the first one is unavailable",
-    )
-    run.add_argument(
-        "--no-relay-host",
-        dest="relay_host",
-        action="store_false",
-        help="do not add the relay host's own address to the scope",
     )
     run.add_argument(
         "--no-preflight",
@@ -78,7 +66,6 @@ def _prepare(args: argparse.Namespace, operations: Any, kernel: Any) -> tuple[st
         scope,
         objective=args.objective,
         offline=args.offline,
-        relay=args.relay,
     )
     tasks = [title.strip() for title in args.tasks if title.strip()]
     if not tasks:
@@ -112,12 +99,7 @@ def _preflight(args: argparse.Namespace) -> bool:
     """Ask the cheap question first: does anything answer at all?"""
     from samurai_ai.services.reachability import preflight
 
-    relay = str(getattr(args, "relay", "") or "").strip()
-    report = (
-        preflight(list(args.includes), relay=relay)
-        if relay
-        else preflight(list(args.includes))
-    )
+    report = preflight(list(args.includes))
     for probe in report.silent:
         where = probe.address or probe.target
         print(f"warn: {where} does not answer on {_port_list()}", file=sys.stderr)
@@ -129,49 +111,6 @@ def _preflight(args: argparse.Namespace) -> bool:
         )
         return False
     return True
-
-
-def _relay_report(relay: str, operation_id: str, operations: Any) -> None:
-    """Say up front what the far side has, and put it where the agent reads it."""
-    from samurai_ai.agents.blackboard import make_note_event
-    from samurai_ai.domain.execution import SecretRedactor
-    from samurai_ai.execution.relay import PROBE_TOOLS, probe_tools
-
-    present = probe_tools(relay)
-    missing = [name for name in PROBE_TOOLS if not present[name]]
-    if missing:
-        print(f"warn: relay has no {', '.join(missing)}", file=sys.stderr)
-    text = (
-        f"relay `{relay}`; available there: "
-        + (", ".join(name for name in PROBE_TOOLS if present[name]) or "nothing")
-        + ("; missing: " + ", ".join(missing) if missing else "")
-    )
-    operations.repository.append_event(
-        make_note_event(operation_id, "operator", "shared.relay.tools", text, SecretRedactor())
-    )
-
-
-def _allow_relay_host(relay: str, operation_id: str, operations: Any) -> None:
-    """The VM is part of the picture; in scope it stops being a refused literal."""
-    from samurai_ai.domain.scope import ScopeContract, ScopeValidationError
-    from samurai_ai.execution.relay import relay_host
-
-    address = relay_host(relay)
-    if not address:
-        return
-    operation = operations.get(operation_id)
-    if address in operation.scope.includes:
-        return
-    try:
-        scope = ScopeContract(
-            includes=(*operation.scope.includes, address),
-            excludes=operation.scope.excludes,
-            hosts=operation.scope.hosts,
-        )
-    except ScopeValidationError:
-        return
-    operations.replace_scope(operation_id, scope)
-    print(f"note: relay host {address} added to the scope", file=sys.stderr)
 
 
 def _port_list() -> str:
@@ -205,10 +144,6 @@ def _run(args: argparse.Namespace) -> int:
     except (ScopeValidationError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    if args.relay:
-        _relay_report(args.relay, operation_id, operations)
-        if args.relay_host:
-            _allow_relay_host(args.relay, operation_id, operations)
     socket_path = Path(getattr(args, "socket", None) or serve_socket_path())
     if socket_path.exists():
         return _through_daemon(args, socket_path, operation_id, plan_id)

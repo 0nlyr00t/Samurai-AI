@@ -22,7 +22,7 @@ samurai tool capabilities --json
 ## Порядок выбора пути
 
 `native` → `project-local` → `pinned container` → `provision` (с approval) →
-`relay` → отказ с ручной командой. Причины машинные: `installed`,
+отказ с ручной командой. Причины машинные: `installed`,
 `missing-binary`, `unsupported-platform`, `missing-privilege`,
 `docker-unavailable`, `offline`, `manual-only`, `conflict`.
 

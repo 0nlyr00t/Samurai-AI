@@ -147,20 +147,6 @@ def test_the_recipe_and_adapter_schema_agree() -> None:
     json.dumps({name: recipe.model_dump(mode="json") for name, recipe in recipes.items()})
 
 
-def test_a_relay_prefix_goes_in_front_of_the_argv(tmp_path: Path) -> None:
-    """Under a relay the tool runs on the far side: the local binary is optional."""
-    binary = _fake_binary(tmp_path, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
-    recipe = _recipe(tmp_path, ["-p", "{ports}", "{targets}"])
-    tool = NativeTool(recipe, _definition(), executable_path=binary)
-    # a prefix that passes the rest through, like `ssh vm` does
-    tool.relay = "/bin/sh -c 'exec \"$@\"' sh"
-    assert tool.resolved_available() is True
-    output = tool.invoke({"targets": ["10.0.0.5"], "ports": "80"}, SCOPE)
-    # the prefix is split into argv, never handed to a shell as one string
-    assert "-p" in output.stdout.split("\n")
-    assert output.exit_code == 0
-
-
 def test_scope_and_approval_survive_the_native_path(tmp_path: Path) -> None:
     """The native transport is not a way around the service's own gates."""
     from samurai_ai.domain.execution import ApprovalRequiredError, ToolScopeError

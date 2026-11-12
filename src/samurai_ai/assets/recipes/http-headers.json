@@ -9,7 +9,7 @@
   "network": "direct",
   "read_only": true,
   "capabilities": ["http"],
-  "execution": {"native": true, "project_local": true, "container": false, "relay_supported": true},
+  "execution": {"native": true, "project_local": true, "container": false},
   "provision": {
     "packages": {"linux": {"manager": "project-local", "package": "http_headers.py"}, "macos": {"manager": "project-local", "package": "http_headers.py"}},
     "healthcheck": ["--version"],

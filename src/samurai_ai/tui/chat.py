@@ -73,7 +73,7 @@ from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.vault import VaultService
 from samurai_ai.tui.journal import BlockJournal, ToolBlock, entity_span
 from samurai_ai.tui.progress import Stagnation, TerminalReason
-from samurai_ai.tui.screens import AccessPromptScreen, PickerScreen
+from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
     from samurai_ai.services.execution import ToolExecutionService
@@ -291,7 +291,6 @@ class ChatController:
         def _count_goal_step(self) -> None: ...
         def run_worker(self, *args: Any, **kwargs: Any) -> Any: ...
         def push_screen_wait(self, screen: Any) -> Any: ...
-        _relay_offered: set[str]
         _scope_offered: set[str]
         _scope_declined: set[tuple[str, str]]
         _scope_auto_spent: int
@@ -303,7 +302,6 @@ class ChatController:
         _drift_nudged: bool
         _drift_marks: Any
         _strategist_spawned_turn: bool
-        def _relay_canary(self, relay: str) -> None: ...
 
     def action_steer(self) -> None:
         """Ctrl-S: inject into the running turn, or send when nothing runs."""
@@ -560,24 +558,6 @@ class ChatController:
             },
         ),
         ToolSpec(
-            name="set_relay",
-            description=(
-                "Point this operation's network commands through a relay prefix "
-                "(e.g. prlctl exec '<vm-uuid>' or ssh -J jump) when the target is "
-                "only reachable from another host or VM. After it is set, write "
-                "plain far-side commands — the harness rewrites and quotes them "
-                "for the relay itself. An empty prefix clears the relay."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "prefix": {"type": "string", "maxLength": 400},
-                },
-                "required": ["prefix"],
-                "additionalProperties": False,
-            },
-        ),
-        ToolSpec(
             name="check_scope",
             description=(
                 "Check whether a target (IP, domain, URL or network) is inside "
@@ -717,16 +697,6 @@ class ChatController:
     #: Chat tool name → registry tool id, for the ones that are real adapters.
     _CHAT_TOOL_IDS = {"shell_exec": "shell.exec"}
 
-    #: Relay shapes a task text can mention; the first with a concrete target wins.
-    _RELAY_CANDIDATE_RES = (
-        re.compile(r"\bprlctl\s+exec\s+('[^']+'|\"[^\"]+\"|[\w.{}-]+)"),
-        re.compile(r"\bssh\s+-J\s+\S+"),
-        re.compile(r"\butmctl\s+exec\s+\S+"),
-        re.compile(r"\blimactl\s+shell\s+\S+"),
-    )
-    #: the same tools named without a target — the operator must fill it in
-    _BARE_RELAY_RE = re.compile(r"\b(?:prlctl\s+exec|utmctl\s+exec|limactl\s+shell)\b")
-
     #: networks a task text can name; the bare IP part is already in _HOST_RE
     _CIDR_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}\b")
 
@@ -742,7 +712,6 @@ class ChatController:
         "record_traffic": "_run_record_traffic_tool",
         "update_todo": "_run_update_todo_tool",
         "remember_secret": "_run_remember_secret_tool",
-        "set_relay": "_run_set_relay_tool",
         "provision_tool": "_run_provision_tool",
         "check_scope": "_run_check_scope_tool",
         "request_scope": "_run_request_scope_tool",
@@ -796,12 +765,6 @@ class ChatController:
         goal = self._operation_goal(self.operation.id) if self.operation else ""
         if goal:
             prompt += "\n\n" + self.translator.t("chat.goal-hint", goal=goal)
-        relay = getattr(self.operation, "relay", "") if self.operation else ""
-        if relay:
-            # hand the relay to the model as-is so it never invents a helper
-            prompt += "\n\n" + self.translator.t("chat.relay-hint", relay=relay)
-        elif self._remote_scope():
-            prompt += "\n\n" + self.translator.t("chat.relay-absent")
         try:
             digest, _ids = self.memory.digest(self._memory_workspace())
         except Exception:  # noqa: BLE001 - memory must not break a turn
@@ -914,12 +877,11 @@ class ChatController:
         """
         from samurai_ai.tui.screens.access import ApprovalMeta
 
-        relay = self.operation.relay if self.operation is not None else ""
-        timeout = command_window(command, relayed=bool(relay))
+        timeout = command_window(command)
         return ApprovalMeta(
             tool_id=tool_id,
             cwd=str(self._cwd),
-            execution_path=relay or self.translator.t("access.path-native"),
+            execution_path=self.translator.t("access.path-native"),
             timeout_s=timeout,
             destructive=risk.destructive,
             sensitive=risk.sensitive,
@@ -999,10 +961,6 @@ class ChatController:
     def _note_local_drift(self, command: str) -> None:
         """Repeated reads of local paths outside the workspace are drift."""
         if self.operation is None or self._drift_nudged:
-            return
-        if self.operation.relay:
-            # with a relay set the command runs on the far side: its paths
-            # belong to the target, not to this host
             return
         self._drift_marks.append(bool(self._drift_paths(command)))
         if sum(self._drift_marks) < self._DRIFT_NUDGE_AT:
@@ -1491,7 +1449,6 @@ class ChatController:
             self._chat_history.append(Message(role="system", content=self._chat_system_prompt()))
         self._last_user_text = text
         self._adopt_goal(text)
-        await self._maybe_offer_relay(text)
         await self._maybe_offer_scope(text)
         recall = self._recall_for(text)
         if recall:
@@ -1789,26 +1746,6 @@ class ChatController:
             return self._CHAT_MAX_TOOL_ROUNDS
         return min(max(value, self._TOOL_ROUNDS_MIN), self._TOOL_ROUNDS_MAX)
 
-    def _normalize_prlctl(self, command: str) -> str:
-        """`prlctl exec <uuid> <cmd>` typed by hand loses its quoting on the
-        far side; rebuild it through the relay helper so it arrives intact."""
-        from samurai_ai.execution.relay import relay_command
-
-        try:
-            tokens = __import__("shlex").split(command)
-        except ValueError:
-            return command
-        if len(tokens) < 3 or tokens[0] != "prlctl" or tokens[1] != "exec":
-            return command
-        # prlctl exec <uuid> <tail...>: hand the whole tail to bash -lc
-        tail = tokens[2:]
-        if tail and tail[0] == "--":
-            tail = tail[1:]
-        if not tail:
-            return command
-        relay = f"prlctl exec {tokens[2]}"
-        return relay_command(relay, tail[0], tail[1:])
-
     def _chat_tool_read_only(self, name: str) -> bool:
         tool_id = self._CHAT_TOOL_IDS.get(name)
         return tool_id is not None and self._tool_is_read_only(tool_id)
@@ -1958,70 +1895,6 @@ class ChatController:
                 "background; its steps and output are in the sessions screen (Ctrl-G)"
             ),
         )
-
-    async def _maybe_offer_relay(self, text: str) -> None:
-        """A task that names a relay deserves one operator tap to adopt it.
-
-        Once per operation: without this, the model hand-builds the prefix into
-        every command and loses the session to quoting (HTB Takeoff, 37 failed
-        calls).
-        """
-        if self.operation is None or self.operation.relay:
-            return
-        if self.operation.id in self._relay_offered:
-            return
-        candidate = None
-        for pattern in self._RELAY_CANDIDATE_RES:
-            match = pattern.search(text)
-            if match:
-                candidate = match.group(0)
-                break
-        if candidate is None:
-            if self._BARE_RELAY_RE.search(text):
-                self._relay_offered.add(self.operation.id)
-                self._write_dim(self.translator.t("relay.detected-bare"), process=False)
-            return
-        self._relay_offered.add(self.operation.id)
-        choice = await self.push_screen_wait(
-            PickerScreen(
-                self.translator,
-                "relay.detected",
-                "relay.detected-hint",
-                "side.list-empty",
-                [
-                    ("use", self.translator.t("relay.use", relay=candidate), ""),
-                    ("skip", self.translator.t("relay.skip"), ""),
-                ],
-            )
-        )
-        if choice != "use" or self.operation is None:
-            return
-        try:
-            self.operation = self.service.set_relay(self.operation.id, candidate)
-        except Exception as exc:  # noqa: BLE001 - shown, not raised
-            self._write_line(f"[relay] {exc}")
-            return
-        self._write_dim(self.translator.t("relay.set", relay=candidate), process=False)
-        self._relay_canary(candidate)
-        self._refresh_chrome()
-
-    def _remote_scope(self) -> bool:
-        """True when the scope names a target loopback cannot explain."""
-        if self.operation is None:
-            return False
-        from ipaddress import ip_address
-
-        for rule in self.operation.scope.includes:
-            host = rule.split("/", 1)[0].lstrip("*.")
-            if "://" in rule:
-                host = rule.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
-            try:
-                if ip_address(host).is_loopback:
-                    continue
-            except ValueError:
-                pass
-            return True
-        return False
 
     def _task_targets(self, text: str) -> list[str]:
         """Hosts and networks the task names that the scope does not cover yet."""
@@ -2189,30 +2062,6 @@ class ChatController:
             content=(
                 f"[tool add_scope] added: {', '.join(actually_added)} — the operator can "
                 "revert any rule with /scope rm"
-            ),
-        )
-
-    async def _run_set_relay_tool(self, call: ToolCall) -> Message:
-        """The model fixes its own transport instead of hand-rolling prefixes."""
-        prefix = str(call.arguments.get("prefix", "") or "").strip()
-        if self.operation is None:
-            return Message(role="user", content="[tool set_relay] no open operation")
-        try:
-            self.operation = self.service.set_relay(self.operation.id, prefix)
-        except Exception as exc:  # noqa: BLE001 - the model gets the reason
-            return Message(role="user", content=f"[tool set_relay] rejected: {exc}")
-        relay = self.operation.relay
-        if relay:
-            self._write_dim(self.translator.t("relay.set", relay=relay), process=False)
-            self._relay_canary(relay)
-        else:
-            self._write_dim(self.translator.t("relay.cleared"), process=False)
-        self._refresh_chrome()
-        return Message(
-            role="user",
-            content=(
-                f"[tool set_relay] relay is now: {relay or 'off'}; write plain "
-                "far-side commands, the harness quotes them for the relay"
             ),
         )
 
@@ -2776,10 +2625,6 @@ class ChatController:
         """
         tool_id = self._CHAT_TOOL_IDS.get(call.name)
         command = str(call.arguments.get("command", "")).strip()
-        # The model still writes `prlctl exec <uuid> -- bash -c '...'` by hand
-        # and loses to the re-split; rebuild the tail like the relay does.
-        if tool_id == "shell.exec":
-            command = self._normalize_prlctl(command)
         if tool_id is None or not command:
             return Message(
                 role="user",
@@ -3189,10 +3034,6 @@ class ChatController:
         if len(title) > width:
             title = title[: width - 1] + "…"
         failed = exit_code not in (0, None)
-        if failed and not (self.operation and self.operation.relay):
-            warn = getattr(self, "_relay_warning", None)
-            if warn is not None:
-                warn()
         if failed:
             error = (stderr.strip() or stdout.strip()).splitlines()
             tail = error[-1] if error else f"exit {exit_code}, no output"
