@@ -9,6 +9,7 @@ from samurai_ai.domain.permission import (
     classify_command,
     command_signature,
     command_window,
+    decide,
     next_mode,
     parse_mode,
 )
@@ -82,6 +83,27 @@ def test_destructive_shapes_are_flagged() -> None:
     }
     for command, label in cases.items():
         assert label in classify_command(command).destructive, command
+
+
+def test_autonomy_lets_a_plain_install_through_but_still_gates_the_rest() -> None:
+    install = CommandRisk(escape=("/usr/bin/sshpass",))
+    cmd = "apt-get install -y sshpass"
+    # without autonomy a filesystem escape is denied in yolo
+    assert decide((), "shell.exec", cmd, PermissionMode.YOLO, install).is_denied
+    # with autonomy a non-destructive, non-sensitive escape (an install) is allowed
+    assert decide(
+        (), "shell.exec", cmd, PermissionMode.YOLO, install, autonomy=True
+    ).is_allowed
+    # a destructive escape stays gated even under autonomy
+    nuke = CommandRisk(destructive=("recursive delete",), escape=("/etc",))
+    assert not decide(
+        (), "shell.exec", "rm -rf /etc", PermissionMode.YOLO, nuke, autonomy=True
+    ).is_allowed
+    # a credential-touching escape stays gated even under autonomy
+    cred = CommandRisk(sensitive=("credentials/key file",), escape=("/root/.ssh/id_rsa",))
+    assert not decide(
+        (), "shell.exec", "cp k /root/.ssh/id_rsa", PermissionMode.YOLO, cred, autonomy=True
+    ).is_allowed
 
 
 def test_a_write_outside_the_trusted_roots_is_an_escape() -> None:
