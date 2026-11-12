@@ -83,9 +83,9 @@ def test_the_rule_text_prefers_the_command_and_falls_back_to_parameters() -> Non
     assert rendered == '{"targets": ["10.0.0.1"]}'
 
 
-def test_a_relayed_run_keeps_the_scope_guard_and_skips_docker(tmp_path: Path) -> None:
-    """The relay is a transport, not a hole: an out-of-scope literal still fails."""
-    database = Database(tmp_path / "relay.db")
+def test_the_scope_guard_fails_an_out_of_scope_literal(tmp_path: Path) -> None:
+    """A second line of defence: the guard refuses a host the scope excludes."""
+    database = Database(tmp_path / "guard.db")
     operations = OperationService(OperationRepository(database))
     kernel = KernelService(operations, KernelRepository(database))
     recovery = RecoveryService(operations, kernel, RecoveryRepository(database))
@@ -93,21 +93,10 @@ def test_a_relayed_run_keeps_the_scope_guard_and_skips_docker(tmp_path: Path) ->
         operations, kernel, recovery, ToolRunRepository(database)
     )
     operation = operations.create(
-        "Relay",
+        "Guard",
         OperationMode.CTF_HTB,
         ScopeContract(includes=("10.0.0.1",)),
-        relay="true",
     )
-    assert operation.relay == "true"
-
-    # `true` ignores its arguments and always exits 0, so no docker is needed
-    result = execution.run_tool(
-        operation.id,
-        "scan.nmap",
-        {"targets": ["10.0.0.1"]},
-        approval_resolver=lambda _id: True,
-    )
-    assert result.run.status.value == "completed"
 
     with pytest.raises(Exception, match="outside the operation scope"):
         execution.run_tool(

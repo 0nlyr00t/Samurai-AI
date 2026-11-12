@@ -66,8 +66,6 @@ class _ScopedSandboxTool:
     def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
         self._runner = runner
         self._notice: str | None = None
-        #: set by the executor when the operation runs behind a relay
-        self.relay = ""
 
     @property
     def runner(self) -> DockerSandboxRunner:
@@ -207,10 +205,6 @@ def _explicit_port(target: str) -> bool:
 
 
 class HttpxProbeTool(_ScopedSandboxTool):
-    #: under a relay the far side usually has python-httpx, not the scanner —
-    #: the probe then goes through relayed curl instead of failing on flags
-    relay_supported = True
-
     profile_id = "sandbox.httpx@v1"
     executable = "httpx"
     max_targets = 50
@@ -285,60 +279,6 @@ class HttpxProbeTool(_ScopedSandboxTool):
         if not any(_explicit_port(target) for target in targets):
             argv += ["-ports", "80,443"]
         return [*argv, *flags, "-u", ",".join(targets)]
-
-    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        if not self.relay:
-            return super().invoke(params, scope)
-        return self._invoke_relayed(params, scope)
-
-    def _invoke_relayed(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        """The probe through the relay: curl where the route lives.
-
-        Same contract as the scanner path — JSON lines the summarizer already
-        parses — so the model sees no difference beyond a stderr note.
-        """
-        from samurai_ai.execution.relay import html_to_text, relayed_fetch
-
-        targets = self._validated_targets(params, scope)
-        timeout = int(params.get("timeout_seconds", 30))
-        if not 1 <= timeout <= 60:
-            raise ToolValidationError(
-                f"{self.definition.id}: timeout_seconds must be 1..60, got {timeout}"
-            )
-        manager = ProcessManager(allowed_executables=frozenset({"bash"}))
-        lines: list[str] = []
-        for target in targets:
-            urls = (
-                [target]
-                if "://" in target
-                else [f"http://{target}", f"https://{target}"]
-            )
-            for url in urls:
-                try:
-                    response = relayed_fetch(
-                        self.relay,
-                        url,
-                        method="GET",
-                        timeout=timeout,
-                        max_bytes=262144,
-                        manager=manager,
-                    )
-                except ToolExecutionError:
-                    continue
-                title, _links, _text = html_to_text(
-                    response.body.decode("utf-8", errors="replace")
-                )
-                lines.append(
-                    json.dumps(
-                        {"url": url, "status_code": response.status, "title": title},
-                        ensure_ascii=False,
-                    )
-                )
-        return ToolOutput(
-            stdout="\n".join(lines),
-            stderr="relayed via curl — the far side has no ProjectDiscovery httpx",
-            exit_code=0,
-        )
 
     def summarize(self, stdout: str) -> list[str]:
         lines: list[str] = []
@@ -440,60 +380,6 @@ class NucleiScanTool(_ScopedSandboxTool):
             "-tags",
             tag,
         ]
-
-    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        if not self.relay:
-            return super().invoke(params, scope)
-        return self._invoke_relayed(params, scope)
-
-    def _invoke_relayed(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        """The probe through the relay: curl where the route lives.
-
-        Same contract as the scanner path — JSON lines the summarizer already
-        parses — so the model sees no difference beyond a stderr note.
-        """
-        from samurai_ai.execution.relay import html_to_text, relayed_fetch
-
-        targets = self._validated_targets(params, scope)
-        timeout = int(params.get("timeout_seconds", 30))
-        if not 1 <= timeout <= 60:
-            raise ToolValidationError(
-                f"{self.definition.id}: timeout_seconds must be 1..60, got {timeout}"
-            )
-        manager = ProcessManager(allowed_executables=frozenset({"bash"}))
-        lines: list[str] = []
-        for target in targets:
-            urls = (
-                [target]
-                if "://" in target
-                else [f"http://{target}", f"https://{target}"]
-            )
-            for url in urls:
-                try:
-                    response = relayed_fetch(
-                        self.relay,
-                        url,
-                        method="GET",
-                        timeout=timeout,
-                        max_bytes=262144,
-                        manager=manager,
-                    )
-                except ToolExecutionError:
-                    continue
-                title, _links, _text = html_to_text(
-                    response.body.decode("utf-8", errors="replace")
-                )
-                lines.append(
-                    json.dumps(
-                        {"url": url, "status_code": response.status, "title": title},
-                        ensure_ascii=False,
-                    )
-                )
-        return ToolOutput(
-            stdout="\n".join(lines),
-            stderr="relayed via curl — the far side has no ProjectDiscovery httpx",
-            exit_code=0,
-        )
 
     def summarize(self, stdout: str) -> list[str]:
         lines: list[str] = []
@@ -701,60 +587,6 @@ class SubfinderPassiveTool(_ScopedSandboxTool):
             f"{source.upper()}_API_KEY": value for source, value in keys.items()
         }
         return env, secret_env
-
-    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        if not self.relay:
-            return super().invoke(params, scope)
-        return self._invoke_relayed(params, scope)
-
-    def _invoke_relayed(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        """The probe through the relay: curl where the route lives.
-
-        Same contract as the scanner path — JSON lines the summarizer already
-        parses — so the model sees no difference beyond a stderr note.
-        """
-        from samurai_ai.execution.relay import html_to_text, relayed_fetch
-
-        targets = self._validated_targets(params, scope)
-        timeout = int(params.get("timeout_seconds", 30))
-        if not 1 <= timeout <= 60:
-            raise ToolValidationError(
-                f"{self.definition.id}: timeout_seconds must be 1..60, got {timeout}"
-            )
-        manager = ProcessManager(allowed_executables=frozenset({"bash"}))
-        lines: list[str] = []
-        for target in targets:
-            urls = (
-                [target]
-                if "://" in target
-                else [f"http://{target}", f"https://{target}"]
-            )
-            for url in urls:
-                try:
-                    response = relayed_fetch(
-                        self.relay,
-                        url,
-                        method="GET",
-                        timeout=timeout,
-                        max_bytes=262144,
-                        manager=manager,
-                    )
-                except ToolExecutionError:
-                    continue
-                title, _links, _text = html_to_text(
-                    response.body.decode("utf-8", errors="replace")
-                )
-                lines.append(
-                    json.dumps(
-                        {"url": url, "status_code": response.status, "title": title},
-                        ensure_ascii=False,
-                    )
-                )
-        return ToolOutput(
-            stdout="\n".join(lines),
-            stderr="relayed via curl — the far side has no ProjectDiscovery httpx",
-            exit_code=0,
-        )
 
     def summarize(self, stdout: str) -> list[str]:
         lines: list[str] = []
@@ -1108,7 +940,7 @@ class FfufFuzzTool(_ScopedSandboxTool):
             risk_class=RiskClass.R2,
             read_only=True,
             network=NetworkAccess.PROXIED,
-            # 4751 words over a relay and a VPN do not fit in five minutes
+            # 4751 words over a slow VPN do not fit in five minutes
             timeout_seconds=900,
             output_limit_bytes=262144,
             parameters={
@@ -1311,9 +1143,6 @@ print(json.dumps({"query": query, "search_url": search_url, "status": status,
 class ResearchReadTool(_ScopedSandboxTool):
     """Render one URL in camoufox and bring back text, links and a citation.
 
-    Behind a relay the browser image is usually absent on the far side, so the
-    tool falls back to a plain fetch there: less faithful, still a read.
-
     The browser executes foreign JavaScript, so it runs in the sandbox and its
     only way out is the scoped proxy. What it read is recorded as a traffic pair
     — a citation that cannot be re-opened is indistinguishable from a guess.
@@ -1370,42 +1199,6 @@ class ResearchReadTool(_ScopedSandboxTool):
             )
         return [url]
 
-    def _read_relayed(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        """No browser on the far side: fetch with curl and strip the markup."""
-        import json as _json
-
-        from samurai_ai.execution.process import ProcessManager
-        from samurai_ai.execution.relay import html_to_text, relayed_fetch
-
-        url = str(params["url"]).strip()
-        decision = scope.evaluate(url)
-        if not decision.allowed:
-            raise ToolScopeError(
-                f"{self.definition.id}: {url} is out of scope: {decision.detail}"
-            )
-        max_chars = int(params.get("max_chars", 4000))
-        response = relayed_fetch(
-            self.relay,
-            url,
-            method="GET",
-            timeout=float(self.definition.timeout_seconds),
-            max_bytes=self.definition.output_limit_bytes,
-            manager=ProcessManager(allowed_executables=frozenset({"bash"})),
-        )
-        title, links, text = html_to_text(response.body.decode("utf-8", "replace"))
-        payload = {
-            "url": url,
-            "status": response.status,
-            "title": title,
-            "text": text[:max_chars],
-            "links": links,
-        }
-        return ToolOutput(
-            stdout=_json.dumps(payload, ensure_ascii=False),
-            stderr=f"HTTP {response.status} {url} (relayed, no browser)",
-            exit_code=0,
-        )
-
     def build_args(self, params: dict[str, Any]) -> list[str]:
         targets = params.get("targets") or [params["url"]]
         max_chars = int(params.get("max_chars", 4000))
@@ -1443,11 +1236,7 @@ class ResearchReadTool(_ScopedSandboxTool):
                 break
         return lines
 
-    relay_supported = True
-
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        if self.relay:
-            return self._read_relayed(params, scope)
         output = super().invoke(params, scope)
         payload = _research_payload(output.stdout)
         if payload is None:

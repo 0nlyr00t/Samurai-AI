@@ -14,8 +14,7 @@
   ],
   "execution": {
     "native": true,
-    "container": true,
-    "relay_supported": true
+    "container": true
   },
   "provision": {
     "packages": {

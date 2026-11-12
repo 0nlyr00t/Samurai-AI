@@ -17,10 +17,8 @@ from samurai_ai.config import sandbox_allowlist_path, vault_key_path
 from samurai_ai.domain.execution import (
     NetworkAccess,
     ToolDefinition,
-    ToolExecutionError,
     ToolKind,
     ToolNotFoundError,
-    ToolScopeError,
     ToolValidationError,
 )
 from samurai_ai.domain.kernel import RiskClass
@@ -28,7 +26,6 @@ from samurai_ai.domain.permission import command_window
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.http import HttpEgressBroker
 from samurai_ai.execution.process import DEFAULT_STALL_SECONDS, ProcessManager
-from samurai_ai.execution.relay import normalize_relayed
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 
 
@@ -341,15 +338,11 @@ class ShellExecTool:
     mode) and is recorded with redacted, bounded output artifacts.
     """
 
-    #: the operation's relay prefixes every command on the host side too
-    relay_supported = True
-
     def __init__(self, manager: ProcessManager | None = None) -> None:
         # bwrap is allowed so a sandboxed run can front the shell with it
         self.manager = manager or ProcessManager(
             allowed_executables=frozenset({"bash", "sh", "bwrap"})
         )
-        self.relay = ""
         #: OS-level confinement set per run by the host: "off" | "write" | "strict"
         self.sandbox_mode = "off"
         #: directories a sandboxed command may write under (the trusted roots)
@@ -387,18 +380,11 @@ class ShellExecTool:
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
         command = str(params["command"])
-        if self.relay:
-            command = normalize_relayed(self.relay, command)
-            # a relayed command's silence is the far side's pace, not a stall:
-            # the stall watchdog used to kill slow VPN runs and feed the breaker
-            self.manager.stall_seconds = 0.0
-        else:
-            self.manager.stall_seconds = DEFAULT_STALL_SECONDS
+        self.manager.stall_seconds = DEFAULT_STALL_SECONDS
         shell = "bash" if shutil.which("bash") else "sh"
         argv = [shell, "-lc", command]
-        # a relayed command runs on the far side, where this host's sandbox does
-        # not apply; natively, confine it to the trusted roots when asked and able
-        if not self.relay and self.sandbox_mode != "off" and self.sandbox_roots:
+        # confine the command to the trusted roots when asked and able
+        if self.sandbox_mode != "off" and self.sandbox_roots:
             from samurai_ai.execution.native_sandbox import (
                 build_bwrap_argv,
                 bwrap_available,
@@ -413,7 +399,7 @@ class ShellExecTool:
                 argv,
                 # a live sweep gets minutes, a banner grab seconds: one flat 120 s
                 # window killed every `nmap -p-` while stalling every `curl`
-                timeout_seconds=command_window(command, relayed=bool(self.relay)),
+                timeout_seconds=command_window(command),
             )
         )
         stderr = result.stderr
@@ -430,9 +416,6 @@ class ShellExecTool:
 
 
 class HttpFetchTool:
-    #: the tool can be pushed behind a relay prefix when the host has no route
-    relay_supported = True
-
     def __init__(
         self,
         broker_factory: Callable[[ScopeContract], HttpEgressBroker] = HttpEgressBroker,
@@ -440,7 +423,6 @@ class HttpFetchTool:
     ) -> None:
         self._broker_factory = broker_factory
         self._manager = manager or ProcessManager(allowed_executables=frozenset({"bash"}))
-        self.relay = ""
         self._definition = ToolDefinition(
             id="http.fetch",
             version=1,
@@ -468,8 +450,6 @@ class HttpFetchTool:
         return self._definition
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        if self.relay:
-            return self._invoke_relayed(params, scope)
         broker = self._broker_factory(scope)
         response = broker.fetch(
             str(params["url"]),
@@ -485,31 +465,6 @@ class HttpFetchTool:
         return ToolOutput(
             stdout=response.body.decode("utf-8", errors="replace"),
             stderr=stderr,
-            exit_code=0,
-        )
-
-
-    def _invoke_relayed(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
-        """The host cannot connect: let curl do it on the far side of the relay."""
-        from samurai_ai.execution.relay import relayed_fetch
-
-        url = str(params["url"])
-        decision = scope.evaluate(url)
-        if not decision.allowed:
-            raise ToolScopeError(f"{url} is out of scope: {decision.detail}")
-        response = relayed_fetch(
-            self.relay,
-            url,
-            method=str(params.get("method", "GET")),
-            timeout=float(self._definition.timeout_seconds),
-            max_bytes=self._definition.output_limit_bytes,
-            manager=self._manager,
-        )
-        if response.status == 0:
-            raise ToolExecutionError(f"relayed fetch of {url} returned no status line")
-        return ToolOutput(
-            stdout=response.body.decode("utf-8", errors="replace"),
-            stderr=f"HTTP {response.status} {url} (relayed)",
             exit_code=0,
         )
 

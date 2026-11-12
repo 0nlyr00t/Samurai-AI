@@ -16,7 +16,7 @@
 - findings workflow от candidate до reported;
 - snapshots/restore/fork, recovery reconcile и plan/scope diff;
 - versioned tool registry, `process.exec` без shell и `http.fetch` через scope broker;
-- локальный Tool Fabric: read-only детект окружения (`tool capabilities`), каталог рецептов (`assets/recipes`), детерминированный резолвер native → project-local → container → provision → relay → отказ, нативное исполнение по argv без shell поверх `ProcessManager` (`status/tail/collect` для долгих процессов), управляемая установка с dry-run, отдельным approval, `sudo -n`, healthcheck, замком и персистентным состоянием (`tool provision`, `tool verify`), команда агента `request_tool_provision` с одной попыткой на прогон;
+- локальный Tool Fabric: read-only детект окружения (`tool capabilities`), каталог рецептов (`assets/recipes`), детерминированный резолвер native → project-local → container → provision → отказ, нативное исполнение по argv без shell поверх `ProcessManager` (`status/tail/collect` для долгих процессов), управляемая установка с dry-run, отдельным approval, `sudo -n`, healthcheck, замком и персистентным состоянием (`tool provision`, `tool verify`), команда агента `request_tool_provision` с одной попыткой на прогон;
 - Docker sandbox profiles со signed allowlist, scoped egress proxy с DNS pinning;
 - MCP stdio/HTTP client и persistent secrets vault (AES-256-GCM);
 - prompt-injection warnings и `untrusted-external` trust label;
@@ -138,10 +138,6 @@ samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
 - Белт разложен на два образа — `remote` (админка) и `exploit` (компилятор и библиотеки); RDP-проба своя, на X.224 и TLS, поэтому freerdp и Xvfb в образах нет; оба публикуются из CI (`ghcr.io/<owner>/samurai-*`, amd64+arm64, по digest индекса), локально — `packaging/sandbox/build.sh remote|exploit`. Пакет в GHCR по умолчанию приватный. Видимость переключается вручную на странице пакета (`Settings` → `Change visibility`): ни `GITHUB_TOKEN`, ни токен `gh` через REST её не меняют (эндпоинт видимости отвечает 404). Пока пакет закрыт, `pull` требует `docker login ghcr.io` с токеном, у которого есть `read:packages`. PR с пином от бота требует approve прогона проверок (PR создан `GITHUB_TOKEN`).
 
 
-
-## Релeй к удалённой сети
-
-Если VPN живёт в VM или за jump-хостом, `--relay "<префикс>"` (`prlctl exec '<uuid>'`, `ssh -J jump`) уводит сетевые инструменты туда: `bash -lc "<префикс> <инструмент> <аргументы>"` на хосте. Контейнер и образ не нужны, scope-guard, allowlist и артефакты остаются.
 
 ## Внешняя разведка (shodan, censys)
 

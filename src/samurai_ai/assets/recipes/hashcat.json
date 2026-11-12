@@ -9,7 +9,7 @@
   "network": "none",
   "read_only": true,
   "capabilities": ["crack"],
-  "execution": {"native": true, "container": false, "relay_supported": false},
+  "execution": {"native": true, "container": false},
   "provision": {
     "packages": {
       "linux": {"manager": "apt", "package": "hashcat", "sudo": true},

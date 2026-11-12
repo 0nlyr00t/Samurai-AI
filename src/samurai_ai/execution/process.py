@@ -78,7 +78,7 @@ class ProcessManager:
     ) -> None:
         if circuit_breaker_threshold < 1:
             raise ValueError("circuit breaker threshold must be >= 1")
-        #: an open breaker half-opens after this many seconds: a relayed fetch
+        #: an open breaker half-opens after this many seconds: a fetch
         #: timing out three times is a sick target, not a dead process host
         self.breaker_cooldown_seconds = 120.0
         self.allowed_executables = allowed_executables
@@ -291,7 +291,7 @@ class ProcessManager:
                     f"{self._consecutive_failures} consecutive failures "
                     "(timeouts or stalled processes — the transport, not the "
                     f"commands); retry possible in ~{remaining_s}s. Do not "
-                    "retry in a loop: check the relay/VPN/VM is alive first"
+                    "retry in a loop: check the VPN/VM is alive first"
                 )
         if not argv:
             raise ToolValidationError("argv must contain at least the executable")

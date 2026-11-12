@@ -461,19 +461,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "the target of this operation is elsewhere. Return to in-scope work "
             "or explain why these local files matter to the objective."
         ),
-        "chat.relay-hint": (
-            "The VM relay for this operation is `{relay}`; write commands against "
-            "the far side and prefix them with the relay verbatim — do not write "
-            "your own wrapper script."
-        ),
-        "chat.relay-absent": (
-            "No relay is set for this operation and the scope is not loopback. If "
-            "calls to the target fail on connectivity, do NOT hand-build prefixes "
-            "like `prlctl exec … bash -c '…'` — the quoting will eat your steps. "
-            "Instead call the set_relay tool (discover the VM first, e.g. `prlctl "
-            "list`) or ask the operator to set /relay. Once set, write plain "
-            "far-side commands; the harness quotes them for the relay."
-        ),
         "chat.tool-limit": "round budget spent — settling what is known, then continuing",
         "chat.auto-continue": "[continue {index}/{total}] still working on the goal",
         "chat.continue-note": (
@@ -748,24 +735,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "newop.name": "operation name",
         "newop.scope": "scope includes, comma-separated (empty = 127.0.0.1/32)",
         "newop.created": "new operation tab: {name} ({mode})",
-        "relay.current": "[relay] {relay}",
-        "relay.empty": "[relay] off — commands run on this host",
-        "relay.set": "[relay] network tools now run through: {relay}",
-        "relay.cleared": "[relay] off",
-        "relay.canary-ok": "[relay] canary answered through the relay — transport is live",
-        "relay.canary-fail": "[relay] canary failed through the relay: {detail} — check the prefix",
-        "relay.detected": "The task mentions a relay",
-        "relay.detected-hint": "Set it now, or the agent hand-builds the prefix into every command",
-        "relay.use": "Use relay: {relay}",
-        "relay.skip": "Not now",
-        "relay.detected-bare": (
-            "[relay] the task mentions a VM relay but names no target — discover it "
-            "(prlctl list) and set /relay prlctl exec <uuid>"
-        ),
-        "relay.hint": (
-            "[relay] off: if the target is only reachable from a VM, set "
-            "/relay prlctl exec <uuid> -- without it every call fights quoting"
-        ),
         "goal.current": "[goal] {goal}",
         "goal.empty": "[goal] no completion condition set",
         "goal.set": "[goal] done when: {goal} — the run continues until a judge says so",
@@ -1339,18 +1308,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "операции — не они. Вернись к работе в скоупе или объясни, зачем эти "
             "файлы для цели."
         ),
-        "chat.relay-hint": (
-            "Релей в VM этой операции: `{relay}`; пиши команды под удалённую "
-            "сторону и ставь релей перед ними дословно — своих обёрток не пиши."
-        ),
-        "chat.relay-absent": (
-            "Для этой операции релей не задан, а скоуп — не loopback. Если вызовы "
-            "к цели падают по связности, НЕ собирай префиксы руками вида "
-            "`prlctl exec … bash -c '…'` — квотирование съест шаги. Вместо этого "
-            "вызови инструмент set_relay (сначала найди VM, например `prlctl list`) "
-            "или попроси оператора выставить /relay. После установки пиши обычные "
-            "команды под удалённую сторону — харнесс сам их квотирует под релей."
-        ),
         "chat.tool-limit": "бюджет раундов исчерпан — фиксирую известное и продолжаю",
         "chat.auto-continue": "[продолжение {index}/{total}] ещё работаю над целью",
         "chat.continue-note": (
@@ -1643,27 +1600,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "tabmenu.close": "Закрыть вкладку и удалить операцию",
         "tabmenu.close-others": "Закрыть остальные вкладки",
         "tabmenu.name-prompt": "новое название операции",
-        "relay.current": "[релей] {relay}",
-        "relay.empty": "[релей] выключен — команды идут на этом хосте",
-        "relay.set": "[релей] сетевые инструменты теперь идут через: {relay}",
-        "relay.cleared": "[релей] выключен",
-        "relay.canary-ok": "[релей] канарейка ответила через релей — транспорт жив",
-        "relay.canary-fail": "[релей] канарейка не прошла через релей: {detail} — проверь префикс",
-        "relay.detected": "В задаче упомянут релей",
-        "relay.detected-hint": (
-            "Выставь его сейчас, иначе агент будет вручную "
-            "встраивать префикс в каждую команду"
-        ),
-        "relay.use": "Использовать релей: {relay}",
-        "relay.skip": "Не сейчас",
-        "relay.detected-bare": (
-            "[релей] в задаче упомянут релей через VM, но без цели — найди её "
-            "(prlctl list) и выстави /relay prlctl exec <uuid>"
-        ),
-        "relay.hint": (
-            "[релей] выключен: если цель достижима только из VM, задай "
-            "/relay prlctl exec <uuid> -- иначе каждый вызов воюет с кавычками"
-        ),
         "goal.current": "[цель] {goal}",
         "goal.empty": "[цель] условие готовности не задано",
         "goal.set": "[цель] готово, когда: {goal} — прогон идёт, пока оценщик не скажет «стоп»",
