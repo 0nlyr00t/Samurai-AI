@@ -73,6 +73,9 @@ class ToolExecutionService:
         #: executor, daemon) obeys it, not just the ones that remembered to ask
         self.permission_rules = permission_rules
         self.permission_mode = permission_mode
+        #: set by the host: () -> (mode, writable_roots) for host shell confinement.
+        #: "off" | "write" | "strict"; roots are the trusted filesystem boundary.
+        self.sandbox_policy: Callable[[], tuple[str, tuple[str, ...]]] | None = None
 
     def list_tools(self) -> list[ToolDefinition]:
         return self.registry.definitions()
@@ -139,6 +142,7 @@ class ToolExecutionService:
             )
         check_tool(definition, operation.offline)
         self._apply_relay(operation, adapter)
+        self._apply_sandbox(adapter)
         validated = self.registry.validate_params(definition, params or {})
         if definition.id == "shell.exec" and validated.get("command"):
             # approval, scope review and execution must all see the same command:
@@ -271,6 +275,17 @@ class ToolExecutionService:
             self._fail_run(run, action.id)
             raise ToolExecutionError(f"tool {definition.id} failed: {exc}") from exc
         return self._finish_run(run, action.id, output)
+
+    def _apply_sandbox(self, adapter: Any) -> None:
+        """Hand the host shell its confinement policy, when the host set one."""
+        if self.sandbox_policy is None or not hasattr(adapter, "sandbox_mode"):
+            return
+        try:
+            mode, roots = self.sandbox_policy()
+        except Exception:  # noqa: BLE001 - a policy hiccup must not block the tool
+            return
+        adapter.sandbox_mode = mode
+        adapter.sandbox_roots = tuple(roots)
 
     def _apply_relay(self, operation: Any, adapter: Any) -> None:
         """Point a sandbox adapter at the operation's relay, or back at docker."""
