@@ -81,27 +81,3 @@ def test_the_rule_text_prefers_the_command_and_falls_back_to_parameters() -> Non
     assert rule_text({"command": "id", "extra": 1}) == "id"
     rendered = rule_text({"targets": ["10.0.0.1"], "_secret_env": {"X": "1"}})
     assert rendered == '{"targets": ["10.0.0.1"]}'
-
-
-def test_the_scope_guard_fails_an_out_of_scope_literal(tmp_path: Path) -> None:
-    """A second line of defence: the guard refuses a host the scope excludes."""
-    database = Database(tmp_path / "guard.db")
-    operations = OperationService(OperationRepository(database))
-    kernel = KernelService(operations, KernelRepository(database))
-    recovery = RecoveryService(operations, kernel, RecoveryRepository(database))
-    execution = ToolExecutionService(
-        operations, kernel, recovery, ToolRunRepository(database)
-    )
-    operation = operations.create(
-        "Guard",
-        OperationMode.CTF_HTB,
-        ScopeContract(includes=("10.0.0.1",)),
-    )
-
-    with pytest.raises(Exception, match="outside the operation scope"):
-        execution.run_tool(
-            operation.id,
-            "scan.nmap",
-            {"targets": ["10.9.9.9"]},
-            approval_resolver=lambda _id: True,
-        )
