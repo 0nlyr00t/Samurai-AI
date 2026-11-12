@@ -146,7 +146,6 @@ class BenchReport(BaseModel):
     suite_version: str
     samurai_version: str
     model_id: str = ""
-    relay: str = ""
     hosts: tuple[str, ...] = ()
     started_at: datetime
     finished_at: datetime
@@ -162,8 +161,7 @@ class BenchReport(BaseModel):
 def judge(result_metrics: BenchMetrics, limits: BenchLimits) -> tuple[BenchVerdict, list[str]]:
     """Decide a scenario: the goal, the hypotheses, then the noise ceilings.
 
-    A run that reached the goal with untested hypotheses is not finished work,
-    and a run that needed a broken relay to get there is not a harness result.
+    A run that reached the goal with untested hypotheses is not finished work.
     """
     failures: list[str] = []
     if not result_metrics.goal_reached:
