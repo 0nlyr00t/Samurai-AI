@@ -8234,6 +8234,174 @@ def test_a_worked_turn_is_judged_before_it_may_complete(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_a_turn_whose_runs_all_fail_ends_blocked_not_completed(tmp_path: Path) -> None:
+    """When every tool run collapses and nothing is found, the turn is blocked.
+
+    The judge may still say STOP (the model thinks it is done), but a turn that
+    ran a tool, saw it fail, and recorded no finding did not meet the goal — it
+    must not sign off as `completed`, or the operator reads a fallen run (dead
+    VPN/VM, open circuit breaker) as a finished one.
+    """
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _FailingRunProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.judge_calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            usage = Usage(prompt_tokens=3, completion_tokens=2)
+            if (
+                not request.tools
+                and request.max_tokens is not None
+                and request.max_tokens <= 8
+            ):
+                # the goal judge: agree the box looks done
+                self.judge_calls += 1
+                return ChatResponse(
+                    text="stop", usage=usage, model_id=request.model_id,
+                    provider_id="gpt", latency_ms=1,
+                )
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    text="",
+                    tool_calls=(
+                        ToolCall(id="c1", name="shell_exec",
+                                 arguments={"command": "exit 7"}),
+                    ),
+                    usage=usage, model_id=request.model_id, provider_id="gpt",
+                    latency_ms=1,
+                )
+            return ChatResponse(
+                text="all set, the box is done", usage=usage,
+                model_id=request.model_id, provider_id="gpt", latency_ms=1,
+            )
+
+    provider = _FailingRunProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/test-model")
+    stack[2].set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Collapse lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.service.set_goal(operation.id, "get the user flag")
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "work the box"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            # the one run it made failed, and nothing was found
+            runs = stack[4].list_runs(operation.id)
+            assert [run.status.value for run in runs] == ["failed"]
+            assert app._finding_count() == 0
+            # the judge agreed, but the collapse guard overruled the sign-off
+            reasons = [
+                event.payload["reason"]
+                for event in app.service.repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["blocked"]
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "collapsed" in journal
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_turn_with_a_good_run_still_completes(tmp_path: Path) -> None:
+    """The collapse guard must not touch a turn where a tool actually worked."""
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _GoodRunProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            usage = Usage(prompt_tokens=3, completion_tokens=2)
+            if (
+                not request.tools
+                and request.max_tokens is not None
+                and request.max_tokens <= 8
+            ):
+                return ChatResponse(
+                    text="stop", usage=usage, model_id=request.model_id,
+                    provider_id="gpt", latency_ms=1,
+                )
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    text="",
+                    tool_calls=(
+                        ToolCall(id="c1", name="shell_exec",
+                                 arguments={"command": "echo ok"}),
+                    ),
+                    usage=usage, model_id=request.model_id, provider_id="gpt",
+                    latency_ms=1,
+                )
+            return ChatResponse(
+                text="done", usage=usage, model_id=request.model_id,
+                provider_id="gpt", latency_ms=1,
+            )
+
+    provider = _GoodRunProvider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    stack[5].add("gpt-key", "x")
+    stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    stack[-1].add_model("gpt/test-model")
+    stack[2].set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Good lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.service.set_goal(operation.id, "reach the box")
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "work the box"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            runs = stack[4].list_runs(operation.id)
+            assert [run.status.value for run in runs] == ["completed"]
+            reasons = [
+                event.payload["reason"]
+                for event in app.service.repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["completed"]
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_scope_add_and_rm_edit_the_contract_from_the_chat(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")

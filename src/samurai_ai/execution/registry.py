@@ -25,7 +25,11 @@ from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.permission import command_window
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.http import HttpEgressBroker
-from samurai_ai.execution.process import DEFAULT_STALL_SECONDS, ProcessManager
+from samurai_ai.execution.process import (
+    DEFAULT_STALL_SECONDS,
+    ProcessManager,
+    ProcessResult,
+)
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 
 
@@ -39,6 +43,21 @@ class ToolOutput:
     egress_events: tuple[dict[str, Any], ...] = ()
     #: request/response pairs the service records as evidence (research reads)
     traffic: tuple[dict[str, Any], ...] = ()
+
+
+def stall_as_timeout(result: ProcessResult) -> tuple[bool, str]:
+    """Map a process result to ``(timed_out, a stderr note)``.
+
+    A stalled run — killed because it produced nothing within the stall window —
+    is a timeout in every way that matters downstream: a hung ssh or shell must
+    be recorded as a ``tool.run.timeout`` so the repeat-guard dedupes it, instead
+    of looking like an ordinary non-zero failure that the agent keeps re-running.
+    """
+    if result.timed_out:
+        return True, "\n[process timed out]"
+    if result.stalled:
+        return True, "\n[process stalled: no output within the window — killed]"
+    return False, ""
 
 
 class ToolAdapter(Protocol):
@@ -316,16 +335,15 @@ class ProcessExecTool:
         result = asyncio.run(
             self.manager.run(argv, timeout_seconds=float(self._definition.timeout_seconds))
         )
-        stderr = result.stderr
-        if result.timed_out:
-            stderr += "\n[process timed out]"
+        timed_out, note = stall_as_timeout(result)
+        stderr = result.stderr + note
         if result.truncated:
             stderr += "\n[output truncated]"
         return ToolOutput(
             stdout=result.stdout,
             stderr=stderr,
             exit_code=result.exit_code if result.exit_code is not None else -1,
-            timed_out=result.timed_out,
+            timed_out=timed_out,
         )
 
 
@@ -402,16 +420,15 @@ class ShellExecTool:
                 timeout_seconds=command_window(command),
             )
         )
-        stderr = result.stderr
-        if result.timed_out:
-            stderr += "\n[process timed out]"
+        timed_out, note = stall_as_timeout(result)
+        stderr = result.stderr + note
         if result.truncated:
             stderr += "\n[output truncated]"
         return ToolOutput(
             stdout=result.stdout,
             stderr=stderr,
             exit_code=result.exit_code if result.exit_code is not None else -1,
-            timed_out=result.timed_out,
+            timed_out=timed_out,
         )
 
 
@@ -526,11 +543,14 @@ class SandboxExecTool:
         run_id = str(params.get("_run_id") or uuid4().hex[:12])
         outcome = self.runner.run(profile, run_id, executable, args, scope)
         result = outcome.result
+        timed_out, _ = stall_as_timeout(result)
         stderr = result.stderr
         if self._notice is not None:
             stderr = f"[allowlist] {self._notice}\n{stderr}"
         if result.timed_out:
             stderr += "\n[sandbox timed out]"
+        elif result.stalled:
+            stderr += "\n[sandbox stalled: no output within the window — killed]"
         if result.truncated:
             stderr += "\n[output truncated]"
         if outcome.egress_events:
@@ -545,7 +565,7 @@ class SandboxExecTool:
             stdout=result.stdout,
             stderr=stderr,
             exit_code=result.exit_code if result.exit_code is not None else -1,
-            timed_out=result.timed_out,
+            timed_out=timed_out,
             secrets=(outcome.proxy_token,) if outcome.proxy_token else (),
             egress_events=outcome.egress_events,
         )
