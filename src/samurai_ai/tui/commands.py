@@ -149,6 +149,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     # view and control
     _spec("/lang", GROUP_VIEW, "_show_lang", argument=True, prompt_key="palette.prompt.locale"),
     _spec("/model", GROUP_VIEW, "_show_model_picker"),
+    _spec("/connect", GROUP_VIEW, "_show_model_picker"),
     _spec("/settings", GROUP_VIEW, "_show_settings"),
     _spec("/mouse", GROUP_VIEW, "_toggle_mouse"),
     _spec("/trust", GROUP_VIEW, "_prompt_trust"),
