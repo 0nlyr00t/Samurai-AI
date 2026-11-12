@@ -792,6 +792,9 @@ class DockerSandboxRunner:
             timed_out=result.timed_out,
             cancelled=result.cancelled,
             truncated=truncated,
+            # a stall (no output within the window) is why a hung ssh dies: keep
+            # the flag so the adapter can surface it as a timeout, not a silent exit
+            stalled=result.stalled,
         )
 
 
