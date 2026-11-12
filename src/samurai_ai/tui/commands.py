@@ -166,6 +166,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/ask", GROUP_CONTROL, "_set_mode_ask"),
     _spec("/yolo", GROUP_CONTROL, "_toggle_yolo"),
     _spec("/never", GROUP_CONTROL, "_set_mode_never"),
+    _spec("/sandbox", GROUP_CONTROL, "_cycle_sandbox"),
     _spec("/undo", GROUP_CONTROL, "_undo_last_turn"),
     _spec("/compact", GROUP_CONTROL, "_compact_now"),
     _spec("/clear", GROUP_CONTROL, "_clear_chat"),

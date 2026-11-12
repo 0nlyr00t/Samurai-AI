@@ -717,6 +717,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "mouse.copied": "copied {chars} chars",
         "mouse.nothing-selected": "nothing is selected",
         "mouse.enabled": "mouse capture on (drag over the journal, then Ctrl+C copies)",
+        "sandbox.mode": "host shell confinement: {mode}",
+        "sandbox.unavailable": (
+            "confinement set to {mode}, but bwrap is not installed — "
+            "commands run unconfined until it is"
+        ),
         "mouse.disabled": "mouse capture off — the terminal handles selection and copy natively",
         "side.swarm": "SWARM",
         "side.access": "TARGETS",
@@ -1590,6 +1595,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "mouse.copied": "скопировано символов: {chars}",
         "mouse.nothing-selected": "ничего не выделено",
         "mouse.enabled": "захват мыши включён (выделяй по журналу, Ctrl+C скопирует)",
+        "sandbox.mode": "изоляция хостового shell: {mode}",
+        "sandbox.unavailable": (
+            "изоляция {mode}, но bwrap не установлен — "
+            "команды идут без изоляции, пока его нет"
+        ),
         "mouse.disabled": "захват мыши выключен — выделение и копирование обычные, как в терминале",
         "side.swarm": "РОЙ",
         "side.access": "ЦЕЛИ",
