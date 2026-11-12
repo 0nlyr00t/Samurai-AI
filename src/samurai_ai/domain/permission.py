@@ -52,6 +52,12 @@ _DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 _REDIRECT = re.compile(r">>?\s*([^\s;|&]+)")
 _WRITE_FLAGS = re.compile(r"(?:^|\s)(?:-[oO]\w*|--output|--out)(?:\s+|=)([^\s;|&]+)")
+#: `dd of=/dev/sdb`, `tar -f`, etc.: a value flag that names a written file
+_OF_FLAG = re.compile(r"\bof=([^\s;|&]+)")
+#: commands whose non-flag arguments are files or directories they create/write
+_WRITE_COMMANDS = frozenset(
+    {"mkdir", "touch", "tee", "mkfifo", "mknod", "truncate", "install"}
+)
 
 _SHELL_SEPARATORS = re.compile(r"[;&|]{1,2}")
 _TOKEN = re.compile(r"[^\s;&|<>\"']+")
@@ -89,18 +95,25 @@ def next_mode(mode: PermissionMode) -> PermissionMode:
 
 @dataclass(frozen=True)
 class CommandRisk:
-    """Advisory flags for one command line."""
+    """Advisory flags for one command line.
+
+    ``escape`` is different in kind from the advisory badges: it names the
+    absolute paths a command writes to *outside* the trusted directory, and the
+    boundary is enforced (``decide`` confines it), not merely surfaced.
+    """
 
     sensitive: tuple[str, ...] = ()
     destructive: tuple[str, ...] = ()
+    escape: tuple[str, ...] = ()
 
     @property
     def empty(self) -> bool:
-        return not self.sensitive and not self.destructive
+        return not self.sensitive and not self.destructive and not self.escape
 
     @property
     def badges(self) -> tuple[str, ...]:
-        return (*self.destructive, *self.sensitive)
+        outside = tuple(f"writes {path} (outside the trusted dir)" for path in self.escape)
+        return (*outside, *self.destructive, *self.sensitive)
 
     def label(self) -> str:
         return ", ".join(self.badges)
@@ -125,6 +138,47 @@ def _is_outside(path: str, cwd: str) -> bool:
         return True
 
 
+def _outside_all(path: str, roots: tuple[str, ...]) -> bool:
+    """True when an absolute path falls under none of the allowed roots.
+
+    A relative path lands in the process working directory, which is itself a
+    trusted root, so it is never an escape; only an absolute path can leave.
+    """
+    if not path.startswith("/"):
+        return False
+    return all(_is_outside(path, root) for root in roots if root)
+
+
+def _write_targets(command: str) -> list[str]:
+    """Paths a command creates or writes: redirects, output flags, write verbs.
+
+    Static and best-effort by nature — a shell can still reach a path through a
+    variable or an eval — but it catches the ordinary ways a command lands a
+    file or a directory somewhere: ``> f``, ``-o f``, ``of=f``, and the create
+    verbs (mkdir, touch, tee …) applied to their arguments.
+    """
+    targets: list[str] = []
+    for regex in (_REDIRECT, _WRITE_FLAGS, _OF_FLAG):
+        targets += [match.group(1) for match in regex.finditer(command)]
+    for chunk in _SHELL_SEPARATORS.split(command):
+        tokens = chunk.split()
+        for index, token in enumerate(tokens):
+            if token.rsplit("/", 1)[-1] in _WRITE_COMMANDS:
+                targets += [arg for arg in tokens[index + 1 :] if not arg.startswith("-")]
+    return [target.strip().strip("'\"") for target in targets if target.strip()]
+
+
+def filesystem_escapes(command: str, allowed_roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Absolute write targets that fall outside every trusted root."""
+    roots = tuple(root for root in allowed_roots if root)
+    if not roots:
+        return ()
+    escapes = [
+        path for path in _write_targets(command) if _outside_all(path, roots)
+    ]
+    return tuple(dict.fromkeys(escapes))[:MAX_BADGES]
+
+
 def _sensitive_labels(command: str) -> list[str]:
     for path in _paths_in(command):
         if any(pattern.search(path) for pattern in _SENSITIVE_TOKENS):
@@ -132,31 +186,44 @@ def _sensitive_labels(command: str) -> list[str]:
     return []
 
 
-def _destructive_labels(command: str, cwd: str | None) -> list[str]:
-    labels = list(
+def _destructive_labels(command: str) -> list[str]:
+    return list(
         dict.fromkeys(
             label for pattern, label in _DESTRUCTIVE_PATTERNS if pattern.search(command)
         )
     )
-    if cwd is not None and any(
-        _is_outside(match.group(1), cwd)
-        for regex in (_REDIRECT, _WRITE_FLAGS)
-        for match in regex.finditer(command)
-    ):
-        labels.append("write outside cwd")
-    return labels
 
 
-def classify_command(command: str, cwd: str | None = None) -> CommandRisk:
-    """Flag sensitive paths and destructive shapes in a shell command line."""
+def classify_command(
+    command: str,
+    cwd: str | None = None,
+    *,
+    allowed_roots: tuple[str, ...] | None = None,
+) -> CommandRisk:
+    """Flag sensitive paths, destructive shapes and filesystem escapes.
+
+    ``allowed_roots`` is the trusted filesystem boundary; when it is omitted the
+    working directory (``cwd``) stands in as the only root, so an older caller
+    that passes just ``cwd`` keeps getting the outside-cwd escape it used to see
+    as a badge.
+    """
+    roots = allowed_roots if allowed_roots is not None else ((cwd,) if cwd else ())
     sensitive = _sensitive_labels(command)
-    destructive = _destructive_labels(command, cwd)
-    return CommandRisk(tuple(sensitive[:MAX_BADGES]), tuple(destructive[:MAX_BADGES]))
+    destructive = _destructive_labels(command)
+    escapes = filesystem_escapes(command, roots)
+    return CommandRisk(
+        tuple(sensitive[:MAX_BADGES]), tuple(destructive[:MAX_BADGES]), escapes
+    )
 
 
-def classify_argv(argv: tuple[str, ...], cwd: str | None = None) -> CommandRisk:
+def classify_argv(
+    argv: tuple[str, ...],
+    cwd: str | None = None,
+    *,
+    allowed_roots: tuple[str, ...] | None = None,
+) -> CommandRisk:
     """Classify a structured argv (no shell parsing needed)."""
-    return classify_command(" ".join(argv), cwd)
+    return classify_command(" ".join(argv), cwd, allowed_roots=allowed_roots)
 
 
 RULE_ACTIONS = ("allow", "ask", "deny")
@@ -250,6 +317,14 @@ def decide(
         for rule in rules:
             if rule.action == action and rule.matches(tool_id, command):
                 return Decision(action=action, rule=rule)
+    # A write outside the trusted directory is a boundary violation, not a risk
+    # badge: the filesystem scope is enforced like the network scope. `ask`
+    # offers it to the operator; yolo and never deny it — yolo means "don't ask
+    # me about commands", not "let one write anywhere", and the operator widens
+    # the boundary with /trust, not by waving a single command through. An
+    # explicit allow rule above is the operator's deliberate override and wins.
+    if risk.escape:
+        return Decision(action="ask" if mode is PermissionMode.ASK else "deny")
     # `never` is headless: nobody can answer, so a destructive shape (rm -rf, dd,
     # mkfs, shutdown, write outside cwd) is denied rather than run blind. yolo is
     # the operator's explicit "don't ask me" — it stays silent even here, because

@@ -295,6 +295,8 @@ class ChatController:
         _scope_offered: set[str]
         _scope_declined: set[tuple[str, str]]
         _scope_auto_spent: int
+
+        def _allowed_roots(self) -> tuple[str, ...]: ...
         _fresh_task_text: str | None
         _unstructured_shells: int
         _structure_nudged: bool
@@ -1251,7 +1253,7 @@ class ChatController:
         # Shell-mode output lands in the conversation context, so it is marked
         # as untrusted-external exactly like a tool result.
         self._remember(Message(role="user", content=f"[shell !{command}] (operator command)"))
-        risk = classify_command(command, str(self._cwd))
+        risk = classify_command(command, allowed_roots=self._allowed_roots())
         badge = f"  [{risk.label()}]" if not risk.empty else ""
         self._write_dim(f"⚙ !{command}{badge}")
         mode = self._permission_mode
@@ -1839,7 +1841,7 @@ class ChatController:
                 # refused by the anti-repeat guard a moment later
                 allowed_by_id[call.id] = False
                 continue
-            risk = classify_command(command, str(self._cwd))
+            risk = classify_command(command, allowed_roots=self._allowed_roots())
             decision = decide(
                 self.settings.permission_rules(),
                 tool_id,
@@ -2798,7 +2800,7 @@ class ChatController:
                 note = self.translator.t("chat.timeout-repeat", run=repeated.id)
                 self._write_dim(note, process=False)
                 return Message(role="user", content=f"[tool {call.name}] {note}")
-        risk = classify_command(command, str(self._cwd))
+        risk = classify_command(command, allowed_roots=self._allowed_roots())
         badge = f"  [{risk.label()}]" if not risk.empty else ""
         # the running command lives in the status bar; the finished one becomes
         # its own one-line block, so a repeat in the buffer is noise
