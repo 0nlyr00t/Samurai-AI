@@ -203,7 +203,9 @@ class SamuraiApp(
     }
     #view-tabs {
         width: auto;
-        max-width: 45%;
+        /* room for all six tabs (Loot is the last) plus the new-tab + button;
+           the chat tab label is clamped so one long title cannot eat the row */
+        max-width: 72%;
         height: 2;
         background: $panel;
     }
@@ -836,6 +838,16 @@ class SamuraiApp(
         return self._auto_title or (self.operation.name if self.operation else "") or (
             self.translator.t("tabs.chat")
         )
+
+    #: a long operation title must not eat the tab row and hide later tabs (Loot)
+    _CHAT_TAB_LABEL_MAX = 22
+
+    def _chat_tab_label(self) -> str:
+        """The chat tab label, clamped so the row stays short enough for all tabs."""
+        label = self._chat_label()
+        if len(label) > self._CHAT_TAB_LABEL_MAX:
+            return label[: self._CHAT_TAB_LABEL_MAX - 1] + "…"
+        return label
 
     def _write_welcome(self) -> None:
         journal = self.query_one("#journal", BlockJournal)
@@ -4587,7 +4599,7 @@ class SamuraiApp(
         self._refresh_killchain()
         self._refresh_welcome()
         self.query_one("#brand", Static).update(self._brand_text())
-        self.query_one("#tab-chat", Tab).label = self._chat_label()
+        self.query_one("#tab-chat", Tab).label = self._chat_tab_label()
         workspace = Text.assemble(
             (self.translator.t("side.workspace"), self.paint("dim text-faint")),
             ("\n" + self._short_cwd(), self.paint("accent")),
