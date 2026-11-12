@@ -325,6 +325,7 @@ class SamuraiApp(
         "tab-bounty": "view-bounty",
         "tab-hunt": "view-hunt",
         "tab-scope": "view-scope",
+        "tab-loot": "view-loot",
     }
     _TAB_BY_VIEW = {pane: tab for tab, pane in _VIEW_BY_TAB.items()}
 
@@ -707,6 +708,7 @@ class SamuraiApp(
                 Tab(self.translator.t("tabs.bounty"), id="tab-bounty"),
                 Tab(self.translator.t("tabs.hunt"), id="tab-hunt"),
                 Tab(self.translator.t("tabs.scope"), id="tab-scope"),
+                Tab(self.translator.t("tabs.loot"), id="tab-loot"),
                 id="view-tabs",
                 active="",
             )
@@ -724,6 +726,7 @@ class SamuraiApp(
                 yield BlockJournal(id="view-bounty")
                 yield BlockJournal(id="view-hunt")
                 yield ScopeList(id="view-scope")
+                yield BlockJournal(id="view-loot")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
                 yield Static(id="side-swarm")
@@ -806,6 +809,7 @@ class SamuraiApp(
             ("tab-bounty", "tabs.bounty"),
             ("tab-hunt", "tabs.hunt"),
             ("tab-scope", "tabs.scope"),
+            ("tab-loot", "tabs.loot"),
         ):
             tab = tabs.query_one(f"#{tab_id}", Tab)
             tab.label = self.translator.t(key)
@@ -1167,7 +1171,7 @@ class SamuraiApp(
         panes = [pane for pane, tab in (
             ("journal", "tab-chat"), ("view-ops", "tab-ops"),
             ("view-bounty", "tab-bounty"), ("view-hunt", "tab-hunt"),
-            ("view-scope", "tab-scope"),
+            ("view-scope", "tab-scope"), ("view-loot", "tab-loot"),
         ) if pane == "journal" or self.query_one(f"#{tab}", Tab).display]
         current = self.query_one("#views", ContentSwitcher).current or "journal"
         index = panes.index(current) if current in panes else 0
@@ -1615,6 +1619,8 @@ class SamuraiApp(
             return self._bounty_lines()
         if pane == "view-hunt":
             return self._hunt_lines()
+        if pane == "view-loot":
+            return self._loot_lines()
         return []
 
     def _toggle_scope_rule(self, rule: str) -> None:
@@ -1857,6 +1863,51 @@ class SamuraiApp(
             Text(self.translator.t("bounty.findings"), style=self.paint("bold $accent-alt"))
         )
         return lines + self._finding_lines()
+
+    def _loot_lines(self) -> list[str | Text]:
+        """The Loot tab: findings, captured credentials and flags in one place."""
+        if not self.operation:
+            return [
+                Text(self.translator.t("status.no-operation"), style=self.paint(self._DIM_STYLE))
+            ]
+        lines: list[str | Text] = [
+            Text(self.translator.t("loot.findings"), style=self.paint("bold $accent-alt"))
+        ]
+        lines.extend(self._finding_lines())
+        lines.append(Text(self.translator.t("loot.creds"), style=self.paint("bold $accent")))
+        creds = [
+            meta
+            for meta in self.vault.list_metadata(self.operation.id)
+            if not self._is_service_key(meta.name)
+        ]
+        if not creds:
+            lines.append(
+                Text(self.translator.t("loot.no-creds"), style=self.paint(self._DIM_STYLE))
+            )
+        for meta in creds:
+            used = f" · {self.translator.t('loot.used')}" if self._secret_used(meta.name) else ""
+            lines.append(
+                Text.assemble(
+                    ("[secret] ", self.paint("text-faint")),
+                    (meta.name, self.paint("bold $text")),
+                    (f" | {meta.created_at.strftime('%H:%M')}{used}", self.paint("$text-dim")),
+                )
+            )
+        lines.append(Text(self.translator.t("loot.flags"), style=self.paint("bold $accent")))
+        flags = self.ctf.list_flags(self.operation.id)
+        if not flags:
+            lines.append(
+                Text(self.translator.t("loot.no-flags"), style=self.paint(self._DIM_STYLE))
+            )
+        for flag in flags:
+            lines.append(
+                Text.assemble(
+                    ("[flag] ", self.paint("success")),
+                    (flag.value, self.paint("bold $text")),
+                    (f" | {flag.created_at.strftime('%H:%M')}", self.paint("$text-dim")),
+                )
+            )
+        return lines
 
     # --- slash-command suggestions -------------------------------------
 
@@ -4629,6 +4680,8 @@ class SamuraiApp(
         tab.display = self.operation is not None
         # the scope tab edits the contract, so it only shows with an operation
         self.query_one("#tab-scope", Tab).display = self.operation is not None
+        # loot (findings, creds, flags) is per-operation too
+        self.query_one("#tab-loot", Tab).display = self.operation is not None
 
     def _refresh_goal_strip(self, item: Static) -> None:
         goal = self._current_goal()
