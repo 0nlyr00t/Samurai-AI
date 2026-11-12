@@ -451,8 +451,6 @@ class SamuraiApp(
         self._open_tabs: list[str] = []
         self._tab_states: dict[str, dict[str, Any]] = {}
         self._pastes: dict[int, str] = {}
-        self._relay_warned = False
-        self._relay_offered: set[str] = set()
         self._scope_offered: set[str] = set()
         #: (operation id, literal) the operator already skipped once: do not
         #: reopen the same scope question on every identical probe
@@ -1374,79 +1372,6 @@ class SamuraiApp(
         self._write_dim(self.translator.t("plan.discarded"))
         self._refresh_chrome()
 
-
-    def _relay_command(self, argument: str) -> None:
-        """`/relay <prefix>` runs network tools in a VM; bare `/relay` shows it."""
-        if self.operation is None:
-            self._write_line("[relay] " + self.translator.t("status.no-operation"))
-            return
-        value = argument.strip()
-        if not value:
-            relay = self.operation.relay
-            self._write_dim(
-                self.translator.t("relay.current", relay=relay)
-                if relay
-                else self.translator.t("relay.empty")
-            )
-            return
-        if value.lower() in ("clear", "off"):
-            self.operation = self.service.set_relay(self.operation.id, "")
-            self._write_dim(self.translator.t("relay.cleared"))
-            self._refresh_chrome()
-            return
-        try:
-            self.operation = self.service.set_relay(self.operation.id, value)
-        except Exception as exc:  # noqa: BLE001 - shown, not raised
-            self._write_line(f"[relay] {exc}")
-            return
-        self._write_dim(self.translator.t("relay.set", relay=self.operation.relay))
-        self._relay_canary(self.operation.relay)
-        self._refresh_chrome()
-
-    def _relay_canary(self, relay: str) -> None:
-        """One probe through the fresh relay, so a bad prefix fails before the run."""
-        if not relay.strip():
-            return
-
-        def probe() -> None:
-            import os
-            import signal
-
-            proc: subprocess.Popen[str] | None = None
-            try:
-                # DEVNULL: a relay that asks (host key, password) must not
-                # steal the terminal's stdin from the TUI and look like a freeze;
-                # start_new_session so the timeout kills the relay's children too
-                proc = subprocess.Popen(
-                    ["bash", "-lc", f"{relay} id"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.DEVNULL,
-                    text=True,
-                    start_new_session=True,
-                )
-                try:
-                    out, err = proc.communicate(timeout=25)
-                except subprocess.TimeoutExpired:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                    proc.communicate()
-                    ok, detail = False, "no answer within 25s"
-                else:
-                    output = out.strip() or err.strip()
-                    ok = proc.returncode == 0 and "uid=" in out
-                    detail = (
-                        output.splitlines()[-1][:160] if output else f"exit {proc.returncode}"
-                    )
-            except Exception as exc:  # noqa: BLE001 - reported, not raised
-                ok, detail = False, str(exc)[:160]
-            key = "relay.canary-ok" if ok else "relay.canary-fail"
-            text = self.translator.t(key, detail=detail)
-            try:
-                self.call_from_thread(self._write_dim, text)
-            except RuntimeError:  # the app (or the test) is already gone
-                pass
-
-        threading.Thread(target=probe, daemon=True).start()
 
     def _goal_command(self, argument: str) -> None:
         """`/goal <condition>` sets it; bare `/goal` shows it; `clear` drops it."""
@@ -4574,13 +4499,6 @@ class SamuraiApp(
                 label_key = "keys.action." + action.replace("_", "-")
                 parts.append(f"{key} {self.translator.t(label_key)}")
         bar.update(" · ".join(parts))
-
-    def _relay_warning(self) -> None:
-        """Say it once when a target is unreachable and no relay is set."""
-        if self.operation is None or self.operation.relay or self._relay_warned:
-            return
-        self._relay_warned = True
-        self._write_dim(self.translator.t("relay.hint"), process=False)
 
     def _cost_text(self) -> str:
         """Spend per model; a route with no tariff on file shows `n/a`."""

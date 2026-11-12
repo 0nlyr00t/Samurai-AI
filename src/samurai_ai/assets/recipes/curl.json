@@ -14,7 +14,6 @@
   "execution": {
     "native": true,
     "container": false,
-    "relay_supported": true,
     "native_preferred": false
   },
   "provision": {

@@ -90,10 +90,6 @@ class Operation(BaseModel):
     #: the harness has no internet: model calls must be local, tools that reach
     #: the outside are refused instead of failing halfway
     offline: bool = False
-    #: a command prefix that runs a tool somewhere else — `prlctl exec '<uuid>'`,
-    #: `ssh -J jump`. Network tools then execute on the host through it instead
-    #: of in a container, which is how a VPN living in a VM is reachable at all.
-    relay: str = Field(default="", max_length=400)
     #: a completion condition ("all four hosts pwned, both flags"); while it is
     #: set, an evaluator — not the round counter — decides whether to go on
     goal: str = Field(default="", max_length=500)

@@ -100,7 +100,7 @@ def test_a_scenario_drives_the_chat_loop_and_reports_metrics(
     services, provider = _stack(tmp_path, monkeypatch)
     runner = BenchRunner(services, workdir=tmp_path / "runs")
     result = runner.run_scenario(
-        _scenario(), hosts=("127.0.0.1",), relay="", model_id="gpt/test-model@v1"
+        _scenario(), hosts=("127.0.0.1",), model_id="gpt/test-model@v1"
     )
     assert result.verdict is BenchVerdict.FAIL  # the fake never completes the goal
     assert "goal not reached" in result.failures
@@ -155,7 +155,7 @@ def test_a_hanging_run_ends_at_the_wall_ceiling(
     runner = BenchRunner(services, workdir=tmp_path / "runs")
     scenario = _scenario(max_wall_seconds=2.0)
     result = runner.run_scenario(
-        scenario, hosts=("127.0.0.1",), relay="", model_id="gpt/test-model@v1"
+        scenario, hosts=("127.0.0.1",), model_id="gpt/test-model@v1"
     )
     assert result.verdict is BenchVerdict.ERROR
     assert "wall ceiling" in (result.error or "")
@@ -169,7 +169,7 @@ def test_a_silent_run_reports_the_journal(
     services[2].set_value("model.default", "")
     services[7].list_models = lambda provider_id=None: []  # type: ignore[assignment]
     runner = BenchRunner(services, workdir=tmp_path / "runs")
-    result = runner.run_scenario(_scenario(), hosts=("127.0.0.1",), relay="", model_id="")
+    result = runner.run_scenario(_scenario(), hosts=("127.0.0.1",), model_id="")
     assert result.verdict is BenchVerdict.ERROR
     assert "no model" in (result.error or "")
 
