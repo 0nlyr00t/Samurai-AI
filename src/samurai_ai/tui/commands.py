@@ -159,6 +159,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/last", GROUP_VIEW, "_jump_to_last_notice"),
     _spec("/quiet", GROUP_VIEW, "_set_exec_quiet"),
     _spec("/verbose", GROUP_VIEW, "_set_exec_verbose"),
+    _spec("/autonomy", GROUP_CONTROL, "_toggle_autonomy", argument=True),
     _spec(
         "/goal",
         GROUP_CONTROL,
