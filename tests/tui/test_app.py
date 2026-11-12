@@ -449,14 +449,24 @@ def test_model_picker_persists_default(tmp_path: Path) -> None:
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            from samurai_ai.tui.app import ModelPickerScreen
+            from samurai_ai.tui.app import ConnectScreen, ModelPickerScreen
+            # step one: the provider-first connect screen
+            assert isinstance(app.screen, ConnectScreen)
+            providers = app.screen.query_one("#connect-providers", OptionList)
+            index = next(
+                i for i in range(providers.option_count)
+                if "fake" in str(providers.get_option_at_index(i).prompt)
+            )
+            providers.highlighted = index
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            # step two: the model picker scoped to the chosen provider
             assert isinstance(app.screen, ModelPickerScreen)
-            # first entry is the sentinel; down lands on the configured model
-            await pilot.press("down")
-            await pilot.press("tab")
+            await pilot.press("tab")  # into the reasoning column
             await pilot.press("down")
             await pilot.press("down")
-            await pilot.press("down")
+            await pilot.press("down")  # off -> low -> medium -> high
             await pilot.press("enter")
             await pilot.pause()
             assert settings.get_value("model.default") == "fake/fake-model@v1"
@@ -496,21 +506,39 @@ def test_model_picker_configured_only_and_current(tmp_path: Path) -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
 
-            from samurai_ai.tui.app import REASONING_LEVELS, ModelPickerScreen
+            from samurai_ai.tui.app import (
+                REASONING_LEVELS,
+                ConnectScreen,
+                ModelPickerScreen,
+            )
 
+            # step one: the connect screen marks the current provider
+            assert isinstance(app.screen, ConnectScreen)
+            providers = app.screen.query_one("#connect-providers", OptionList)
+            giga = next(
+                i for i in range(providers.option_count)
+                if str(providers.get_option_at_index(i).prompt).startswith("giga")
+            )
+            assert "current" in str(providers.get_option_at_index(giga).prompt)
+            providers.highlighted = giga
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            # step two: models are scoped to the chosen provider
             assert isinstance(app.screen, ModelPickerScreen)
             options = app.screen.query_one("#model-options", OptionList)
             prompts = [
                 str(options.get_option_at_index(i).prompt)
                 for i in range(options.option_count)
             ]
-            # only configured providers are listed, no unconfigured static ones
+            # only this provider's models, no other static providers
             assert not any("openai/gpt-4o@v1" in prompt for prompt in prompts)
             assert not any("moonshot/kimi-k2@v1" in prompt for prompt in prompts)
             assert any(current in prompt for prompt in prompts)
             # the configured model is highlighted and marked as current
-            assert options.highlighted == 1  # sentinel at 0, current at 1
-            assert "current" in str(options.get_option_at_index(1).prompt)
+            assert options.highlighted == 0  # no sentinel now; current at 0
+            assert "current" in str(options.get_option_at_index(0).prompt)
             # reasoning follows the per-model stored level
             reasoning = app.screen.query_one("#reasoning-options", OptionList)
             assert reasoning.highlighted == REASONING_LEVELS.index("high")
@@ -623,10 +651,12 @@ def test_custom_endpoint_wizard(tmp_path: Path) -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
 
-            from samurai_ai.tui.app import CustomEndpointScreen, ModelPickerScreen
+            from samurai_ai.tui.app import ConnectScreen, CustomEndpointScreen
 
-            assert isinstance(app.screen, ModelPickerScreen)
-            # first option is the "+ add custom endpoint" sentinel
+            assert isinstance(app.screen, ConnectScreen)
+            # the last connect row is "Other — custom OpenAI-compatible endpoint"
+            providers = app.screen.query_one("#connect-providers", OptionList)
+            providers.highlighted = providers.option_count - 1
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, CustomEndpointScreen)
@@ -8431,8 +8461,27 @@ def test_an_at_path_inlines_the_file(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_the_model_picker_lists_providers_without_a_key(tmp_path: Path) -> None:
-    """An unconfigured provider is reachable from /model instead of invisible."""
+def test_connect_screen_row_labels_reflect_status() -> None:
+    """A provider row shows local / connected / needs-key at a glance."""
+    from samurai_ai.i18n import Translator
+    from samurai_ai.tui.screens.connect import ConnectScreen
+
+    translator = Translator("en")
+    providers = [
+        {"id": "ollama", "api_family": "ollama", "local": True, "auth": "local"},
+        {"id": "openai", "api_family": "openai-compatible", "local": False,
+         "auth": "configured"},
+        {"id": "xai", "api_family": "openai-compatible", "local": False, "auth": "missing"},
+    ]
+    screen = ConnectScreen(translator, providers, current_provider="openai")
+    assert "local" in screen._row_label(providers[0])
+    label = screen._row_label(providers[1])
+    assert "connected" in label and "(current)" in label
+    assert "needs API key" in screen._row_label(providers[2])
+
+
+def test_the_connect_screen_lists_providers_without_a_key(tmp_path: Path) -> None:
+    """An unconfigured provider is reachable from /connect, marked needs-key."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     stack[-1].register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
@@ -8442,15 +8491,22 @@ def test_the_model_picker_lists_providers_without_a_key(tmp_path: Path) -> None:
         app = SamuraiApp(*stack)
         async with app.run_test(size=(120, 34)) as pilot:
             await pilot.pause()
-            await app._open_model_picker()
+            await app._open_connect()
             await pilot.pause()
-            listed = app.screen.query_one("#model-options", OptionList)
-            ids = [str(option.id) for option in listed.options]
-            assert any(i.startswith("k-") for i in ids), ids
-            key_row = next(i for i in ids if i.startswith("k-"))
-            listed.highlighted = ids.index(key_row)
+            from samurai_ai.tui.screens import ArgumentScreen
+
+            listed = app.screen.query_one("#connect-providers", OptionList)
+            # the gpt endpoint has a secret_name but no stored key -> needs-key
+            index = next(
+                i for i in range(listed.option_count)
+                if str(listed.get_option_at_index(i).prompt).startswith("gpt")
+            )
+            assert "needs API key" in str(listed.get_option_at_index(index).prompt)
+            listed.highlighted = index
             await pilot.press("enter")
             await pilot.pause()
+            # selecting a needs-key provider opens the key prompt
+            assert isinstance(app.screen, ArgumentScreen)
 
     asyncio.run(exercise())
 
