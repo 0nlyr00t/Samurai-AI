@@ -2075,7 +2075,13 @@ class SamuraiApp(
         return [str(item) for item in value] if isinstance(value, list) else []
 
     def _allowed_roots(self) -> tuple[str, ...]:
-        """The trusted filesystem boundary: cwd plus every trusted directory."""
+        """The trusted filesystem boundary a shell command may write under.
+
+        The working directory plus every trusted directory (stored or this
+        session). A write to an absolute path outside all of these is confined
+        by ``decide`` (Layer 1) and by the bwrap sandbox (Layer 2) — the
+        filesystem counterpart of the network scope.
+        """
         roots = [str(self._cwd), *self._stored_trusted_dirs(), *sorted(self._session_trusted)]
         return tuple(dict.fromkeys(roots))
 
