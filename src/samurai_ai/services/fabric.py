@@ -1,4 +1,4 @@
-"""Where a tool would come from: native, project-local, container, provision, relay.
+"""Where a tool would come from: native, project-local, container, provision, fail.
 
 The resolver is the one place that decides, in a fixed order, so a missing
 binary becomes a machine-readable reason instead of a failed command. Native
@@ -135,11 +135,11 @@ def _manual_command(package: str, manager: str) -> str:
 
 
 class ToolResolver:
-    """Fixed order: native, project-local, container, provision, relay, fail.
+    """Fixed order: native, project-local, container, provision, fail.
 
     The order is the policy: hardware and devices need the native run, isolation
-    needs the container, provisioning is a fallback that costs an approval, and
-    the relay is the last resort before a manual instruction.
+    needs the container, and provisioning is the fallback that costs an approval
+    before a manual instruction.
     """
 
     def __init__(
@@ -147,11 +147,9 @@ class ToolResolver:
         profile: EnvironmentProfile,
         *,
         project_local_dir: Path | None = None,
-        relay: str = "",
     ) -> None:
         self.profile = profile
         self.project_local_dir = project_local_dir
-        self.relay = relay
 
     def resolve(self, tool_id: str, recipe: Any = None) -> Resolution:
         executable = recipe.executable if recipe is not None else ""
@@ -189,14 +187,6 @@ class ToolResolver:
                 path="docker",
                 reason=ProvisionReason.INSTALLED,
                 detail="container path",
-            )
-        if recipe.execution.relay_supported and self.relay:
-            return Resolution(
-                tool_id=tool_id,
-                path=path or self.relay,
-                reason=ProvisionReason.INSTALLED,
-                detail="relay path",
-                executable=executable,
             )
         provisionable, why, manual = self.can_provision(recipe)
         if provisionable:

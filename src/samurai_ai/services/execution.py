@@ -141,7 +141,6 @@ class ToolExecutionService:
                 f"tool {definition.id} is risk class r4 and cannot be executed"
             )
         check_tool(definition, operation.offline)
-        self._apply_relay(operation, adapter)
         self._apply_sandbox(adapter)
         validated = self.registry.validate_params(definition, params or {})
         if definition.id == "shell.exec" and validated.get("command"):
@@ -222,19 +221,10 @@ class ToolExecutionService:
         # second line of defence: adapters check their own targets too, but a forgotten
         # check must not become a hole — the guard sees every host-shaped literal. It
         # runs once the run row exists, so a refusal is still visible in the history.
-        guarded = validated
-        relay_prefix = getattr(adapter, "relay", "")
-        if relay_prefix and str(validated.get("command", "")).startswith(relay_prefix):
-            # the relay's own address is the transport, not a target: judge the
-            # command that remains after the prefix
-            guarded = {
-                **validated,
-                "command": str(validated["command"])[len(relay_prefix) :].strip(),
-            }
         try:
             guard(
                 operation.scope,
-                guarded,
+                validated,
                 exempt=tuple(getattr(adapter, "scope_exempt", ())),
             )
         except ScopeGuardError as exc:
@@ -286,23 +276,6 @@ class ToolExecutionService:
             return
         adapter.sandbox_mode = mode
         adapter.sandbox_roots = tuple(roots)
-
-    def _apply_relay(self, operation: Any, adapter: Any) -> None:
-        """Point a sandbox adapter at the operation's relay, or back at docker."""
-        from samurai_ai.execution.relay import RelaySandboxRunner, build_runner
-
-        if getattr(adapter, "relay_supported", False):
-            adapter.relay = operation.relay.strip()
-        if getattr(adapter, "is_native", False):
-            return  # a native adapter builds the prefix into its own argv
-        if not hasattr(adapter, "_runner"):
-            return
-        relay = operation.relay.strip()
-        current = adapter._runner
-        if relay and not isinstance(current, RelaySandboxRunner):
-            adapter._runner = build_runner(relay)
-        elif not relay and isinstance(current, RelaySandboxRunner):
-            adapter._runner = None
 
     def rule_decision(
         self, definition: ToolDefinition, params: Mapping[str, Any]

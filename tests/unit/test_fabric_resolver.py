@@ -32,8 +32,8 @@ def _profile(**overrides: object):  # type: ignore[no-untyped-def]
     return EnvironmentProfile.model_validate(base)
 
 
-def _resolver(profile, tmp_path: Path, relay: str = "") -> ToolResolver:  # type: ignore[no-untyped-def]
-    return ToolResolver(profile, project_local_dir=tmp_path, relay=relay)
+def _resolver(profile, tmp_path: Path) -> ToolResolver:  # type: ignore[no-untyped-def]
+    return ToolResolver(profile, project_local_dir=tmp_path)
 
 
 def _recipe(name: str) -> ToolManifest:
@@ -115,18 +115,6 @@ def test_hashcat_without_a_gpu_is_not_provisioned_by_default(tmp_path: Path, mon
     ).resolve("crack.hashcat", _recipe("hashcat"))
     assert resolution.reason is ProvisionReason.UNSUPPORTED_PLATFORM
     assert "GPU" in resolution.detail
-
-
-def test_the_relay_is_the_last_resort_and_only_when_it_supports_the_tool(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setattr("samurai_ai.services.fabric.which", lambda name: "")
-    profile = _profile(docker_daemon=False)
-    with_relay = _resolver(profile, tmp_path, relay="ssh vm").resolve(
-        "scan.nmap", _recipe("nmap")
-    )
-    assert with_relay.reason is ProvisionReason.INSTALLED
-    assert with_relay.detail == "relay path"
 
 
 def test_platform_key_maps_families() -> None:
