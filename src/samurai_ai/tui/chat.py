@@ -66,7 +66,7 @@ from samurai_ai.domain.scope import ScopeContract, scope_relatedness
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
 from samurai_ai.i18n import Translator
-from samurai_ai.services import goal_judge
+from samurai_ai.services import goal_judge, title_smith
 from samurai_ai.services.chat import ChatHistoryService, marker
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
@@ -264,6 +264,8 @@ class ChatController:
         _thinking_frame: int
         _plan_mode: bool
         _auto_title: str | None
+        _auto_title_enabled: bool | None
+        is_headless: bool
         # properties on the app, so declared loosely here
         _permission_mode: Any
         _yolo: Any
@@ -1159,7 +1161,10 @@ class ChatController:
         if model_id is None:
             self._write_line("[error] " + self.translator.t("chat.no-model"))
             return
+        # the first words are an instant placeholder; a cheap model then
+        # replaces them with the task's gist (see _refine_title)
         title = " ".join(text.split()[:6])
+        fresh_title = False
         if not self.operation:
             # No ceremony: the first message spawns its own operation tab.
             self.operation = self.service.create(
@@ -1170,12 +1175,65 @@ class ChatController:
             # the targets in the task text are the operator's own words — they
             # become the scope without a confirmation picker
             self._fresh_task_text = text
+            fresh_title = True
         if self._auto_title is None:
             # The tab names itself from the task at hand
             self._auto_title = title
+            fresh_title = True
         self._write_user_message(text)
         self._thinking_start()
+        if self._auto_title_enabled is None:
+            # off under a headless drive, on in the real interactive app
+            self._auto_title_enabled = not self.is_headless
+        if fresh_title and self.operation is not None and self._auto_title_enabled:
+            self.run_worker(
+                self._refine_title(text, model_id, self.operation.id, title),
+                exclusive=False,
+            )
         self.run_worker(self._chat(text, model_id, None), exclusive=False)
+
+    async def _refine_title(
+        self, text: str, model_id: str, operation_id: str, placeholder: str
+    ) -> None:
+        """Replace the first-words tab name with a gist from a cheap model.
+
+        A nicety, never a blocker: any failure leaves the placeholder, and the
+        operator's own rename (or a tab switch) is never overwritten.
+        """
+        fast = self.settings.get_value("model.fast") or model_id
+        system, user = title_smith.build_prompt(text)
+        messages = (
+            Message(role="system", content=system),
+            Message(role="user", content=user),
+        )
+        try:
+            answer = await self._request_chat_completion(
+                operation_id, fast, None, (), max_tokens=24, messages=messages
+            )
+        except Exception:  # noqa: BLE001 - a tab name must never break a turn
+            return
+        if answer is None:
+            return
+        title = title_smith.clean(answer.text)
+        if not title or title == placeholder:
+            return
+        try:
+            current = self.service.get(operation_id)
+        except Exception:  # noqa: BLE001 - the operation may be gone already
+            return
+        # a late title must never clobber an operator's own rename: only touch
+        # the name while it is still the first-words placeholder
+        if current.name != placeholder:
+            return
+        try:
+            self.service.rename(operation_id, title)
+        except Exception:  # noqa: BLE001 - the stored name is a nicety too
+            return
+        if self.operation is not None and self.operation.id == operation_id:
+            self.operation = self.service.get(operation_id)
+            if self._auto_title == placeholder:
+                self._auto_title = title
+            self._refresh_chrome()
 
     def _shell_mode(self, command: str) -> None:
         self._current_tool = f"!{command}"
