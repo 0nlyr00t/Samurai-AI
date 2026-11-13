@@ -73,6 +73,7 @@ from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.genes import GeneService
 from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import KernelService
+from samurai_ai.services.learned_skills import LearnedSkillService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
@@ -283,6 +284,7 @@ class AgentOrchestrator:
         redactor: SecretRedactor | None = None,
         memory: CampaignMemoryService | None = None,
         skills: SkillService | None = None,
+        learned_skills: LearnedSkillService | None = None,
         genes: GeneService | None = None,
         impact: ImpactService | None = None,
         questions: OperatorQuestionService | None = None,
@@ -298,6 +300,7 @@ class AgentOrchestrator:
         self.redactor = redactor or SecretRedactor()
         self.memory = memory
         self.skills = skills
+        self.learned_skills = learned_skills
         self.genes = genes
         self.impact = impact
         self.questions = questions
@@ -375,8 +378,8 @@ class AgentOrchestrator:
                 model.id, ("structured-output", ModelCapability.TOOLS.value)
             )
 
-        extra_context, memory_entry_ids, skill_ids = self._resolve_context(
-            workspace, skill_names
+        extra_context, memory_entry_ids, skill_ids, learned_skill_ids = self._resolve_context(
+            workspace, skill_names, task.title
         )
 
         run = AgentRun(
@@ -406,6 +409,7 @@ class AgentOrchestrator:
                 "skills": list(skill_names),
                 "memory_entry_ids": list(memory_entry_ids),
                 "skill_ids": list(skill_ids),
+                "learned_skill_ids": list(learned_skill_ids),
             },
         )
         del operation
@@ -462,7 +466,47 @@ class AgentOrchestrator:
                 "agent.run.finish",
                 {"run_id": run.id, "status": run.status.value, "steps": len(steps)},
             )
+            self._learn_from_run(operation_id, run, workspace, learned_skill_ids)
         return self.get_run(run.id)
+
+    def _learn_from_run(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        workspace: str | None,
+        learned_skill_ids: Sequence[str],
+    ) -> None:
+        """Close the self-learning loop on a successful run.
+
+        Attribute this run's objective outcome to the skills it reused, then
+        distil a new candidate from the episode. Learning is advisory: a failure
+        here must never turn a finished run into a failed one.
+        """
+        if self.learned_skills is None or workspace is None:
+            return
+        try:
+            produced, invalid = self._run_outcome(operation_id, run.id)
+            if learned_skill_ids:
+                self.learned_skills.record_reuse_outcome(
+                    learned_skill_ids, produced_finding=produced, invalid_actions=invalid
+                )
+            self.learned_skills.extract(operation_id, workspace, run.id)
+        except Exception:  # noqa: BLE001 - learning never breaks a finished run
+            return
+
+    def _run_outcome(self, operation_id: str, run_id: str) -> tuple[bool, int]:
+        """Did this run propose a finding, and how many commands were rejected?"""
+        produced = False
+        invalid = 0
+        for event in self.operations.events(operation_id):
+            payload = event.payload
+            if payload.get("run_id") != run_id:
+                continue
+            if event.event_type == "agent.command.rejected":
+                invalid += 1
+            elif event.event_type == "agent.step" and payload.get("step") == "finding-proposed":
+                produced = True
+        return produced, invalid
 
     def resume(self, run_id: str) -> AgentRun | None:
         """Pick an interrupted run up from its last checkpoint.
@@ -482,7 +526,7 @@ class AgentOrchestrator:
             return None
         # resume does not re-plan: the stored steps, cut at the checkpoint
         leftover = steps[next_index:]
-        extra_context, _, _ = self._resolve_context(run.workspace, list(run.skills))
+        extra_context, _, _, _ = self._resolve_context(run.workspace, list(run.skills))
         self._execute_steps(
             run.operation_id,
             run,
@@ -503,16 +547,19 @@ class AgentOrchestrator:
         return self.get_run(run.id)
 
     def _resolve_context(
-        self, workspace: str | None, skill_names: Sequence[str]
-    ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+        self, workspace: str | None, skill_names: Sequence[str], task_text: str = ""
+    ) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
         """Resolve memory digest and skill fragments before the run is recorded.
 
         Fails fast (no run row, no events) when the workspace or a skill is
-        unavailable.
+        unavailable. Learned skills are advisory: a failure there never blocks a
+        run, and they are clearly labelled as agent-distilled and unverified so
+        they can never outrank operator instructions.
         """
         sections: list[str] = []
         memory_entry_ids: tuple[str, ...] = ()
         skill_ids: tuple[str, ...] = ()
+        learned_ids: tuple[str, ...] = ()
         if workspace is not None:
             if self.memory is None:
                 raise AgentError("campaign memory is not configured")
@@ -529,7 +576,17 @@ class AgentOrchestrator:
                 sections.append(
                     "Installed skills (trusted operator instructions):\n" + fragment
                 )
-        return "\n\n".join(sections), memory_entry_ids, skill_ids
+        if workspace is not None and self.learned_skills is not None:
+            try:
+                learned, learned_ids = self.learned_skills.prompt_fragment(workspace, task_text)
+            except Exception:  # noqa: BLE001 - learned skills must never block a run
+                learned, learned_ids = "", ()
+            if learned:
+                sections.append(
+                    "Learned skills (agent-distilled, unverified — weigh against "
+                    "operator instructions and current evidence):\n" + learned
+                )
+        return "\n\n".join(sections), memory_entry_ids, skill_ids, learned_ids
 
     def _plan(
         self,
