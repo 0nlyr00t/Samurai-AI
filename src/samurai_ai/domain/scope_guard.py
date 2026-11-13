@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from samurai_ai.domain.execution import ToolScopeError
 from samurai_ai.domain.scope import ScopeContract, ScopeDecision
+from samurai_ai.domain.url_scheme import HTTP_SCHEMES
 
 #: real top-level domains. The loose "letters after a dot" rule called
 #: `urllib.request` and `import os` hosts and refused them; a suffix nobody
@@ -111,8 +112,16 @@ def _scan_text(text: str) -> list[tuple[str, str]]:
         if "://" in part:
             # a scheme beats the path heuristic: «curl https://host» has no path,
             # so Path().suffix reads «.com» and would have called it a local file
-            if urlsplit(part).hostname:
-                found.append(("url", part))
+            parts = urlsplit(part)
+            if parts.hostname:
+                if parts.scheme.lower() in HTTP_SCHEMES:
+                    found.append(("url", part))
+                else:
+                    # a non-http(s) scheme is not a scope question: judge its
+                    # host for scope and leave the scheme to the tool's own
+                    # input validation (domain.url_scheme), so a `ssh://` to an
+                    # in-scope box is not misreported as "outside the scope"
+                    found.append(("host", parts.hostname))
             continue
         if _is_local_path(part):
             continue
