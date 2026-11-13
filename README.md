@@ -1,116 +1,116 @@
 <p align="center">
-  <img src="src/samurai_ai/assets/samurai-logo.jpg" width="880" alt="Samurai AI — самурай с катаной в красном росчерке-кольце и вордмарк SAMURAI-AI">
+  <img src="src/samurai_ai/assets/samurai-logo.jpg" width="880" alt="Samurai AI — a samurai with a katana inside a red brush ring and the SAMURAI-AI wordmark">
 </p>
 
 <p align="center">
-  <strong>Русский</strong> · <a href="README.en.md">English</a>
+  <a href="README.ru.md">Русский</a> · <strong>English</strong>
 </p>
 
 # Samurai AI
 
-Локальный харнесс для авторизованных атак: Red Team, Bug Bounty, CTF/HTB, планирование операций. Операция ведётся как процесс — границы, план, доказательства, отчёт, — и агент работает внутри этого процесса, а не в свободном чате с инструментами.
+A local harness for authorized attacking: red teaming, bug bounty, CTF/HTB, operation planning. An operation is run as a process — boundaries, plan, evidence, report — and the agent works inside that process instead of in an unbounded chat with tools.
 
-TUI и CLI, состояние на машине оператора, секреты в локальном vault. Инструменты исполняются в контейнерах с закреплённым digest; выход за scope и опасные действия проходят через политику, а не через доверие к модели.
+TUI and CLI, state on the operator's machine, secrets in a local vault. Tools run in containers pinned by digest; out-of-scope calls and dangerous actions go through policy rather than through trust in the model.
 
 <p align="center">
-  <img src="src/samurai_ai/assets/samurai-tui.ru.png" width="1080" alt="TUI Samurai AI: журнал операции с шагами агента, находкой и ожидающим одобрением, план 1/3">
+  <img src="src/samurai_ai/assets/samurai-tui.en.png" width="1080" alt="Samurai AI TUI: operation journal with agent steps, a finding and a waiting approval, plan progress 1/3">
 </p>
 
-## Установка
+## Install
 
-macOS и Linux, без root и без Python:
+macOS and Linux, without root and without Python:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/install.sh | bash
 ```
 
-Установщик берёт бинарник последнего релиза, сверяет sha256 и, если установлен `cosign`, проверяет Sigstore-подпись с привязкой к identity release-workflow; расхождение — отказ до установки. Ставит в `~/.local/bin` и добавляет каталог в PATH.
+The installer takes the latest release binary, checks its sha256 and, when `cosign` is installed, verifies the Sigstore signature bound to the release workflow identity; a mismatch aborts before anything is installed. It installs into `~/.local/bin` and adds that directory to PATH.
 
-- конкретный релиз: `... | bash -s -- --ref v0.4.0`
-- `--dry-run` — показать план без изменений
-- `--force-uv` — поставить из тега через uv вместо бинарника
+- a specific release: `... | bash -s -- --ref v0.4.0`
+- `--dry-run` — print the plan, change nothing
+- `--force-uv` — install from the tag via uv instead of the binary
 
-Релизы собираются под linux-x86_64, linux-arm64, darwin-arm64 и windows-x86_64. На платформах без артефакта (Intel Mac) установщик собирает из тега через uv. Для песочницы нужен Docker.
+Releases are built for linux-x86_64, linux-arm64, darwin-arm64 and windows-x86_64. On platforms without an artifact (Intel Macs) the installer builds from the tag via uv. The sandbox needs Docker.
 
-Обновление: `samurai update` (`--check` — только проверка версии). Проверка подписей — [`md/compatibility.md`](md/compatibility.md).
+Update: `samurai update` (`--check` only reports). Verifying signatures: [`md/compatibility.md`](md/compatibility.md).
 
-## Удаление
+## Uninstall
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/0nlyr00t/Samurai-AI/main/uninstall.sh | bash
 ```
 
-Сносит бинарник, PATH-блок, состояние (`~/.config/samurai`) и образы белтов. `--keep-state` оставляет состояние, `--yes` не спрашивает, `--dry-run` показывает план; без терминала скрипт ничего не удаляет молча.
+Removes the binary, the PATH block, the state directory (`~/.config/samurai`) and the belt images. `--keep-state` keeps the state, `--yes` skips the question, `--dry-run` shows the plan; without a terminal it removes nothing silently.
 
-## Возможности
+## Capabilities
 
-**Операция.** Scope расширяется только с подтверждением: `scope add` спрашивает, если правило действительно расширяет границы, и молчит, если цель уже покрыта. Четыре режима (Bug Bounty, CTF/HTB, Red Team, Operation Planning), проверяемый lifecycle, include/exclude scope для домена, wildcard, URL origin и IP/CIDR, неизменяемые доказательства с SHA-256, находки от кандидата до отчёта, снимки, откат, форк, сверка восстановления.
+**Operation.** Scope only widens with a confirmation: `scope add` asks when a rule really widens the boundary and stays silent when the target is already covered. Four modes (bug bounty, CTF/HTB, red team, operation planning), an audited lifecycle, include/exclude scope for domains, wildcards, URL origins and IP/CIDR, immutable evidence with SHA-256, findings from candidate to reported, snapshots, restore, fork, recovery reconciliation.
 
-**План и одобрения.** Задачи с зависимостями, стадии и гейты, артефакты-требования, риски R0–R4. Исполнение выше R0 ждёт одобрения оператора; режимы `ask`, `yolo`, `never` и поаргументные правила `allow|ask|deny` держат политику вне модели.
+**Plan and approvals.** Tasks with dependencies, stages and gates, required artifacts, risks R0–R4. Execution above R0 waits for the operator; `ask`, `yolo`, `never` modes and per-argument `allow|ask|deny` rules keep policy outside the model.
 
-**Инструменты.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, `intel.shodan`, `intel.censys`, `loot.scan` (креды из тела), удалённое администрирование (ssh, SMB, RDP-проба, ADB), виртуалки и диски, сборка и запуск эксплойтов. Новый инструмент описывается JSON-манифестом; пакеты инструментов, профилей и плейбуков ставятся плагинами с sha256 на каждый файл.
+**Tools.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, `intel.shodan`, `intel.censys`, `loot.scan` (credentials from a body), remote administration (ssh, SMB, an RDP probe, ADB), VMs and disks, exploit building and running. A new tool is a JSON manifest; packages of tools, profiles and playbooks install as plugins with a sha256 per file.
 
-**Песочница.** Docker-профили с закреплённым digest, `--cap-drop ALL`, read-only корень, лимиты CPU, памяти и PID, scoped egress-прокси с DNS pinning и аудитом соединений. Белт разложен по радиусу поражения: админский образ без компилятора, exploit-образ без чужих ключей.
+**Sandbox.** Docker profiles pinned by digest, `--cap-drop ALL`, read-only root, CPU/memory/PID limits, a scoped egress proxy with DNS pinning and connection audit. The belt is split by blast radius: the admin image carries no compiler, the exploit image carries no foreign credentials.
 
-**Импакт.** Лестница `read → write → auth-bypass → data-export → rce` с баллами, порогом отчётности и бюджетом эскалации; отчёт не выпускается по находкам ниже порога. Трафик, вывод и файлы сохраняются артефактами.
+**Impact.** A ladder `read → write → auth-bypass → data-export → rce` with scores, a reporting threshold and an escalation budget; reports refuse findings below the threshold. Traffic, output and files are kept as artifacts.
 
-**Ход поисков.** Вкладка «Ход» показывает, сколько задач на брутфорс, фазинг и password spray сделано из всего (полоса, процент, счётчик, обновление раз в три минуты) и держит на виду главные находки — по severity, живьём, без глухих дедлайнов.
+**Search progress.** The Progress tab shows how many brute-force, fuzzing and password-spray tasks are done out of the total (bar, percent, counter, refreshed every three minutes) and keeps the top findings in sight — by severity, live.
 
-**Остановка и журнал.** `Ctrl+C` останавливает прогон, а не приложение: текущий шаг доходит до результатов, гипотезы проверяются, вывод печатается — и только потом работа встаёт. Второе нажатие выходит. Серые строки процесса свёрнуты в одну строку и раскрываются `Ctrl+E`, Enter или кликом; при сбое раскрываются сами. Текст выделяется мышью в любой момент: `Ctrl+C` при выделении копирует, двойной клик берёт слово, `Ctrl+Shift+C` копирует всегда.
+**Stopping and the journal.** `Ctrl+C` stops the run, not the app: the step in flight reaches its results, the hypotheses get checked, the conclusion is printed, and only then does the work stand down. A second press leaves. Grey process lines fold into one line and open with `Ctrl+E`, Enter or a click; on a failure they open themselves. Text is selectable with the mouse at any moment: `Ctrl+C` copies a selection, a double click takes a word, `Ctrl+Shift+C` copies always.
 
-**Сессия.** Демон на локальном unix-сокете: работа переживает закрытый терминал, второй клиент или экран TUI (`Ctrl-D`) подключается к потоку, отвечает на вопросы агента и одобряет шаги. Сокет 0600, read-only клиенты, права решает общая таблица доступа.
+**Session.** A daemon on a local unix socket: work survives a closed terminal, a second client or the TUI screen (`Ctrl-D`) attaches to the stream, answers the agent and approves steps. Socket 0600, read-only clients, the shared access table decides.
 
-**Удалённый демон.** `attach --ssh host` работает с демоном на другой машине через форвард его сокета; права остаются на удалённой стороне.
+**Remote daemon.** `attach --ssh host` works against a daemon on another machine through its forwarded socket; permissions stay on the far side.
 
-**Локальные инструменты.** На машине оператора `samurai` берёт уже установленные инструменты нативно, без shell: executable и argv выбирает проверенный рецепт каталога, scope и одобрения остаются обязательными. `samurai tool capabilities` показывает окружение и найденные бинари, ничего не меняя; отсутствующий инструмент ставится по рецепту — `tool provision <id> --dry-run` печатает платформу, пакет, команды, привилегии и healthcheck и ничего не меняет, установка идёт отдельным одобрением (`sudo -n`, без пароля в модели) и без успешного healthcheck инструмент не считается готовым. Повторная установка — no-op, после сбоя нужен новый запуск. Модель называет только `tool_id`: ни имён пакетов, ни install-команд. Подробности — [`md/local-tools.md`](md/local-tools.md).
+**Local tools.** On the operator's own machine `samurai` runs installed tools natively, without a shell: the executable and argv come from a reviewed catalogue recipe, while scope and approvals stay mandatory. `samurai tool capabilities` reports the environment and the binaries it finds without changing anything; a missing tool is installed from its recipe — `tool provision <id> --dry-run` prints the platform, package, commands, privilege and healthcheck and changes nothing, the install takes its own approval (`sudo -n`, no password through the model) and a tool is never ready without a passing healthcheck. A second install is a no-op, a failure needs a new run. The model only names a `tool_id`: no package names, no install commands. Details in [`md/local-tools.md`](md/local-tools.md).
 
-**Оффлайн-режим.** `--offline` у операции запрещает удалённые модели и инструменты, которым нужен интернет; отказ с причиной приходит до попытки, `offline check` показывает, что отказано.
+**Offline mode.** `--offline` on an operation refuses remote models and tools that need the internet; the refusal carries a reason and comes before the attempt, `offline check` lists what is refused.
 
-**Просмотр в браузере.** `samurai web <op>` — сводка, журнал, план, находки, скачивание отчётов. Только `127.0.0.1`, одноразовый токен в ссылке, без записи.
+**Browser view.** `samurai web <op>` — summary, journal, plan, findings, report downloads. `127.0.0.1` only, one-off token in the link, no writes.
 
-**Без модели.** `samurai discover <цели>` — порты, проба, шаблоны: детерминированный конвейер без ключа и без единого вызова модели, для CI и оффлайна. `samurai doctor` проверяет окружение (docker, права каталога, образы, ключи) и печатает команду установки под ОС.
+**No model needed.** `samurai discover <targets>` runs ports, probe, templates: a deterministic chain with no key and no model call, for CI and offline work. `samurai doctor` checks the environment (docker, directory permissions, images, keys) and prints the install command for your OS.
 
-**Запуск.** `samurai run "<имя>" --mode … --include … --task … --model …` создаёт операцию, план и ведёт его до конца; `--detach` оставляет работу демону. Префлайт проверяет достижимость цели, `--fallback` задаёт вторую модель.
+**Runs.** `samurai run "<name>" --mode … --include … --task … --model …` creates the operation, the plan and works it to the end; `--detach` leaves it with the daemon. A preflight checks reachability, `--fallback` names a second model.
 
-**Отчёты и экспорт.** Markdown, JSON, HTML, PDF и досье операции только из проверенных находок, redaction секретов, NDJSON-экспорт журнала, экспорт кампании в CALDERA и VECTR.
+**Reports and export.** Markdown, JSON, HTML, PDF and an operation dossier built only from validated findings, secret redaction, NDJSON journal export, CALDERA and VECTR campaign export.
 
-**Автономность.** Шаг внутри плана выбирает агент, включая оценку импакта; снаружи рамки: scope, риск-классы, одобрения, субагенты на задачах, память кампании, genes с фитнесом из eval, evaluation harness, headless-режим для CI.
+**Autonomy.** The agent picks the step inside the plan, including the impact grade; outside it are the rails: scope, risk classes, approvals, subagents on tasks, campaign memory, lessons from closed findings, skills the agent learns from its own successful operations (gated before reuse), genes scored by eval, an evaluation harness, a headless mode for CI.
 
-**Интерфейс.** TUI с лентой из блоков: прогон инструмента — свёрнутый блок со статусом и ошибкой в заголовке, клик или Enter раскрывает; текст выделяется и копируется в любой момент (`Ctrl+C` / `Ctrl+Shift+C`); id задач, находок, артефактов и одобрений кликабельны — сводка в ленте, Enter открывает полный экран деталей; строка состояния показывает часы хода, текущий инструмент и сумму токенов. Вкладки журнала, плана, находок и доступа, палитра действий, доски, оверлей клавиш; RU/EN; три темы; перебиндинг клавиш. CLI с устойчивым контрактом кодов возврата.
+**Interface.** A TUI with a block-based feed: every tool run is a collapsible block with a status icon and the error in its header, click or Enter expands it; text is selectable and copyable at any time (Ctrl+C / Ctrl+Shift+C); task, finding, artifact and approval ids are clickable — an inline summary first, Enter opens the full detail screen; the status bar shows the turn clock, the tool in flight and the token total. Journal, plan, findings and access tabs, an action palette, boards and a key overlay; RU/EN; three themes; rebindable keys. A CLI with a stable exit-code contract.
 
-## Как это устроено
+## How it works
 
-1. Операция фиксирует режим, цель и scope.
-2. План разбивает работу на задачи с зависимостями и гейтами.
-3. Агент предлагает шаги; риск выше R0 ждёт одобрения.
-4. Инструмент исполняется в контейнере, выход за scope режет прокси.
-5. Результат становится артефактом с хешем и парой трафика.
-6. Находка поднимается по лестнице импакта только с доказательством.
-7. Отчёт собирается из подтверждённого.
+1. An operation fixes the mode, the goal and the scope.
+2. A plan breaks the work into tasks with dependencies and gates.
+3. The agent proposes steps; anything above R0 waits for approval.
+4. A tool runs in a container, the proxy cuts anything out of scope.
+5. A result becomes an artifact with a hash and a traffic pair.
+6. A finding climbs the impact ladder only with evidence.
+7. A report is assembled from what is confirmed.
 
-Детали реализации и ограничения — [`md/capabilities.md`](md/capabilities.md) и [`md/threat-review-security-tools.md`](md/threat-review-security-tools.md).
+Implementation detail and limits: [`md/capabilities.md`](md/capabilities.md) and [`md/threat-review-security-tools.md`](md/threat-review-security-tools.md).
 
-## Документация
+## Documentation
 
-- [`md/local-tools.md`](md/local-tools.md) — локальные инструменты, установка и её границы.
-- [`md/optin-platform-checks.md`](md/optin-platform-checks.md) — ручные проверки на живых платформах.
-- [`md/requirements.md`](md/requirements.md) — требования.
-- [`md/development-plan.md`](md/development-plan.md) — этапы, acceptance criteria, статус.
-- [`md/threat-review-security-tools.md`](md/threat-review-security-tools.md) — разбор инструментов и остаточные риски.
-- [`md/compatibility.md`](md/compatibility.md) — совместимость и проверка подписей релизов.
-- [`md/capabilities.md`](md/capabilities.md) — полный перечень возможностей и операторские команды.
-- [`SECURITY.md`](SECURITY.md) — как сообщать об уязвимостях.
-- [`Agent.md`](Agent.md) — handoff для разработки.
+- [`md/local-tools.md`](md/local-tools.md) — local tools, installation and its limits.
+- [`md/optin-platform-checks.md`](md/optin-platform-checks.md) — manual checks on live platforms.
+- [`md/requirements.md`](md/requirements.md) — requirements.
+- [`md/development-plan.md`](md/development-plan.md) — stages, acceptance criteria, status.
+- [`md/threat-review-security-tools.md`](md/threat-review-security-tools.md) — per-tool review and residual risks.
+- [`md/compatibility.md`](md/compatibility.md) — compatibility and release signature verification.
+- [`md/capabilities.md`](md/capabilities.md) — the full capability list and operator commands.
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability.
+- [`Agent.md`](Agent.md) — development handoff.
 
-## Лицензия
+## License
 
-Apache-2.0 — см. [`LICENSE`](LICENSE). Использование, форк и вклад в код допускаются на условиях лицензии; патентный грант включён.
+Apache-2.0 — see [`LICENSE`](LICENSE). Use, forking and contributions are allowed under its terms; the patent grant is included.
 
-## Состояние
+## Status
 
-Активная разработка. Не сделано: distributed runners (кроме SSH-туннеля к демону), плагины на Python-хуках.
+Under active development. Not done: distributed runners (beyond the SSH daemon tunnel), Python-hook plugins.
 
-## Авторизация
+## Authorized use
 
-Только авторизованный security research: CTF/HTB, Bug Bounty в рамках правил программы, Red Team с явным разрешением владельцев систем. Вне согласованного scope не используйте.
-- рельс стадий атаки, блоки доступов/секретов, чек-лист хода модели
+Authorized security research only: CTF/HTB, bug bounty within program rules, red team with explicit permission from the system owners. Stay inside the agreed scope.
+- attack stage rail, access/secret blocks, model-owned turn checklist
