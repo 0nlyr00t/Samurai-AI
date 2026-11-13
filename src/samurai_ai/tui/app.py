@@ -4423,6 +4423,7 @@ class SamuraiApp(
                 current=op_id == current_id,
             )
             tab.add_class("operation-tab")
+            tab.tooltip = self.translator.t("tabmenu.hint")
             if op_id == current_id:
                 tab.add_class("operation-tab-current")
             strip.mount(tab)
