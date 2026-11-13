@@ -22,11 +22,15 @@ from samurai_ai.domain.execution import (
 )
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.scope import ScopeContract
-from samurai_ai.execution.process import ProcessResult
+from samurai_ai.execution.native_sandbox import build_bwrap_argv, bwrap_available
+from samurai_ai.execution.process import ProcessManager, ProcessResult
 from samurai_ai.execution.registry import ToolOutput, stall_as_timeout
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
 from samurai_ai.execution.security import _ScopedSandboxTool
 from samurai_ai.execution.tunnel import ScopedTunnel
+
+#: grace over the profile timeout for the native (no-docker) fallback
+_NATIVE_TIMEOUT_GRACE = 10.0
 
 _HOST_PORT = {
     "host": {"type": "string", "minLength": 1, "maxLength": 253},
@@ -68,7 +72,7 @@ class _RemoteTool(_ScopedSandboxTool):
 
     async def _open(
         self, params: dict[str, Any], scope: ScopeContract
-    ) -> tuple[ScopedTunnel, str]:
+    ) -> ScopedTunnel:
         host, port = self._host_port(params)
         decision = scope.evaluate(host)
         if not decision.allowed:
@@ -77,8 +81,8 @@ class _RemoteTool(_ScopedSandboxTool):
             )
         # the well-known admin ports plus the exact one the operator named
         tunnel = ScopedTunnel(scope, host, port, allowed_ports=_REMOTE_PORTS | {port})
-        endpoint = await tunnel.start()
-        return tunnel, f"{endpoint.host}:{endpoint.port}"
+        await tunnel.start()
+        return tunnel
 
     def preflight(self, params: dict[str, Any]) -> None:
         # the driver is fixed and the endpoint only exists once the tunnel is
@@ -97,29 +101,41 @@ class _RemoteTool(_ScopedSandboxTool):
         self, argv: list[str], params: dict[str, Any], scope: ScopeContract
     ) -> ToolOutput:
         """Tunnel and process share one loop, so handlers can actually run."""
-        tunnel, endpoint = await self._open(params, scope)
+        tunnel = await self._open(params, scope)
         profile = get_profile(self.profile_id)
         env, secret_env = self.build_env(params)
+        native_note = ""
         try:
-            outcome = await self.runner.run_async(
-                profile,
-                "remote",
-                self.executable,
-                [*argv, endpoint],
-                scope,
-                env=env,
-                secret_env=secret_env,
-            )
+            if await self.runner.docker_available():
+                endpoint = f"host.docker.internal:{tunnel.port}"
+                outcome = await self.runner.run_async(
+                    profile,
+                    "remote",
+                    self.executable,
+                    [*argv, endpoint],
+                    scope,
+                    env=env,
+                    secret_env=secret_env,
+                )
+                result: ProcessResult = outcome.result
+            else:
+                # no Docker: run the driver on the host, confined by bwrap and
+                # still reached only through the scoped tunnel (localhost)
+                endpoint = f"127.0.0.1:{tunnel.port}"
+                result, native_note = await self._run_native(
+                    profile, [*argv, endpoint], env, secret_env
+                )
             for _ in range(25):
                 if tunnel.events:
                     break
                 await asyncio.sleep(0.02)
         finally:
             await tunnel.stop()
-        result: ProcessResult = outcome.result
         events = tunnel.events
         timed_out, note = stall_as_timeout(result)
         stderr = (result.stderr + note).lstrip() if note else result.stderr
+        if native_note:
+            stderr = f"{native_note}\n{stderr}".strip()
         if events:
             summary = ", ".join(f"{event.host} {event.verdict}" for event in events)
             stderr = (
@@ -142,6 +158,43 @@ class _RemoteTool(_ScopedSandboxTool):
                 for event in events
             ),
         )
+
+    async def _run_native(
+        self,
+        profile: Any,
+        args: list[str],
+        env: dict[str, str],
+        secret_env: dict[str, str],
+    ) -> tuple[ProcessResult, str]:
+        """Run the driver on the host when Docker is unavailable.
+
+        The container is traded for a bubblewrap confinement: a read-only host,
+        a writable tmpfs ``/tmp`` for the key, a working ``/dev``, and the shared
+        network the tunnel needs. The scope boundary is unchanged — the driver
+        still reaches only the one in-scope host through the localhost tunnel.
+        When bubblewrap is absent too (e.g. macOS) the driver runs unconfined and
+        the note says so.
+        """
+        inner = [self.executable, *args]
+        confined = bwrap_available()
+        full = build_bwrap_argv(inner, (), strict=False) if confined else inner
+        note = (
+            "[native: docker unavailable — ran under bubblewrap, reduced isolation]"
+            if confined
+            else "[native: docker and bubblewrap unavailable — ran unconfined on the host]"
+        )
+        manager = ProcessManager(
+            allowed_executables=frozenset({"bwrap", self.executable})
+        )
+        manager.stall_seconds = float(profile.stall_seconds)
+        child_env = {**(env or {}), **(secret_env or {})} or None
+        extra: dict[str, Any] = {"env": child_env} if child_env else {}
+        result = await manager.run(
+            full,
+            timeout_seconds=profile.timeout_seconds + _NATIVE_TIMEOUT_GRACE,
+            **extra,
+        )
+        return result, note
 
     def build_env(
         self, params: dict[str, Any]
