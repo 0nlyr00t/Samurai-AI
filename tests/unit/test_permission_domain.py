@@ -120,6 +120,22 @@ def test_a_write_outside_the_trusted_roots_is_an_escape() -> None:
     assert classify_command(command).escape == ()
 
 
+def test_dev_null_and_friends_are_not_escapes() -> None:
+    roots = ("/home/op/work",)
+    # redirecting to the standard sinks is universal, not a filesystem escape
+    assert classify_command("cat creds.txt 2>/dev/null", allowed_roots=roots).escape == ()
+    assert classify_command("prog >/dev/null 2>&1", allowed_roots=roots).escape == ()
+    # under yolo such a command runs silently instead of being denied
+    risk = classify_command("cat creds.txt 2>/dev/null", allowed_roots=roots)
+    assert decide((), "shell.exec", "cat creds.txt 2>/dev/null",
+                  PermissionMode.YOLO, risk).action == "silent"
+    # a real write outside the root is still an escape (and denied in yolo)
+    real = classify_command("cat a > /etc/passwd", allowed_roots=roots)
+    assert real.escape == ("/etc/passwd",)
+    assert decide((), "shell.exec", "cat a > /etc/passwd",
+                  PermissionMode.YOLO, real).is_denied
+
+
 def test_create_verbs_outside_the_boundary_are_escapes() -> None:
     roots = ("/work/op",)
     assert classify_command("mkdir -p /opt/evil", allowed_roots=roots).escape == (
