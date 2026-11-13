@@ -114,7 +114,7 @@ samurai send <op> --answer <call> --pick target=app    # ответить аге
 
 ```bash
 samurai run "Takeoff" --mode ctf-htb --include 10.129.98.19 \
-  --include flight.htb --task "Скан портов" --task "Разобрать веб"   --model kimi/kimi-k2-turbo-preview@v1
+  --include flight.htb --task "Скан портов" --task "Разобрать веб"   --model kimi/kimi-k3@v1
 ```
 
 Команда создаёт операцию, план-цепочку, одобряет план и ведёт работу до конца
