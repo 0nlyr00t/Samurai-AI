@@ -41,6 +41,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "lessons.mode": "lesson mode: {mode}",
         "lessons.mode-line": "lesson mode: {mode}",
         "lessons.would-show": "shadow: inject would show {count} lesson(s)",
+        "learned-skills.empty": (
+            "no learned skills yet — finished operations teach them, "
+            "`/skills learned extract` distils them"
+        ),
+        "learned-skills.extracted": "learned skills distilled: {count}",
+        "learned-skills.status": "learned skill {skill} is {status}",
+        "learned-skills.mode": "learned-skill mode: {mode}",
+        "learned-skills.mode-line": "learned-skill mode: {mode}",
+        "learned-skills.curated": "learned skills retired: {count}",
         "constraint.empty": "no constraints on this operation",
         "constraint.added": "constraint recorded: {text}",
         "constraint.removed": "constraint {id} removed",
@@ -936,6 +945,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "lessons.mode": "режим уроков: {mode}",
         "lessons.mode-line": "режим уроков: {mode}",
         "lessons.would-show": "shadow: inject показал бы уроков: {count}",
+        "learned-skills.empty": (
+            "выученных навыков пока нет — их учат завершённые операции, "
+            "`/skills learned extract` их извлекает"
+        ),
+        "learned-skills.extracted": "выучено навыков: {count}",
+        "learned-skills.status": "выученный навык {skill} → {status}",
+        "learned-skills.mode": "режим выученных навыков: {mode}",
+        "learned-skills.mode-line": "режим выученных навыков: {mode}",
+        "learned-skills.curated": "выученных навыков отправлено в отставку: {count}",
         "constraint.empty": "ограничений в операции нет",
         "constraint.added": "ограничение записано: {text}",
         "constraint.removed": "ограничение {id} снято",

@@ -56,6 +56,7 @@ class BoardController:
         team: Any
         def _memory_workspace(self) -> str: ...
         lessons: Any
+        learned_skills: Any
         def push_screen(self, screen: Any, callback: Any = None) -> Any: ...
 
         push_screen_wait: Any
@@ -423,6 +424,10 @@ class BoardController:
         try:
             self.lessons.extract(self.operation.id, self._memory_workspace())
         except Exception:  # noqa: BLE001 - a lesson must never block the board
+            pass
+        try:
+            self.learned_skills.extract(self.operation.id, self._memory_workspace())
+        except Exception:  # noqa: BLE001 - a learned skill must never block the board
             return
 
     def _finding_action(self, what: str, finding_id: str, call: Any) -> None:

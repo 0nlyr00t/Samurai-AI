@@ -930,6 +930,36 @@ CREATE INDEX IF NOT EXISTS run_checkpoints_operation
 ON run_checkpoints(operation_id);
 """
 
+_MIGRATION_33 = """
+-- agent-distilled procedural skills; mutable (status + fitness evolve), unlike
+-- the operator `skills` table, so no immutability triggers here.
+CREATE TABLE IF NOT EXISTS learned_skills (
+    id                    TEXT PRIMARY KEY,
+    workspace             TEXT NOT NULL,
+    kind                  TEXT NOT NULL,
+    title                 TEXT NOT NULL,
+    cue                   TEXT NOT NULL,
+    body                  TEXT NOT NULL,
+    status                TEXT NOT NULL DEFAULT 'shadow',
+    reuses                INTEGER NOT NULL DEFAULT 0,
+    findings_after_reuse  INTEGER NOT NULL DEFAULT 0,
+    median_invalid_actions REAL NOT NULL DEFAULT 0.0,
+    source_operation_id   TEXT NOT NULL,
+    source_run_id         TEXT,
+    evidence              TEXT NOT NULL DEFAULT '[]',
+    sha256                TEXT NOT NULL,
+    created_by            TEXT NOT NULL,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS learned_skills_workspace
+ON learned_skills(workspace, status, id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS learned_skills_identity
+ON learned_skills(workspace, sha256);
+"""
+
 _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, _MIGRATION_1),
     (2, _MIGRATION_2),
@@ -963,6 +993,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     (30, _MIGRATION_30),
     (31, _MIGRATION_31),
     (32, _MIGRATION_32),
+    (33, _MIGRATION_33),
 )
 
 
