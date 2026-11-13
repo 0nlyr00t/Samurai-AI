@@ -117,6 +117,10 @@ def _scan_text(text: str) -> list[tuple[str, str]]:
         if _is_local_path(part):
             continue
         if ipaddress_ok(part):
+            # the unspecified address (`::`, `0.0.0.0`) is a bind-any, not a
+            # destination — a bare `::` in a command is syntax, never a target
+            if ipaddress.ip_network(part, strict=False).network_address.is_unspecified:
+                continue
             found.append(("net" if "/" in part else "host", part))
             continue
         host_port = _HOST_PORT.fullmatch(part)

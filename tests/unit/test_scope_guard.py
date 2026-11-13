@@ -58,6 +58,17 @@ def test_a_free_form_command_is_judged_per_token() -> None:
     """`nmap … <ip>` used to slip through: the whole line is not a bare host."""
     with pytest.raises(ScopeGuardError, match="8.8.8.8"):
         guard(SCOPE, {"command": "nmap -Pn -p- --min-rate 2000 8.8.8.8"})
+
+
+def test_the_unspecified_address_is_not_a_target() -> None:
+    """`::` / `0.0.0.0` are bind-any, not destinations — they must not be refused.
+
+    A bare `::` in a command used to parse as the IPv6 unspecified address and
+    trip the guard with "'::' is outside the operation scope".
+    """
+    guard(SCOPE, {"command": "python3 -m http.server --bind :: 8000"})
+    guard(SCOPE, {"command": "nc -lvnp 4444 -s 0.0.0.0"})
+    guard(SCOPE, {"command": "ip -6 addr add ::/0 dev eth0"})
     with pytest.raises(ScopeGuardError, match="8.8.8.8"):
         guard(SCOPE, {"command": "bash -lc 'nmap -sV 8.8.8.8'"})
     guard(SCOPE, {"command": "id; uname -a; cat /etc/hosts"})
