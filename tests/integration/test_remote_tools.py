@@ -16,6 +16,7 @@ from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.registry import ToolRegistry
 from samurai_ai.execution.remote import (
     AdbTool,
+    RdpAuthTool,
     RdpCheckTool,
     SmbListTool,
     SshExecTool,
@@ -315,6 +316,30 @@ def test_rdp_check_forces_the_rdp_port(tmp_path: Path, listener: int) -> None:
     )
     argv = docker_run_argv(manager)
     assert argv[-1].startswith("host.docker.internal:")
+
+
+def test_rdp_auth_tunnels_and_hides_the_password(tmp_path: Path, listener: int) -> None:
+    service, kernel, execution, manager = make_stack(tmp_path, (RdpAuthTool,))
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "remote.rdp-auth", RiskClass.R3)
+    result = execution.run_tool(
+        operation.id,
+        "remote.rdp-auth",
+        {
+            "host": "127.0.0.1",
+            "port": listener,
+            "user": "contractor",
+            "password": "Contractor2026!",
+        },
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    argv = docker_run_argv(manager)
+    # the endpoint the driver sees is the tunnel, not the real target
+    assert argv[-1].startswith("host.docker.internal:")
+    # the password reaches xfreerdp through the secret env, never docker's argv
+    assert "Contractor2026!" not in " ".join(argv)
+    assert "[egress: 127.0.0.1 allowed;" in result.stderr
 
 
 def test_adb_needs_an_argument_for_shell(tmp_path: Path, listener: int) -> None:

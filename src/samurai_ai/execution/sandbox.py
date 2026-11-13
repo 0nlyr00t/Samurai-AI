@@ -265,6 +265,11 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
             "curl",
             "jq",
             "socat",
+            # remote.rdp-auth validates RDP credentials with xfreerdp /auth-only,
+            # which opens no window; Xvfb is only a fallback for builds that still
+            # demand a display, so it carries no mesa/GL stack
+            "xfreerdp3",
+            "Xvfb",
             # the remote drivers are python: they own the tunnel and hand the
             # endpoint to ssh, smbclient, xfreerdp or adb
             "python3",
@@ -278,9 +283,9 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         network_mode="scoped",
         # reads HTTP(S)_PROXY from the environment; no flag for it
         proxy_via_env=True,
-        # remote.ssh-pass hands the vault password to the ssh askpass helper
-        # through the environment, never on argv
-        env_names=("SAMURAI_SSH_PASS",),
+        # remote.ssh-pass and remote.rdp-auth hand the vault password to their
+        # helpers through the environment, never on argv
+        env_names=("SAMURAI_SSH_PASS", "SAMURAI_RDP_PASS"),
     ),
     SandboxProfile(
         id="sandbox.exploit@v1",
