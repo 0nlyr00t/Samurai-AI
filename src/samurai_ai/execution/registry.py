@@ -588,6 +588,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
     )
     from samurai_ai.execution.remote import (
         AdbTool,
+        RdpAuthTool,
         RdpCheckTool,
         SmbListTool,
         SshExecTool,
@@ -624,6 +625,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             SshPassExecTool(),
             SmbListTool(),
             RdpCheckTool(),
+            RdpAuthTool(),
             AdbTool(),
             VmControlTool(),
             VmDiskTool(),
