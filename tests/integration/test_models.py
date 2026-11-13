@@ -528,3 +528,94 @@ def test_migration_16_defaults_verify_tls_on(vault_env: Path) -> None:
     endpoint = ModelEndpointRepository(Database(database_path)).get("legacy-tls")
     assert endpoint is not None
     assert endpoint.verify_tls is True
+
+
+def test_model_calls_serialize_per_operation(vault_env: Path) -> None:
+    """A subagent and the main turn share an operation; by default their model
+    calls run one at a time, so a single-concurrency backend is never hit by two
+    requests at once. agent.model_concurrency raises the limit."""
+    import asyncio as _asyncio
+
+    class _Probe:
+        def __init__(self) -> None:
+            self.lock = threading.Lock()
+            self.inflight = 0
+            self.max_inflight = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            from samurai_ai.agents.provider import ChatResponse, Usage
+
+            with self.lock:
+                self.inflight += 1
+                self.max_inflight = max(self.max_inflight, self.inflight)
+            try:
+                await _asyncio.sleep(0.3)
+            finally:
+                with self.lock:
+                    self.inflight -= 1
+            return ChatResponse(
+                text="ok",
+                usage=Usage(prompt_tokens=1, completion_tokens=1),
+                model_id=request.model_id,
+                provider_id="custom",
+                latency_ms=1,
+            )
+
+    database = Database(vault_env / "serialize.db")
+    operations = OperationService(OperationRepository(database))
+    kernel = KernelService(operations, KernelRepository(database))
+    RecoveryService(operations, kernel, RecoveryRepository(database))
+    settings = RecoveryRepository(database)
+    vault = VaultService(
+        VaultRepository(database), operations.repository, vault_env / "vault.key"
+    )
+    endpoints = ModelEndpointRepository(database)
+    custom_models = CustomModelRepository(database)
+    probe = _Probe()
+    models = ModelService(
+        ModelRegistry(endpoints, custom_models=custom_models),
+        vault,
+        kernel,
+        operations,
+        endpoints,
+        settings,
+        provider_factory=lambda _p: probe,
+        custom_models=custom_models,
+    )
+    vault.add("custom-key", "x")
+    models.register_endpoint("custom", "http://127.0.0.1:9/v1", "custom-key")
+    models.add_model("custom/m")
+
+    def run_two(operation_id: str) -> int:
+        with pytest.raises(ApprovalRequiredError) as caught:
+            models.complete(operation_id, "custom/m@v1", "hi")
+        kernel.approve(caught.value.approval_id, decided_by="operator")
+        aid = caught.value.approval_id
+        probe.max_inflight = 0
+
+        def one() -> None:
+            models.complete(operation_id, "custom/m@v1", "hi", approval_id=aid)
+
+        threads = [threading.Thread(target=one) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        return probe.max_inflight
+
+    serial = operations.create(
+        "ser", OperationMode.CTF_HTB, ScopeContract(includes=("example.com",))
+    ).id
+    assert run_two(serial) == 1  # default: one model request per operation at a time
+
+    settings.set_setting("agent.model_concurrency", "2")
+    parallel = operations.create(
+        "par", OperationMode.CTF_HTB, ScopeContract(includes=("example.com",))
+    ).id
+    assert run_two(parallel) == 2  # raised limit: both may be in flight
