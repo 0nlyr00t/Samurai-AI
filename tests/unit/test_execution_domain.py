@@ -178,6 +178,7 @@ def test_default_registry_contains_stage2_tools() -> None:
         "remote.ssh-pass",
         "remote.smb-list",
         "remote.rdp-check",
+        "remote.rdp-auth",
         "remote.adb",
         "vm.control",
         "vm.disk",
