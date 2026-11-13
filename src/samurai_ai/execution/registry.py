@@ -591,6 +591,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
         RdpCheckTool,
         SmbListTool,
         SshExecTool,
+        SshPassExecTool,
     )
     from samurai_ai.execution.security import (
         DnsxResolveTool,
@@ -620,6 +621,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             ResearchSearchTool(),
             ResearchReadTool(),
             SshExecTool(),
+            SshPassExecTool(),
             SmbListTool(),
             RdpCheckTool(),
             AdbTool(),
