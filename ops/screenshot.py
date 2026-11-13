@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / "assets"
+ASSETS = ROOT / "src" / "samurai_ai" / "assets"
 SIZE = (120, 36)
 
 # The journal is what the product really prints: events stay English, and the
@@ -32,7 +32,7 @@ JOURNAL = [
     "[scope] includes 127.0.0.1, juice-shop",
     "[attach] connected to the session daemon",
     "[agent] chose 3000/http over 22/ssh — wider surface for one step",
-    "[approval] model.call kimi/kimi-k2-turbo-preview@v1 — waiting",
+    "[approval] model.call kimi/kimi-k3@v1 — waiting",
     "[agent] a read is cheap; replaying it with a token stealer is not",
     "[agent] next: dump the user table, then prove it in the report",
 ]
@@ -87,7 +87,7 @@ def build_stack(
     kernel.complete_task(operation.id, "step1")
     kernel.request_approval(
         operation.id,
-        "model.call kimi/kimi-k2-turbo-preview@v1",
+        "model.call kimi/kimi-k3@v1",
         RiskClass.R3,
         reason="second step needs the model",
     )
