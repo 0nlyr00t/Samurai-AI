@@ -10,9 +10,13 @@
 # fallback for builds that still demand a display, driven directly (not the racy
 # xvfb-run) by the driver.
 #
-# Base is pinned by digest; the belt itself is installed at build time, so a
-# rebuild changes the image digest — ci re-pins the profile (ops-image.yml).
-FROM debian@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+# Base is Debian trixie (slim), pinned by its multi-arch index digest. trixie is
+# the first Debian with FreeRDP 3 (freerdp3-x11 → /usr/bin/xfreerdp3) for both
+# amd64 and arm64; bookworm only ships FreeRDP 2, which does not honour the
+# exit-code/ERRCONNECT contract remote.rdp-auth relies on. The belt is installed
+# at build time, so a rebuild changes the image digest — ci re-pins the profile
+# (ops-image.yml).
+FROM debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 ENV DEBIAN_FRONTEND=noninteractive
 
