@@ -488,3 +488,16 @@ class BlockJournal(VerticalScroll, can_focus=False):
         """Jump to the tail and turn follow back on."""
         self._follow = True
         self.call_after_refresh(self.scroll_end, animate=False)
+
+    def watch_scroll_y(self, old: float, new: float) -> None:
+        """Follow the tail again once scrolled to the bottom; stop while reading up.
+
+        The operator kept having to push the view down because follow, once off,
+        only came back through a command. Now reaching the bottom re-arms
+        autoscroll and scrolling up to read turns it off — the usual tail-f feel.
+        """
+        super().watch_scroll_y(old, new)
+        try:
+            self._follow = new >= self.max_scroll_y - 1
+        except Exception:  # noqa: BLE001 - a scroll update must never raise
+            pass
