@@ -52,11 +52,36 @@ def stall_as_timeout(result: ProcessResult) -> tuple[bool, str]:
     is a timeout in every way that matters downstream: a hung ssh or shell must
     be recorded as a ``tool.run.timeout`` so the repeat-guard dedupes it, instead
     of looking like an ordinary non-zero failure that the agent keeps re-running.
+
+    The note is written for the agent that reads it. stdin is already closed
+    (``/dev/null``) and the command runs with no controlling terminal, so a kill
+    here is a genuine block: the command waited on a connection or a prompt, or a
+    long scan outran its window. When nothing was produced, that is almost always
+    an interactive or blocked command, so the note says so and names the fix —
+    the agent re-running the same command unchanged is the waste we are cutting.
     """
-    if result.timed_out:
-        return True, "\n[process timed out]"
+    produced_output = bool(result.stdout or result.stderr)
     if result.stalled:
-        return True, "\n[process stalled: no output within the window — killed]"
+        return True, (
+            "\n[killed: the command produced no output within the stall window. "
+            "stdin is closed and there is no terminal, so it was most likely "
+            "waiting on input or a blocked connection. Re-run it non-interactively "
+            "(e.g. --batch / -y / -n, ssh -o BatchMode=yes -o ConnectTimeout=5) or "
+            "bound it with `timeout`; do not re-run it unchanged.]"
+        )
+    if result.timed_out and not produced_output:
+        return True, (
+            "\n[killed after the timeout window with no output. stdin is closed and "
+            "there is no terminal, so this is most likely a blocked connection or a "
+            "command waiting on input. Add a connect timeout or a non-interactive "
+            "flag, or narrow the command; re-running it unchanged will time out "
+            "again.]"
+        )
+    if result.timed_out:
+        return True, (
+            "\n[killed after the timeout window while still producing output. If "
+            "this is a long scan, narrow its scope; otherwise the command is stuck.]"
+        )
     return False, ""
 
 
@@ -371,7 +396,11 @@ class ShellExecTool:
             kind=ToolKind.PROCESS,
             description=(
                 "Run a shell command on the operator host as bash -lc; use this when a "
-                "pipeline, redirection or substitution is needed"
+                "pipeline, redirection or substitution is needed. Runs non-interactively: "
+                "stdin is closed and there is no terminal, so a command that waits for "
+                "input or a slow connection is killed at the timeout — pass non-interactive "
+                "flags (--batch, -y, ssh -o BatchMode=yes -o ConnectTimeout=5) and avoid "
+                "pagers or prompts"
             ),
             risk_class=RiskClass.R3,
             network=NetworkAccess.NONE,
