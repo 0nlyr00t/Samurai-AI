@@ -278,6 +278,9 @@ SANDBOX_PROFILES: tuple[SandboxProfile, ...] = (
         network_mode="scoped",
         # reads HTTP(S)_PROXY from the environment; no flag for it
         proxy_via_env=True,
+        # remote.ssh-pass hands the vault password to the ssh askpass helper
+        # through the environment, never on argv
+        env_names=("SAMURAI_SSH_PASS",),
     ),
     SandboxProfile(
         id="sandbox.exploit@v1",
