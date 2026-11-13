@@ -17,6 +17,7 @@ from uuid import uuid4
 from samurai_ai.domain.execution import ToolDefinition, ToolScopeError
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.tool_manifest import ManifestError, ParamSpec, ToolManifest
+from samurai_ai.domain.url_scheme import require_http_scheme
 from samurai_ai.execution.registry import ToolOutput
 from samurai_ai.execution.sandbox import DockerSandboxRunner
 
@@ -235,7 +236,10 @@ class ManifestTool:
             candidate = value
             if targets.kind == "url-host":
                 # the whole URL is the target: scheme and port are part of what
-                # a URL scope rule authorizes, so they must be judged too
+                # a URL scope rule authorizes, so they must be judged too. A
+                # recognizable non-http(s) scheme is a misrouting, so it is
+                # rejected as input validation with a pointer to the right tool.
+                require_http_scheme(self.manifest.id, targets.param, value)
                 parts = urlsplit(value)
                 if parts.scheme not in ("http", "https") or not parts.hostname:
                     raise ManifestError(f"{self.manifest.id}: not an http(s) URL: {value!r}")
