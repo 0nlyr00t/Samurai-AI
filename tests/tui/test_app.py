@@ -5648,6 +5648,89 @@ def test_verbose_mode_keeps_a_block_per_run(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_operations_picker_switches_to_an_earlier_op_and_deletes(tmp_path: Path) -> None:
+    """/operations lists every operation; Enter switches, d deletes from the DB."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    service = stack[0]
+    op1 = service.create(
+        "First op", OperationMode.BUG_BOUNTY, ScopeContract(includes=("a.example.com",))
+    )
+    op2 = service.create(
+        "Second op", OperationMode.BUG_BOUNTY, ScopeContract(includes=("b.example.com",))
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import OperationsScreen
+
+        app = SamuraiApp(*stack, op2.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "/operations"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, OperationsScreen)
+            listed = app.screen.query_one("#ops-list", OptionList)
+            prompts = [
+                str(listed.get_option_at_index(i).prompt)
+                for i in range(listed.option_count)
+            ]
+            # the earlier op is listed even though it is not an open tab
+            assert any("First op" in p for p in prompts)
+            assert any("Second op" in p for p in prompts)
+            listed.highlighted = next(i for i, p in enumerate(prompts) if "First op" in p)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.operation is not None and app.operation.id == op1.id
+            assert op1.id in app._open_tabs
+
+            # reopen and delete the other op from the DB
+            app.query_one("#command-input", Input).value = "/operations"
+            await pilot.press("enter")
+            await pilot.pause()
+            listed = app.screen.query_one("#ops-list", OptionList)
+            prompts = [
+                str(listed.get_option_at_index(i).prompt)
+                for i in range(listed.option_count)
+            ]
+            listed.highlighted = next(i for i, p in enumerate(prompts) if "Second op" in p)
+            await pilot.press("d")
+            await pilot.pause()
+            ids = [op.id for op in service.list_all()]
+            assert op2.id not in ids and op1.id in ids
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_journal_follows_the_tail_again_at_the_bottom(tmp_path: Path) -> None:
+    """Scrolling up stops autoscroll; reaching the bottom re-arms it."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            for i in range(120):
+                journal.add_block(Static(Text(f"line {i}")))
+            await pilot.pause()
+            assert journal.max_scroll_y > 0, "the journal must overflow for this test"
+            journal.scroll_end(animate=False)
+            await pilot.pause()
+            assert journal.follow is True  # at the bottom → following
+            journal.scroll_to(y=0, animate=False)
+            await pilot.pause()
+            assert journal.follow is False  # scrolled up to read → not following
+            journal.scroll_end(animate=False)
+            await pilot.pause()
+            assert journal.follow is True  # back at the bottom → following again
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_autonomy_command_toggles_the_setting_and_badge(tmp_path: Path) -> None:
     """/autonomy flips the opt-in and shows the posture in the status bar."""
     stack, operation = _chat_ready_stack(tmp_path, _TwoToolRoundsProvider())

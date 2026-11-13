@@ -14,6 +14,7 @@ from samurai_ai.tui.screens.model_picker import (
     ModelPickerScreen,
 )
 from samurai_ai.tui.screens.new_operation import NewOperationScreen
+from samurai_ai.tui.screens.operations import OperationsScreen
 from samurai_ai.tui.screens.picker import PickerScreen
 from samurai_ai.tui.screens.project import ProjectPickerScreen
 from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
@@ -40,6 +41,7 @@ __all__ = [
     "LanguagePromptScreen",
     "ModelPickerScreen",
     "NewOperationScreen",
+    "OperationsScreen",
     "ProjectPickerScreen",
     "SettingsScreen",
     "TrustDirectoryScreen",
