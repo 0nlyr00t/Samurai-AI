@@ -2,9 +2,13 @@
 # while inside a target. The compiler lives in the exploit belt, so an admin
 # session does not carry gcc and gdb.
 #
-# No freerdp here: the RDP probe is a stdlib X.224/TLS driver, and freerdp alone
-# would drag in xvfb, mesa and llvm (~180 MB) for a check that never opens a
-# session. Interactive RDP work needs a separate belt.
+# The read-only RDP probe (remote.rdp-check) is a stdlib X.224/TLS driver and
+# needs no freerdp. Credential validation (remote.rdp-auth) does: CredSSP/NLA is
+# not something the stdlib can speak, so freerdp3-x11 is installed for its
+# /auth-only logon. /auth-only opens no window, so the GL stack (mesa, llvm, the
+# ~180 MB the check never justified) is deliberately left out; xvfb is the small
+# fallback for builds that still demand a display, driven directly (not the racy
+# xvfb-run) by the driver.
 #
 # Base is pinned by digest; the belt itself is installed at build time, so a
 # rebuild changes the image digest — ci re-pins the profile (ops-image.yml).
@@ -22,6 +26,8 @@ RUN apt-get update \
         nmap \
         curl \
         jq \
+        freerdp3-x11 \
+        xvfb \
         iproute2 \
         dnsutils \
         ca-certificates \
