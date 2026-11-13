@@ -56,6 +56,35 @@ raise SystemExit(subprocess.call(argv))
 """
 
 
+_SSH_PASS_DRIVER = r"""
+import os, subprocess, sys
+user, command, endpoint = sys.argv[1:4]
+host, port = endpoint.rsplit(":", 1)
+# the password arrives in the environment (SAMURAI_SSH_PASS), never on argv, so
+# it is not visible in the process list. ssh never takes a password on argv or
+# stdin; it asks an askpass helper. A tiny helper prints the secret, and
+# SSH_ASKPASS_REQUIRE=force (openssh 8.4+) makes ssh use it even without a tty,
+# so no sshpass or pty is needed.
+askpass = "/tmp/ssh-askpass"
+with open(askpass, "w") as handle:
+    handle.write('#!/bin/sh\nprintf "%s\\n" "$SAMURAI_SSH_PASS"\n')
+os.chmod(askpass, 0o700)
+env = dict(os.environ)
+env["SSH_ASKPASS"] = askpass
+env["SSH_ASKPASS_REQUIRE"] = "force"
+env["TERM"] = "dumb"
+argv = [
+    "ssh", "-p", port,
+    "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+    "-o", "PubkeyAuthentication=no",
+    "-o", "PreferredAuthentications=password,keyboard-interactive",
+    "-o", "NumberOfPasswordPrompts=1", "-o", "ConnectTimeout=15", "-T",
+    "%s@%s" % (user, host), command,
+]
+raise SystemExit(subprocess.call(argv, env=env))
+"""
+
+
 class _RemoteTool(_ScopedSandboxTool):
     """A tool that needs a raw TCP connection to one in-scope host."""
 
@@ -242,6 +271,68 @@ class SshExecTool(_RemoteTool):
                 _SSH_DRIVER,
                 str(params["user"]),
                 str(params["key"]),
+                str(params["command"]),
+            ],
+            params,
+            scope,
+        )
+
+
+class SshPassExecTool(_RemoteTool):
+    """Run a command as an admin over ssh with a password from the vault.
+
+    The counterpart to :class:`SshExecTool` for hosts that take a password
+    rather than a key — the common case for a credential found during an
+    operation. ssh is told to use password/keyboard-interactive auth only, and
+    the secret reaches it through an askpass helper, never argv or a key file.
+    """
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="remote.ssh-pass",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Run a shell command on an in-scope host over ssh using a "
+            "password (admin work on Linux and macOS); the password is a vault "
+            "secret, e.g. a credential captured during the operation",
+            risk_class=RiskClass.R3,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=300,
+            output_limit_bytes=262144,
+            parameters={
+                "type": "object",
+                "properties": {
+                    **_HOST_PORT,
+                    "user": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "command": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "password": {"type": "string", "minLength": 1, "maxLength": 1024},
+                },
+                "required": ["host", "user", "command", "password"],
+                "additionalProperties": False,
+            },
+            capabilities=("remote", "admin", "linux", "macos"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def build_env(
+        self, params: dict[str, Any]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        # the password rides in the secret env (redacted, off the process list),
+        # not in argv like the key tool's key
+        return {"HOME": "/tmp", "TMPDIR": "/tmp"}, {
+            "SAMURAI_SSH_PASS": str(params["password"])
+        }
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        return self._run(
+            [
+                "-c",
+                _SSH_PASS_DRIVER,
+                str(params["user"]),
                 str(params["command"]),
             ],
             params,
@@ -486,4 +577,4 @@ raise SystemExit(subprocess.call(argv))
 """
 
 
-__all__ = ["AdbTool", "RdpCheckTool", "SmbListTool", "SshExecTool"]
+__all__ = ["AdbTool", "RdpCheckTool", "SmbListTool", "SshExecTool", "SshPassExecTool"]

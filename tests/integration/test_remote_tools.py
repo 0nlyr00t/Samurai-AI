@@ -14,7 +14,13 @@ from samurai_ai.domain.operations import Operation, OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution.process import ProcessResult
 from samurai_ai.execution.registry import ToolRegistry
-from samurai_ai.execution.remote import AdbTool, RdpCheckTool, SmbListTool, SshExecTool
+from samurai_ai.execution.remote import (
+    AdbTool,
+    RdpCheckTool,
+    SmbListTool,
+    SshExecTool,
+    SshPassExecTool,
+)
 from samurai_ai.execution.sandbox import DockerSandboxRunner, sign_allowlist
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
@@ -145,6 +151,66 @@ def test_ssh_exec_goes_through_a_tunnel(tmp_path: Path, listener: int) -> None:
     endpoint = argv[-1]
     assert endpoint.startswith("host.docker.internal:")
     assert "[egress: 127.0.0.1 allowed;" in result.stderr
+
+
+def test_ssh_pass_goes_through_a_tunnel(tmp_path: Path, listener: int) -> None:
+    service, kernel, execution, manager = make_stack(tmp_path, (SshPassExecTool,))
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "remote.ssh-pass", RiskClass.R3)
+    result = execution.run_tool(
+        operation.id,
+        "remote.ssh-pass",
+        {
+            "host": "127.0.0.1",
+            "port": listener,
+            "user": "contractor",
+            "command": "id",
+            "password": "Contractor2026!",
+        },
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    argv = docker_run_argv(manager)
+    assert argv[argv.index("--entrypoint") + 1] == "python3"
+    # the driver, not the plaintext password, is what reaches docker's argv
+    assert "Contractor2026!" not in " ".join(argv)
+    endpoint = argv[-1]
+    assert endpoint.startswith("host.docker.internal:")
+    assert "[egress: 127.0.0.1 allowed;" in result.stderr
+
+
+def test_ssh_pass_password_may_come_from_the_vault(
+    tmp_path: Path, listener: int
+) -> None:
+    """A ``{{secret:...}}`` password resolves and never appears in the output."""
+    from samurai_ai.services.vault import VaultService
+    from samurai_ai.storage.vault import VaultRepository
+
+    service, kernel, execution, manager = make_stack(tmp_path, (SshPassExecTool,))
+    operation = make_operation(service)
+    vault = VaultService(
+        VaultRepository(Database(tmp_path / "remote.db")),
+        service.repository,
+        tmp_path / "vault.key",
+    )
+    vault.add("winpass", "Contractor2026!", operation.id)
+    execution.vault = vault
+    approval_id = approve(kernel, operation.id, "remote.ssh-pass", RiskClass.R3)
+    result = execution.run_tool(
+        operation.id,
+        "remote.ssh-pass",
+        {
+            "host": "127.0.0.1",
+            "port": listener,
+            "user": "contractor",
+            "command": "id",
+            "password": "{{secret:winpass}}",
+        },
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    assert "Contractor2026!" not in result.stdout
+    assert "Contractor2026!" not in result.stderr
 
 
 def test_ssh_exec_falls_back_to_native_when_docker_is_absent(
