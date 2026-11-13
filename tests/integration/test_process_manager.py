@@ -46,6 +46,39 @@ def test_process_timeout_kills_process() -> None:
     asyncio.run(exercise())
 
 
+def test_stdin_is_closed_so_a_reader_returns_promptly() -> None:
+    """A command that reads stdin must see EOF at once, not hang on the timeout.
+
+    This is the main guard against interactive-command hangs: stdin is wired to
+    /dev/null and the child runs in its own session (no controlling terminal), so
+    `cat` / `read` finish immediately instead of waiting out the whole window.
+    """
+
+    async def exercise() -> None:
+        manager = ProcessManager(allowed_executables=frozenset({"cat"}))
+        result = await manager.run(["cat"], timeout_seconds=10)
+        assert result.exit_code == 0
+        assert not result.timed_out
+        assert not result.stalled
+
+    asyncio.run(exercise())
+
+
+def test_a_genuinely_blocking_command_still_times_out() -> None:
+    """The opposite guard: a command that never exits is still killed."""
+
+    async def exercise() -> None:
+        manager = python_manager()
+        result = await manager.run(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            timeout_seconds=0.2,
+        )
+        assert result.timed_out
+        assert result.exit_code is not None
+
+    asyncio.run(exercise())
+
+
 def test_process_cancel_terminates_process() -> None:
     async def exercise() -> None:
         manager = python_manager()
