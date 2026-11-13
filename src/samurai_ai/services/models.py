@@ -78,6 +78,12 @@ class ModelService:
         self.custom_models = custom_models
         self._budget_locks: dict[str, threading.Lock] = {}
         self._budget_locks_guard = threading.Lock()
+        # one model request per operation at a time by default: a subagent and
+        # the main turn share an operation, and a local model that cannot serve
+        # two requests at once would otherwise wedge (and the TUI with it). A
+        # backend that handles concurrency can raise agent.model_concurrency.
+        self._operation_gates: dict[str, threading.Semaphore] = {}
+        self._operation_gates_guard = threading.Lock()
 
     def list_providers(self) -> list[dict[str, Any]]:
         rows = []
@@ -348,7 +354,11 @@ class ModelService:
             )
 
         active_router = router or ModelRouter()
-        response = asyncio.run(active_router.complete(candidates, invoke, on_fallback))
+        # serialized per operation (see _operation_gate): the gate is a threading
+        # primitive held on this worker thread, so a waiting caller blocks its
+        # own thread, never the TUI event loop.
+        with self._operation_gate(operation_id):
+            response = asyncio.run(active_router.complete(candidates, invoke, on_fallback))
         used_model, used_provider = self._resolve_model(response.model_id)
         payload: dict[str, Any] = {
             "model_id": response.model_id,
@@ -396,6 +406,23 @@ class ModelService:
                 lock = threading.Lock()
                 self._budget_locks[operation_id] = lock
             return lock
+
+    def _model_concurrency(self) -> int:
+        """How many model requests one operation may have in flight at once."""
+        raw = self.settings.get_setting("agent.model_concurrency") if self.settings else None
+        try:
+            value = int(raw) if raw else 1
+        except (TypeError, ValueError):
+            value = 1
+        return max(1, value)
+
+    def _operation_gate(self, operation_id: str) -> threading.Semaphore:
+        with self._operation_gates_guard:
+            gate = self._operation_gates.get(operation_id)
+            if gate is None:
+                gate = threading.BoundedSemaphore(self._model_concurrency())
+                self._operation_gates[operation_id] = gate
+            return gate
 
     def _any_remote(self, candidates: list[str]) -> bool:
         for candidate in candidates:
