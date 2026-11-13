@@ -111,7 +111,14 @@ class SideBlock(Static):
 
 
 class OperationTab(Static):
-    """One open operation in the strip: click focuses it, right-click closes."""
+    """One open operation in the strip.
+
+    Left-click an inactive tab to switch to it; left-click the active tab (or
+    right-click any tab) to open its menu — rename, close, close others. The
+    left-click-on-active path exists because most terminals grab the right
+    mouse button for their own context menu and never forward it to the app,
+    so right-click alone is not a menu the operator can rely on.
+    """
 
     def __init__(
         self,
@@ -134,7 +141,11 @@ class OperationTab(Static):
         return text
 
     def on_click(self, event) -> None:  # type: ignore[no-untyped-def]
-        if getattr(event, "button", 1) == 3:
+        button = getattr(event, "button", 1)
+        # right-click opens the menu where the terminal forwards it; a left-click
+        # on the tab the operator is already on opens the same menu — the path
+        # that works in every terminal, since left-click is always delivered
+        if button == 3 or (button == 1 and self.current):
             menu = getattr(self.app, "_tab_menu", None)
             if menu is not None:
                 menu(self.operation_id, self.label)
