@@ -40,7 +40,8 @@
       "description": "Hosts or CIDR blocks",
       "required": true,
       "max_items": 10,
-      "items_enum": []
+      "items_enum": [],
+      "argv_split": true
     },
     "ports": {
       "type": "string",
