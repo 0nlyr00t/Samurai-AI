@@ -36,6 +36,7 @@ from samurai_ai.domain.execution import (
 )
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.url_scheme import require_http_scheme
 from samurai_ai.execution.process import ProcessManager
 from samurai_ai.execution.registry import ToolOutput
 from samurai_ai.execution.sandbox import DockerSandboxRunner, get_profile
@@ -116,6 +117,10 @@ class _ScopedSandboxTool:
                     f"{self.definition.id}: target must not contain spaces or "
                     f"commas: {target!r}"
                 )
+            # a non-http(s) scheme is a misrouted call, not an out-of-scope
+            # target: reject it as input validation with a pointer to the right
+            # tool, before the scope check turns it into a confusing refusal
+            require_http_scheme(self.definition.id, "targets", target)
             decision = scope.evaluate(target)
             if not decision.allowed:
                 raise ToolScopeError(
@@ -976,6 +981,7 @@ class FfufFuzzTool(_ScopedSandboxTool):
             raise ToolValidationError(
                 f"{self.definition.id}: url must contain the FUZZ keyword: {url!r}"
             )
+        require_http_scheme(self.definition.id, "url", url)
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise ToolValidationError(
@@ -1186,6 +1192,7 @@ class ResearchReadTool(_ScopedSandboxTool):
         self, params: dict[str, Any], scope: ScopeContract
     ) -> list[str]:
         url = str(params["url"])
+        require_http_scheme(self.definition.id, "url", url)
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise ToolValidationError(
