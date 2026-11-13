@@ -7169,6 +7169,53 @@ def test_right_click_on_a_tab_closes_it(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_left_click_on_the_current_tab_opens_its_menu(tmp_path: Path) -> None:
+    """Terminals grab right-click, so left-click on the active tab opens the menu.
+
+    Left-click on another (inactive) tab still just switches to it.
+    """
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    first = stack[0].create(
+        "Left", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.a.example.com",))
+    )
+    second = stack[0].create(
+        "Right", OperationMode.BUG_BOUNTY, ScopeContract(includes=("*.b.example.com",))
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens.tab_menu import TabMenuScreen
+
+        app = SamuraiApp(*stack, first.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._open_tabs = [first.id, second.id]
+            app._refresh_operations_strip()
+            await pilot.pause()
+            strip = app.query_one("#operations-strip", Horizontal)
+
+            # left-click the inactive tab: switch, no menu
+            inactive = next(c for c in strip.children if c.operation_id == second.id)
+            inactive.on_click(type("E", (), {"button": 1})())
+            await pilot.pause()
+            assert not isinstance(app.screen, TabMenuScreen)
+            assert app.operation is not None and app.operation.id == second.id
+
+            # left-click the now-current tab: its menu opens
+            app._refresh_operations_strip()
+            await pilot.pause()
+            current = next(c for c in strip.children if c.operation_id == second.id)
+            assert current.current
+            current.on_click(type("E", (), {"button": 1})())
+            await pilot.pause()
+            assert isinstance(app.screen, TabMenuScreen)
+            await pilot.press("escape")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_ctrl_w_and_slash_close_close_the_current_tab(tmp_path: Path) -> None:
     """The op_close binding finally has its handler; /close is the typed twin."""
     stack = _minimal_stack(tmp_path)
