@@ -37,7 +37,12 @@ from samurai_ai.cli_rules import handle_rules_command, register_rules_commands
 from samurai_ai.cli_run import add_run_command
 from samurai_ai.cli_sandbox import handle_sandbox_command, register_sandbox_commands
 from samurai_ai.cli_serve import add_serve_commands
-from samurai_ai.cli_skills import handle_skill_command, register_skill_commands
+from samurai_ai.cli_skills import (
+    handle_learned_skill_command,
+    handle_skill_command,
+    register_learned_skill_commands,
+    register_skill_commands,
+)
 from samurai_ai.cli_swarm import handle_swarm_command, register_swarm_commands
 from samurai_ai.cli_team import handle_team_command
 from samurai_ai.cli_vault import handle_vault_command, register_vault_commands
@@ -101,6 +106,7 @@ from samurai_ai.services.genes import GeneService, GeneStore
 from samurai_ai.services.goals import GoalNotFoundError, GoalService
 from samurai_ai.services.impact import ImpactService
 from samurai_ai.services.kernel import ApprovalNotFoundError, KernelService
+from samurai_ai.services.learned_skills import LearnedSkillService
 from samurai_ai.services.mcp import McpService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -131,6 +137,7 @@ from samurai_ai.storage.database import Database
 from samurai_ai.storage.execution import ToolRunConflictError, ToolRunRepository
 from samurai_ai.storage.goals import GoalConflictError, GoalRepository
 from samurai_ai.storage.kernel import KernelRepository
+from samurai_ai.storage.learned_skills import LearnedSkillRepository
 from samurai_ai.storage.mcp import McpServerConflictError, McpServerRepository
 from samurai_ai.storage.memory import (
     MemoryConflictError,
@@ -331,6 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_goal_commands(subcommands)
     register_memory_commands(subcommands)
     register_skill_commands(subcommands)
+    register_learned_skill_commands(subcommands)
     register_events_commands(subcommands)
     register_headless_commands(subcommands)
     register_eval_commands(subcommands)
@@ -379,6 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         team_service,
         question_service,
         provisioner,
+        learned_skill_service,
     ) = _make_services(args.db)
     global _SERVICES
     _SERVICES = (
@@ -387,7 +396,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent_orchestrator, playbook_service, report_service, ctf_service,
         redteam_service, planning_service, swarm_service, goal_service,
         memory_service, skill_service, export_service, access_service,
-        team_service, question_service, provisioner,
+        team_service, question_service, provisioner, learned_skill_service,
     )
     operation_policies = OperationPolicyRepository(
         Database(args.db or default_database_path())
@@ -512,6 +521,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         skill_result = handle_skill_command(args, skill_service)
         if skill_result is not None:
             return skill_result
+        learned_skill_result = handle_learned_skill_command(args, learned_skill_service)
+        if learned_skill_result is not None:
+            return learned_skill_result
         events_result = handle_events_command(args, operation_service)
         if events_result is not None:
             return events_result
@@ -882,6 +894,7 @@ def _make_services(
     TeamworkService,
     OperatorQuestionService,
     Provisioner,
+    LearnedSkillService,
 ]:
     database = Database(database_path or default_database_path())
     operation_repository = OperationRepository(database)
@@ -921,6 +934,14 @@ def _make_services(
     skill_service = SkillService(
         SkillRepository(database), vault, SkillGapRepository(database)
     )
+    learned_skill_service = LearnedSkillService(
+        operations,
+        kernel,
+        ToolRunRepository(database),
+        LearnedSkillRepository(database),
+        settings,
+        vault,
+    )
     questions = OperatorQuestionService(operations, QuestionRepository(database))
     ctf = CtfService(operations, kernel, CtfRepository(database), vault)
     agents = AgentOrchestrator(
@@ -932,6 +953,7 @@ def _make_services(
         checkpoints=RunCheckpointRepository(database),
         memory=memory_service,
         skills=skill_service,
+        learned_skills=learned_skill_service,
         genes=GeneService(GeneStore(genes_path())),
         impact=ImpactService(operations, kernel),
         questions=questions,
@@ -986,6 +1008,7 @@ def _make_services(
         team,
         questions,
         provisioner,
+        learned_skill_service,
     )
 
 
