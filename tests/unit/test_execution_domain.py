@@ -175,6 +175,7 @@ def test_default_registry_contains_stage2_tools() -> None:
         "research.search",
         "research.read",
         "remote.ssh-exec",
+        "remote.ssh-pass",
         "remote.smb-list",
         "remote.rdp-check",
         "remote.adb",
