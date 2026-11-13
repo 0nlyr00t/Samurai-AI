@@ -47,6 +47,7 @@ from samurai_ai.domain.kernel import (
     GateStatus,
     TaskStatus,
 )
+from samurai_ai.domain.learned_skills import LearnedSkillMode
 from samurai_ai.domain.lessons import LessonMode
 from samurai_ai.domain.models import parse_model_id
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
@@ -70,6 +71,7 @@ from samurai_ai.services.goals import GoalService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.killchain import KillchainService, PhaseOverrideError  # noqa: I001
+from samurai_ai.services.learned_skills import LearnedSkillService
 from samurai_ai.services.lessons import LessonService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
@@ -90,7 +92,9 @@ from samurai_ai.storage.access import AccessRepository
 from samurai_ai.storage.agents import AgentRunRepository
 from samurai_ai.storage.chat import ChatHistoryRepository
 from samurai_ai.storage.constraints import ConstraintRepository
+from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.graph import GraphRepository
+from samurai_ai.storage.learned_skills import LearnedSkillRepository
 from samurai_ai.storage.lessons import LessonRepository
 from samurai_ai.storage.retests import RetestRepository
 from samurai_ai.storage.swarm import SwarmRunRepository
@@ -528,6 +532,14 @@ class SamuraiApp(
         )
         self.lessons = LessonService(
             service, kernel, LessonRepository(service.repository.database), settings
+        )
+        self.learned_skills = LearnedSkillService(
+            service,
+            kernel,
+            ToolRunRepository(service.repository.database),
+            LearnedSkillRepository(service.repository.database),
+            settings,
+            vault,
         )
         self.traffic = TrafficService(
             service, kernel, TrafficRepository(service.repository.database)
@@ -3789,8 +3801,12 @@ class SamuraiApp(
             self._write_line(f"[rules] {rule.format()}")
 
     def _show_skills(self, argument: str = "") -> None:
-        if argument.strip().lower() == "gaps":
+        stripped = argument.strip()
+        if stripped.lower() == "gaps":
             self._handle_skills_gaps()
+            return
+        if stripped.lower().split()[:1] == ["learned"]:
+            self._handle_learned_skills(stripped[len("learned"):].strip())
             return
         installed = self.skills.list_skills()
         if not installed:
@@ -3798,6 +3814,59 @@ class SamuraiApp(
             return
         for skill in installed:
             self._write_line(f"[skill] {skill.name} | v{skill.version}")
+
+    def _handle_learned_skills(self, argument: str) -> None:
+        """`/skills learned [extract|promote <id>|reject <id>|mode <m>|curate]`."""
+        workspace = self._memory_workspace()
+        parts = argument.split()
+        action = parts[0].lower() if parts else ""
+        target = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if action == "extract":
+                if self.operation is None:
+                    self._write_line("[error] " + self.translator.t("palette.no-operation"))
+                    return
+                admitted = self.learned_skills.extract(self.operation.id, workspace)
+                self._write_dim(
+                    self.translator.t("learned-skills.extracted", count=len(admitted))
+                )
+                return
+            if action in ("promote", "reject") and target:
+                skill = (
+                    self.learned_skills.promote(target)
+                    if action == "promote"
+                    else self.learned_skills.reject(target)
+                )
+                self._write_dim(
+                    self.translator.t(
+                        "learned-skills.status", skill=skill.id, status=skill.status.value
+                    )
+                )
+                return
+            if action == "mode" and target:
+                self.learned_skills.set_mode(LearnedSkillMode(target))
+                self._write_dim(self.translator.t("learned-skills.mode", mode=target))
+                return
+            if action == "curate":
+                retired = self.learned_skills.curate(workspace)
+                self._write_dim(self.translator.t("learned-skills.curated", count=retired))
+                return
+        except Exception as exc:  # noqa: BLE001 - command feedback, never a crash
+            self._write_line(f"[learned-skills] {exc}")
+            return
+        skills = self.learned_skills.all(workspace)
+        if not skills:
+            self._write_dim(self.translator.t("learned-skills.empty"))
+            return
+        self._write_dim(
+            self.translator.t("learned-skills.mode-line", mode=self.learned_skills.mode().value)
+        )
+        for skill in skills:
+            self._write_line(
+                f"[learned] {skill.id} | {skill.status.value} | "
+                f"reuses={skill.fitness.reuses} findings={skill.fitness.findings_after_reuse} | "
+                f"{skill.cue}"
+            )
 
     def _show_custom_playbooks(self) -> None:
         templates = self.playbooks.list_custom()
