@@ -50,7 +50,9 @@ class MissingBinaryError(NativeToolError):
 def render_native_argv(
     recipe: ToolManifest, params: dict[str, Any]
 ) -> list[str]:
-    """argv from the recipe; arrays join with commas, booleans become flags."""
+    """argv from the recipe; booleans become flags, arrays join with the
+    parameter's `separator` (one token) unless `argv_split` asks for one token
+    per item — nmap takes its targets as separate words, not a comma list."""
     argv: list[str] = []
     for token in recipe.argv:
         name = token[1:-1] if token.startswith(_PLACEHOLDER_OPEN) and token.endswith("}") else ""
@@ -66,7 +68,12 @@ def render_native_argv(
                     argv.append(str(value))
                 continue
             if isinstance(value, (list, tuple)):
-                argv.append(",".join(str(item) for item in value))
+                spec = recipe.params.get(name)
+                if spec is not None and spec.argv_split:
+                    argv.extend(str(item) for item in value)
+                else:
+                    separator = spec.separator if spec is not None else ","
+                    argv.append(separator.join(str(item) for item in value))
                 continue
             argv.append(str(value))
             continue
