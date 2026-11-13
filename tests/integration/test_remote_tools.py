@@ -147,6 +147,82 @@ def test_ssh_exec_goes_through_a_tunnel(tmp_path: Path, listener: int) -> None:
     assert "[egress: 127.0.0.1 allowed;" in result.stderr
 
 
+def test_ssh_exec_falls_back_to_native_when_docker_is_absent(
+    tmp_path: Path, listener: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No Docker: the driver runs on the host under bwrap, via the same tunnel."""
+    from samurai_ai.execution import remote
+
+    native_calls: list[tuple[str, ...]] = []
+
+    class FakeNative:
+        stall_seconds = 120.0
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def run(self, argv, timeout_seconds=None, **kwargs):  # type: ignore[no-untyped-def]
+            native_calls.append(tuple(argv))
+            endpoint = argv[-1]
+            _, _, port = endpoint.partition(":")
+            try:
+                with socket.create_connection(("127.0.0.1", int(port)), timeout=2) as conn:
+                    conn.sendall(b"x")
+                    conn.settimeout(0.5)
+                    try:
+                        conn.recv(16)
+                    except OSError:
+                        pass
+            except (ValueError, OSError):
+                pass
+            return ProcessResult(exit_code=0, stdout="native ok", stderr="")
+
+    monkeypatch.setattr(remote, "ProcessManager", FakeNative)
+    monkeypatch.setattr(remote, "bwrap_available", lambda: True)
+
+    class NoDocker(FakeManager):
+        async def run(self, argv, timeout_seconds=None, **kwargs):  # type: ignore[no-untyped-def]
+            if tuple(argv)[:2] == ("docker", "version"):
+                return ProcessResult(exit_code=1, stdout="", stderr="no docker")
+            return await FakeManager.run(self, argv, timeout_seconds, **kwargs)
+
+    sign_allowlist(tmp_path / "sandbox-allowlist.sig", MASTER_KEY)
+    manager = NoDocker()
+    database = Database(tmp_path / "remote.db")
+    service = OperationService(OperationRepository(database))
+    kernel = KernelService(service, KernelRepository(database))
+    recovery = RecoveryService(service, kernel, RecoveryRepository(database))
+    runner = DockerSandboxRunner(
+        manager, tmp_path / "sandbox-allowlist.sig", lambda: MASTER_KEY
+    )
+    registry = ToolRegistry(adapters=(SshExecTool(runner),))
+    execution = ToolExecutionService(
+        service, kernel, recovery, ToolRunRepository(database), registry=registry
+    )
+    operation = make_operation(service)
+    approval_id = approve(kernel, operation.id, "remote.ssh-exec", RiskClass.R3)
+    result = execution.run_tool(
+        operation.id,
+        "remote.ssh-exec",
+        {
+            "host": "127.0.0.1",
+            "port": listener,
+            "user": "root",
+            "command": "id",
+            "key": "-----BEGIN KEY-----\nabc\n-----END KEY-----",
+        },
+        approval_id=approval_id,
+    )
+    assert result.run.status.value == "completed"
+    assert native_calls, "the native manager must run when docker is absent"
+    argv = list(native_calls[0])
+    assert argv[0] == "bwrap"  # confined by bubblewrap, not the container
+    assert argv[-1].startswith("127.0.0.1:")  # the localhost tunnel, not the docker alias
+    assert "bubblewrap" in result.stderr  # the native note is surfaced
+    assert "native ok" in result.stdout
+    assert "[egress: 127.0.0.1 allowed;" in result.stderr
+
+
 def test_remote_tools_check_scope_before_spawn(tmp_path: Path, listener: int) -> None:
     service, kernel, execution, manager = make_stack(tmp_path, (SmbListTool,))
     operation = service.create(
