@@ -125,6 +125,7 @@ from samurai_ai.tui.screens import (
     LanguagePromptScreen,
     ModelPickerScreen,
     NewOperationScreen,
+    OperationsScreen,
     ProjectPickerScreen,
     Section,
     SettingsScreen,
@@ -4303,6 +4304,50 @@ class SamuraiApp(
             return
         panel.display = True
         panel.update("\n".join(attack_map(rows)))
+
+    def _show_operations(self) -> None:
+        """`/operations`: the full list — switch, rename or delete any of them.
+
+        Only the latest operation opens as a tab on startup, so earlier ones are
+        otherwise unreachable; this is the keyboard way in (no mouse needed).
+        """
+        current = self.operation.id if self.operation else None
+        rows: list[dict[str, Any]] = []
+        for operation in self.service.list_all():
+            busy = any(
+                run.status is AgentRunStatus.RUNNING
+                for run in self.agents.list_runs(operation.id)
+            )
+            rows.append(
+                {
+                    "id": operation.id,
+                    "label": operation.name or operation.id,
+                    "busy": busy,
+                    "open": operation.id in self._open_tabs,
+                }
+            )
+        if not rows:
+            self._write_dim(self.translator.t("operations.empty"), process=False)
+            return
+        self.push_screen(
+            OperationsScreen(self.translator, rows, current), self._on_operations_choice
+        )
+
+    def _on_operations_choice(self, choice: tuple[str, str] | None) -> None:
+        if choice is None:
+            return
+        action, operation_id = choice
+        if action == "open":
+            if operation_id not in self._open_tabs:
+                self._open_tabs.append(operation_id)
+            self._open_operation(operation_id)
+            self._refresh_operations_strip()
+            return
+        if action == "delete":
+            self._close_operation_by_id(operation_id)
+            return
+        if action == "rename":
+            self.run_worker(self._rename_operation(operation_id), exclusive=False)
 
     def _tab_menu(self, operation_id: str, label: str) -> None:
         """Right-click on a tab: rename it, or close it (alone or with others)."""
