@@ -168,13 +168,37 @@ def _write_targets(command: str) -> list[str]:
     return [target.strip().strip("'\"") for target in targets if target.strip()]
 
 
+#: standard character-device sinks — universal, harmless write targets. A
+#: ``2>/dev/null`` is not a filesystem escape, and treating it as one made yolo
+#: deny almost every real command (it redirects stderr to /dev/null).
+_DEV_SINKS = frozenset(
+    {
+        "/dev/null",
+        "/dev/zero",
+        "/dev/full",
+        "/dev/tty",
+        "/dev/stdin",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/random",
+        "/dev/urandom",
+    }
+)
+
+
 def filesystem_escapes(command: str, allowed_roots: tuple[str, ...]) -> tuple[str, ...]:
-    """Absolute write targets that fall outside every trusted root."""
+    """Absolute write targets that fall outside every trusted root.
+
+    Writes to the standard /dev sinks (``/dev/null`` and friends) do not count —
+    they are not real files and redirecting to them is universal.
+    """
     roots = tuple(root for root in allowed_roots if root)
     if not roots:
         return ()
     escapes = [
-        path for path in _write_targets(command) if _outside_all(path, roots)
+        path
+        for path in _write_targets(command)
+        if path not in _DEV_SINKS and _outside_all(path, roots)
     ]
     return tuple(dict.fromkeys(escapes))[:MAX_BADGES]
 
