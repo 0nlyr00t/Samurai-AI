@@ -10578,3 +10578,35 @@ def test_a_write_outside_the_trusted_dir_is_blocked_in_yolo(tmp_path: Path) -> N
             await pilot.press("ctrl+c")
 
     asyncio.run(exercise())
+
+
+def test_skills_learned_command_sets_mode_and_lists(tmp_path: Path) -> None:
+    """`/skills learned mode inject` flips the mode; `/skills learned` lists safely."""
+    stack = _minimal_stack(tmp_path)
+    settings = stack[2]
+    settings.set_locale("en")
+    operation = stack[0].create(
+        "Learn lab",
+        OperationMode.CTF_HTB,
+        ScopeContract(includes=("10.0.0.5",)),
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.domain.learned_skills import LearnedSkillMode
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "/skills learned mode inject"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.learned_skills.mode() is LearnedSkillMode.INJECT
+            # listing with nothing learned yet must not crash
+            command_input.value = "/skills learned"
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
