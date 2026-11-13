@@ -62,6 +62,11 @@ class ParamSpec(BaseModel):
     items_enum: tuple[str, ...] = ()
     max_items: int | None = Field(default=None, ge=1, le=50)
     separator: str = ","
+    #: an array placeholder normally joins its items with `separator` into one
+    #: argv token; `argv_split` instead renders each item as its own token, for
+    #: tools (nmap) that take several targets as separate words rather than a
+    #: comma list. Only meaningful for an array parameter.
+    argv_split: bool = False
     default: Any = None
 
     @field_validator("pattern")
@@ -90,6 +95,8 @@ class ParamSpec(BaseModel):
             raise ManifestError("items_enum needs an array parameter")
         if self.type == "array" and self.separator in "{}":
             raise ManifestError("array separator cannot be a brace")
+        if self.argv_split and self.type != "array":
+            raise ManifestError("argv_split needs an array parameter")
         return self
 
 
