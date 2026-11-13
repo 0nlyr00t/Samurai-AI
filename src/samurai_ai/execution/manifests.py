@@ -61,10 +61,7 @@ def _render_scalar(spec: ParamSpec, name: str, value: Any, *, allow_dash: bool) 
     return text
 
 
-def render_value(manifest: ToolManifest, name: str, value: Any) -> str:
-    spec = manifest.params[name]
-    if spec.type != "array":
-        return _render_scalar(spec, name, value, allow_dash=bool(spec.enum))
+def _render_array_items(spec: ParamSpec, name: str, value: Any) -> list[str]:
     if not isinstance(value, (list, tuple)):
         raise ManifestError(f"parameter {name!r} must be an array")
     if spec.max_items and len(value) > spec.max_items:
@@ -76,11 +73,14 @@ def render_value(manifest: ToolManifest, name: str, value: Any) -> str:
         for item in value:
             if str(item) not in spec.items_enum:
                 raise ManifestError(f"parameter {name!r} items must be one of {allowed}")
-    rendered = [
-        _render_scalar(spec, name, item, allow_dash=True)
-        for item in value
-    ]
-    return spec.separator.join(rendered)
+    return [_render_scalar(spec, name, item, allow_dash=True) for item in value]
+
+
+def render_value(manifest: ToolManifest, name: str, value: Any) -> str:
+    spec = manifest.params[name]
+    if spec.type != "array":
+        return _render_scalar(spec, name, value, allow_dash=bool(spec.enum))
+    return spec.separator.join(_render_array_items(spec, name, value))
 
 
 def render_argv(manifest: ToolManifest, params: dict[str, Any]) -> list[str]:
@@ -110,6 +110,15 @@ def render_argv(manifest: ToolManifest, params: dict[str, Any]) -> list[str]:
             ):
                 rendered.pop()
             continue
+        # a standalone array placeholder may render one argv token per item
+        # (nmap targets) rather than a single separator-joined token
+        if len(names) == 1:
+            name = names[0]
+            spec = manifest.params.get(name)
+            if spec is not None and spec.argv_split and token == "{" + name + "}":
+                value = params.get(name, spec.default)
+                rendered.extend(_render_array_items(spec, name, value))
+                continue
         rendered.append(_PLACEHOLDER.sub(substitute, token))
     return rendered
 

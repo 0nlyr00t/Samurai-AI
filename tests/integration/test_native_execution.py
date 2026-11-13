@@ -74,6 +74,54 @@ def test_argv_is_built_without_a_shell(tmp_path: Path) -> None:
     assert all(" " not in token or token.startswith("-") for token in argv)
 
 
+def _split_recipe(argv: list[str]) -> ToolManifest:
+    payload = {
+        "id": "scan.fake",
+        "version": 1,
+        "title": "fake scanner",
+        "image": "x/y@sha256:" + "a" * 64,
+        "executable": "fake-scan",
+        "risk_class": "r2",
+        "network": "direct",
+        "execution": {"native": True},
+        "provision": {"packages": {"linux": {"manager": "apt", "package": "fake"}}},
+        "params": {
+            "targets": {"type": "array", "required": True, "argv_split": True},
+            "ports": {"type": "string", "required": False, "default": "80"},
+        },
+        "argv": argv,
+        "trusted": True,
+    }
+    return ToolManifest.model_validate(payload)
+
+
+def test_argv_split_renders_one_token_per_target() -> None:
+    # regression: comma-joined targets reach nmap as a single unresolvable
+    # host ("0 hosts up"); argv_split must give each target its own argv word.
+    recipe = _split_recipe(["-p", "{ports}", "{targets}"])
+    argv = render_native_argv(recipe, {"targets": ["10.0.0.5", "10.0.0.6"], "ports": "22"})
+    assert argv == ["-p", "22", "10.0.0.5", "10.0.0.6"]
+
+
+def test_real_nmap_recipe_splits_its_targets() -> None:
+    recipe_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "samurai_ai"
+        / "assets"
+        / "recipes"
+        / "nmap.json"
+    )
+    recipe = ToolManifest.model_validate(json.loads(recipe_path.read_text()))
+    assert recipe.params["targets"].argv_split is True
+    argv = render_native_argv(
+        recipe, {"targets": ["10.129.141.194", "10.129.141.78"], "ports": "1-1000"}
+    )
+    assert "10.129.141.194" in argv
+    assert "10.129.141.78" in argv
+    assert "10.129.141.194,10.129.141.78" not in argv
+
+
 def test_the_recipe_decides_the_executable_not_the_model(tmp_path: Path) -> None:
     binary = _fake_binary(tmp_path)
     recipe = _recipe(tmp_path, ["-p", "{ports}", "{targets}"])

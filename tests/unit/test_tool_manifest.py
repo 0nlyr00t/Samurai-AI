@@ -33,6 +33,27 @@ def test_a_valid_manifest_renders_typed_values() -> None:
     assert argv == ["-n", "example.com", "fast,-x"]
 
 
+def test_argv_split_array_renders_separate_tokens() -> None:
+    tool = manifest(
+        params={
+            "targets": {"type": "array", "required": True, "argv_split": True},
+        },
+        targets={"param": "targets", "kind": "host", "max": 10},
+        argv=["-sn", "{targets}"],
+    )
+    argv = render_argv(tool, {"targets": ["10.0.0.5", "10.0.0.6"]})
+    assert argv == ["-sn", "10.0.0.5", "10.0.0.6"]
+
+
+def test_argv_split_rejects_a_non_array_parameter() -> None:
+    with pytest.raises(Exception, match="argv_split needs an array"):
+        manifest(
+            params={"target": {"type": "string", "argv_split": True}},
+            targets={"param": "target", "kind": "host", "max": 1},
+            argv=["-n", "{target}"],
+        )
+
+
 def test_a_value_cannot_smuggle_a_flag_or_a_space() -> None:
     tool = manifest(
         params={
