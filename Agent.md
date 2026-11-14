@@ -107,10 +107,11 @@ uv run samurai tui
 - `src/samurai_ai/cli.py` — CLI entry point и общие команды.
 - `src/samurai_ai/cli_kernel.py` — plan/task/gate/artifact/finding/approval команды.
 - `src/samurai_ai/cli_recovery.py` — snapshot/fork/reconcile/lang/diff команды.
-- `src/samurai_ai/cli_execution.py` — tool list/run/show/install/capabilities/provision/verify команды.
+- `src/samurai_ai/cli_execution.py` — tool list/run/show/draft/install/capabilities/provision/verify команды.
 - `src/samurai_ai/domain/environment.py` — read-only EnvironmentProfile и детектор (ничего не ставит и не тянет).
 - `src/samurai_ai/domain/provision.py` — ProvisionPlan/Run/State, статусы установки и отказы.
-- `src/samurai_ai/services/catalog.py` — каталог рецептов (`assets/recipes`), fail-closed загрузка.
+- `src/samurai_ai/services/catalog.py` — каталог рецептов (`assets/recipes` + установленные `$SAMURAI_HOME/recipes`), fail-closed загрузка.
+- `src/samurai_ai/services/drafts.py` — черновик инструмента из документации: захват, redact, кандидат от модели, подтверждение, sidecar.
 - `src/samurai_ai/services/provisioner.py` — dry-run, approval, установка по argv, healthcheck, замок, состояние.
 - `src/samurai_ai/services/fabric.py` — capability-сводка и детерминированный резолвер путей исполнения.
 - `src/samurai_ai/execution/native.py` — нативный адаптер по argv без shell поверх ProcessManager.
@@ -226,6 +227,7 @@ TUI UX (Этап 8+): верхняя панель с тремя вкладкам
 
 - Не ослаблять scope и не переносить enforcement только в prompts.
 - Установка инструмента — только из reviewed-каталога: модель называет `tool_id`, не пакет и не команду. Новый рецепт в `assets/recipes` проходит ревью, `provision` не ставит ничего вне рецепта, `apt upgrade`/удаление пакетов не выполняются.
+- Черновик из документации модель пишет только в явный `--out` и ничего не устанавливает: подтверждённые поля (digest, executable, пакет, healthcheck) обязаны быть в тексте источника, `incomplete` черновик `install --trusted` не берёт, а `--trusted` остаётся за оператором после чтения.
 - Не выполнять сетевые или деструктивные действия в unit/integration tests.
 - Не добавлять неограниченную рекурсию агентов.
 - Не хранить секреты в events, reports, fixtures или Git.
