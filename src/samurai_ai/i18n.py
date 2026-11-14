@@ -794,6 +794,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "working: make the next tool call instead of summarizing."
         ),
         "chat.goal-judge-failed": "[goal] judge unavailable, falling back to the counter",
+        "chat.open-hypotheses": "[goal] {count} hypotheses still need a result — continuing",
+        "chat.open-hypotheses-note": (
+            "Do not conclude yet. Test or close these hypotheses with evidence or "
+            "a concrete reason: {ids}. Any new hypothesis opened during this review "
+            "must be checked too. After all are closed, reason through the results "
+            "and give the main conclusion."
+        ),
         "goal.cleared": "[goal] cleared, back to the round counter",
         "tabmenu.rename": "Rename this tab",
         "tabmenu.close": "Close this tab and delete the operation",
@@ -1719,6 +1726,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "работу: делай следующий вызов инструмента, а не сводку."
         ),
         "chat.goal-judge-failed": "[цель] оценщик недоступен, работает счётчик",
+        "chat.open-hypotheses": "[цель] гипотез без результата: {count} — продолжаю",
+        "chat.open-hypotheses-note": (
+            "Ещё рано завершать. Проверь или закрой эти гипотезы доказательством "
+            "или конкретной причиной: {ids}. Новые гипотезы из этой проверки тоже "
+            "нужно проверить. Когда все будут закрыты, обсуди результаты и сформулируй "
+            "главный вывод."
+        ),
         "goal.cleared": "[цель] снята, снова работает счётчик раундов",
         "project.hint": "Enter открывает; Esc оставляет текущий каталог",
         "project.manual": "… другой путь",

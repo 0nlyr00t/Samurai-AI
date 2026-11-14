@@ -44,6 +44,7 @@ from samurai_ai.domain.graph import (
     NodeKind,
     NodeState,
 )
+from samurai_ai.domain.hypotheses import HypothesisCoverage, hypothesis_coverage
 from samurai_ai.domain.kernel import (
     ArtifactKind,
     FindingSeverity,
@@ -121,6 +122,7 @@ _MAX_PROMISE_NUDGES = 2
 #: a worked turn (tool calls happened) that claims to be done while a goal
 #: exists gets judged before it may end; this many times per turn at most
 _MAX_COMPLETION_JUDGES = 2
+_MAX_HYPOTHESIS_NUDGES = 2
 
 
 @dataclass(frozen=True)
@@ -924,6 +926,33 @@ class ChatController:
                 counts[key] += 1
         return counts
 
+    def _hypothesis_coverage(self, operation_id: str) -> HypothesisCoverage:
+        graph = getattr(self, "graph", None)
+        ctf = getattr(self, "ctf", None)
+        return hypothesis_coverage(
+            graph.for_operation(operation_id) if graph is not None else (),
+            ctf.list_hypotheses(operation_id) if ctf is not None else (),
+        )
+
+    def _continue_hypothesis_review(self, operation_id: str, nudges: int) -> bool:
+        """Give live hypotheses real work before any successful sign-off."""
+        coverage = self._hypothesis_coverage(operation_id)
+        if coverage.complete or nudges >= _MAX_HYPOTHESIS_NUDGES:
+            return False
+        ids = coverage.unfinished_ids
+        self._write_dim(
+            self.translator.t("chat.open-hypotheses", count=len(ids)), process=False
+        )
+        self._remember(
+            Message(
+                role="user",
+                content=self.translator.t(
+                    "chat.open-hypotheses-note", ids=", ".join(ids[:6])
+                ),
+            )
+        )
+        return True
+
     def _completion_reason(
         self, operation_id: str, runs_at_start: dict[str, int], findings_at_start: int
     ) -> TerminalReason:
@@ -938,6 +967,13 @@ class ChatController:
         "No finding" is the count *this turn* added, not the operation total: an
         old finding otherwise masks a collapsed turn forever.
         """
+        coverage = self._hypothesis_coverage(operation_id)
+        if not coverage.complete:
+            self._write_dim(
+                self.translator.t("chat.open-hypotheses", count=coverage.unfinished),
+                process=False,
+            )
+            return TerminalReason.BLOCKED
         now = self._run_outcome_counts(operation_id)
         ran = sum(now[key] - runs_at_start.get(key, 0) for key in now)
         completed = now["completed"] - runs_at_start.get("completed", 0)
@@ -1648,6 +1684,7 @@ class ChatController:
         stretches_used = 0
         promise_nudges = 0
         completion_judges = 0
+        hypothesis_nudges = 0
         tool_calls_made = 0
         self._remember(Message(role="user", content=text))
         self._begin_live_answer()
@@ -1660,15 +1697,21 @@ class ChatController:
                 await self._settle(operation_id, model_id, reasoning)
                 if self._stop_requested:
                     return TerminalReason.CANCELLED
+                if self._continue_hypothesis_review(operation_id, hypothesis_nudges):
+                    hypothesis_nudges += 1
+                    rounds_left = self._max_tool_rounds()
+                    continue
                 if stretches_used >= self._AUTO_CONTINUES:
                     break
                 if self._operation_goal(operation_id):
                     verdict = await self._judge_goal(operation_id, model_id)
                     if verdict == goal_judge.STOP:
-                        self._write_dim(self.translator.t("chat.goal-met"))
-                        return self._completion_reason(
+                        reason = self._completion_reason(
                             operation_id, runs_at_start, findings_at_start
                         )
+                        if reason is TerminalReason.COMPLETED:
+                            self._write_dim(self.translator.t("chat.goal-met"))
+                        return reason
                 stretches_used += 1
                 self._write_dim(
                     self.translator.t(
@@ -1755,6 +1798,9 @@ class ChatController:
                         )
                     )
                     continue
+                if self._continue_hypothesis_review(operation_id, hypothesis_nudges):
+                    hypothesis_nudges += 1
+                    continue
                 if (
                     tool_calls_made
                     and completion_judges < _MAX_COMPLETION_JUDGES
@@ -1765,10 +1811,12 @@ class ChatController:
                     completion_judges += 1
                     verdict = await self._judge_goal(operation_id, model_id)
                     if verdict == goal_judge.STOP:
-                        self._write_dim(self.translator.t("chat.goal-met"))
-                        return self._completion_reason(
+                        reason = self._completion_reason(
                             operation_id, runs_at_start, findings_at_start
                         )
+                        if reason is TerminalReason.COMPLETED:
+                            self._write_dim(self.translator.t("chat.goal-met"))
+                        return reason
                     if verdict is None:
                         # a broken judge never stalls a run: fall back to accepting,
                         # but a turn whose runs all collapsed is still not a success
@@ -1825,7 +1873,11 @@ class ChatController:
         self._trim_chat_history()
         if final.text.strip():
             self._write_ai_message(final)
-        return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.ROUNDS
+        if self._stop_requested:
+            return TerminalReason.CANCELLED
+        if not self._hypothesis_coverage(operation_id).complete:
+            return self._completion_reason(operation_id, runs_at_start, findings_at_start)
+        return TerminalReason.ROUNDS
 
 
     def _adopt_goal(self, text: str) -> None:
@@ -2497,7 +2549,8 @@ class ChatController:
         outcome = str(call.arguments.get("outcome", "") or "").strip()
         reason = str(call.arguments.get("reason", "") or "")
         try:
-            intent = self.graph.close_intent(intent_id, outcome, reason)
+            resolved = self._resolve_intent(intent_id)
+            intent = self.graph.close_intent(resolved.id, outcome, reason)
         except GraphError as exc:
             return Message(role="user", content=f"[tool close_intent] {exc}")
         self._write_dim(self.translator.t("graph.intent-closed", intent=intent.id, state=outcome))
