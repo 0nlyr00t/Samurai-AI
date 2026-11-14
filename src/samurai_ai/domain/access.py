@@ -135,6 +135,8 @@ _MINIMUM: dict[str, Role] = {
     "agent": Role.OPERATOR,
     "headless": Role.OPERATOR,
     "tool.install": Role.ADMIN,
+    # drafting spends a model call but changes no state: an operator may do it
+    "tool.draft": Role.OPERATOR,
     "tool.manifests": Role.VIEWER,
     "tool.uninstall": Role.ADMIN,
     "gene": Role.VIEWER,

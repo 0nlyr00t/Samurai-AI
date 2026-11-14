@@ -37,6 +37,17 @@ def recipes_directory() -> Path:
     return assets_directory() / "recipes"
 
 
+def user_recipes_directory() -> Path:
+    """Recipes the operator installed; they sit beside the shipped ones.
+
+    A user recipe with a shipped id overrides it, which is the point of
+    installing one: the shipped file is the fallback, not the limit.
+    """
+    from samurai_ai.config import config_directory
+
+    return config_directory() / "recipes"
+
+
 def portability_scripts() -> Path:
     """Scripts a project-local recipe copies; never executed from here."""
     return assets_directory() / "templates"
@@ -45,11 +56,21 @@ def portability_scripts() -> Path:
 class RecipeCatalog:
     """Recipes by tool id; every file is validated before it is used."""
 
-    def __init__(self, directory: Path | None = None) -> None:
+    def __init__(
+        self, directory: Path | None = None, extra: tuple[Path, ...] | None = None
+    ) -> None:
         self.directory = directory or recipes_directory()
+        self.extra = (user_recipes_directory(),) if extra is None else extra
+
+    def _directories(self) -> tuple[Path, ...]:
+        return (self.directory, *self.extra)
 
     def _files(self) -> list[Path]:
-        return sorted(self.directory.glob("*.json")) if self.directory.is_dir() else []
+        files: list[Path] = []
+        for directory in self._directories():
+            if directory.is_dir():
+                files.extend(sorted(directory.glob("*.json")))
+        return files
 
     def load_all(self) -> dict[str, ToolManifest]:
         """Recipes by id. A broken file is fatal: a half catalogue is worse."""
@@ -100,8 +121,14 @@ class RecipeCatalog:
                 f"{', '.join(missing)}"
             )
 
-    def install(self, source: Path, *, trusted: bool, directory: Path) -> ToolManifest:
-        """A user recipe: explicit trust, sha256 kept beside it."""
+    def install(
+        self, source: Path, *, trusted: bool, directory: Path, replace: bool = False
+    ) -> ToolManifest:
+        """A user recipe: explicit trust, sha256 kept beside it.
+
+        Only a recipe shape lands here — a manifest that declares neither native
+        nor project-local execution would never be reached from this catalogue.
+        """
         if not trusted:
             raise CatalogError("a user recipe needs --trusted after you read it")
         try:
@@ -109,8 +136,16 @@ class RecipeCatalog:
             recipe = ToolManifest.model_validate({**json.loads(raw), "trusted": True})
         except (OSError, json.JSONDecodeError, ManifestError) as exc:
             raise CatalogError(f"cannot install recipe {source}: {exc}") from exc
+        if not (recipe.execution.native or recipe.execution.project_local):
+            raise CatalogError(
+                f"recipe {recipe.id} declares neither native nor project-local "
+                "execution; install it as a manifest instead"
+            )
+        target = directory / f"{recipe.id}.json"
+        if target.exists() and not replace:
+            raise CatalogError(f"recipe {recipe.id} is already installed; pass --replace")
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{recipe.id}.json").write_text(raw, encoding="utf-8")
+        target.write_text(raw, encoding="utf-8")
         (directory / f"{recipe.id}.sha256").write_text(
             hashlib.sha256(raw.encode("utf-8")).hexdigest() + "\n", encoding="utf-8"
         )
@@ -141,5 +176,6 @@ __all__ = [
     "assets_directory",
     "portability_scripts",
     "recipes_directory",
+    "user_recipes_directory",
     "which",
 ]
