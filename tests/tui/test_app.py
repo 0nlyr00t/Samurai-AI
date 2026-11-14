@@ -8116,6 +8116,12 @@ def test_the_chat_can_ask_for_a_tool_and_the_plan_is_shown(tmp_path: Path) -> No
     async def exercise() -> None:
         app = SamuraiApp(*stack, operation.id)
         app.provisioner = _Stub()
+        # the install is gated on machine-readable evidence; the gate itself is
+        # covered in `tests/unit/test_chat_provision_gate.py`. Here the provision
+        # tool is called directly, so no shell run preceded it: seed the typed
+        # miss a real turn would have recorded, and the presence of nmap on the
+        # machine cannot decide the test.
+        app._missing_binary_tools.add("scan.nmap")  # type: ignore[attr-defined]
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             worker = app.run_worker(

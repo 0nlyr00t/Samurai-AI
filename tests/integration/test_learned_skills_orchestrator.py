@@ -141,3 +141,30 @@ def test_learning_never_breaks_a_finished_run(
 
     assert run.status is AgentRunStatus.COMPLETED
     assert learned.all(WORKSPACE) == []
+
+
+def test_a_blocked_run_learns_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blocked task is not an episode worth distilling."""
+    service, kernel, _models, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    learned, _tool_runs = _wire_learning(orchestrator, tmp_path)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id, required=("probe-proof",))
+    _confirmed(kernel, operation_id)  # what the skill body is built from
+    # plan, the step, its retry, then three closing attempts: all refused
+    fake.queue(
+        '{"steps": ["probe"]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
+    )
+
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID], workspace=WORKSPACE)
+
+    assert run.status is AgentRunStatus.FAILED
+    assert learned.all(WORKSPACE) == []
+    types = [event.event_type for event in service.events(operation_id)]
+    assert "learned_skill.extracted" not in types

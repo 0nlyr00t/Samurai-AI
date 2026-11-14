@@ -68,6 +68,7 @@ from samurai_ai.domain.models import CapabilityError, ModelCapability, ModelErro
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.domain.permission import command_signature
 from samurai_ai.domain.swarm import AgentSpecialization
+from samurai_ai.execution.native import MissingBinaryError
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.genes import GeneService
@@ -191,7 +192,8 @@ _EXECUTOR_INSTRUCTION = (
     'request_tool_provision {"type":"request_tool_provision","tool_id":...} — only '
     'when request_tool_run answered that the binary is missing: it installs from '
     'the reviewed catalogue behind an approval, then run the tool once more. '
-    'A scope refusal, a bad parameter or a timeout do not need it, '
+    'A scope refusal, a bad parameter or a timeout do not need it and are '
+    'refused, as is a tool that is already installed — '
     'note {"type":"note","key":...,"value":...}, ask_operator '
     '{"type":"ask_operator","questions":[{"id":"q1","question":...,"header":...,'
     '"options":[{"label":...,"description":...,"recommended":true},...]}],'
@@ -308,6 +310,11 @@ class AgentOrchestrator:
         self.provisioner = provisioner
         #: one provision retry per tool per run: a loop is not a fix
         self._provisioned: set[tuple[str, str]] = set()
+        #: (run, tool) pairs whose tool run proved the binary is missing: the
+        #: only deterministic reason to install one
+        self._missing_binary: set[tuple[str, str]] = set()
+        #: (operation, task) pairs this harness blocked after the closing attempts
+        self._blocked_by_closing: set[tuple[str, str]] = set()
         #: set by the host so a surfaced question can reach the operator
         self.question_notice: Callable[[str], None] | None = None
 
@@ -440,8 +447,6 @@ class AgentOrchestrator:
                 max_wall_seconds=max_wall_seconds,
             )
             succeeded = run.status is AgentRunStatus.RUNNING
-            if succeeded:
-                run.finish(AgentRunStatus.COMPLETED)
         except BudgetExceededError as exc:
             self._finish_failed(run, AgentRunStatus.BUDGET_EXCEEDED, str(exc))
             return self.get_run(run.id)
@@ -460,14 +465,43 @@ class AgentOrchestrator:
             return self.get_run(run.id)
 
         if succeeded:
+            self._settle_run(operation_id, run, len(steps), workspace, learned_skill_ids)
+        return self.get_run(run.id)
+
+    def _settle_run(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        steps: int,
+        workspace: str | None,
+        learned_skill_ids: Sequence[str],
+    ) -> None:
+        """End a run by what its task actually reached, not by "no exception".
+
+        A task left BLOCKED is not a success: the closing attempts are spent and
+        the plan says so, yet the run used to return COMPLETED — the caller then
+        read a finished run over an unmet objective. A closed task is the only
+        success, including the honest negative result of
+        ``complete_task(no_finding=...)``. Learning hangs off the same verdict.
+        """
+        status = self._task_status(operation_id, run.task_id)
+        if status is TaskStatus.DONE:
+            run.finish(AgentRunStatus.COMPLETED)
             self.runs.finish(run)
             self._append(
                 operation_id,
                 "agent.run.finish",
-                {"run_id": run.id, "status": run.status.value, "steps": len(steps)},
+                {"run_id": run.id, "status": run.status.value, "steps": steps},
             )
             self._learn_from_run(operation_id, run, workspace, learned_skill_ids)
-        return self.get_run(run.id)
+            return
+        reached = status.value if status is not None else "missing"
+        reason = (
+            f"task {run.task_id} blocked: closing attempts spent without evidence"
+            if (operation_id, run.task_id) in self._blocked_by_closing
+            else f"task {run.task_id} not closed (still {reached})"
+        )
+        self._finish_failed(run, AgentRunStatus.FAILED, reason)
 
     def _learn_from_run(
         self,
@@ -480,8 +514,12 @@ class AgentOrchestrator:
 
         Attribute this run's objective outcome to the skills it reused, then
         distil a new candidate from the episode. Learning is advisory: a failure
-        here must never turn a finished run into a failed one.
+        here must never turn a finished run into a failed one. Only a COMPLETED
+        run is an episode worth attributing — a blocked or cancelled one would
+        teach the skills a defeat they did not cause.
         """
+        if run.status is not AgentRunStatus.COMPLETED:
+            return
         if self.learned_skills is None or workspace is None:
             return
         try:
@@ -535,13 +573,7 @@ class AgentOrchestrator:
             extra_context,
         )
         if run.status is AgentRunStatus.RUNNING:
-            run.finish(AgentRunStatus.COMPLETED)
-            self.runs.finish(run)
-            self._append(
-                run.operation_id,
-                "agent.run.finish",
-                {"run_id": run.id, "status": run.status.value, "steps": len(steps)},
-            )
+            self._settle_run(run.operation_id, run, len(steps), run.workspace, ())
         if self.checkpoints is not None:
             self.checkpoints.drop(run.id)
         return self.get_run(run.id)
@@ -753,6 +785,7 @@ class AgentOrchestrator:
                 # instead of a task that hangs "in progress" forever
                 try:
                     self.kernel.block_task(operation_id, run.task_id)
+                    self._blocked_by_closing.add((operation_id, run.task_id))
                 except Exception:  # noqa: BLE001 - a race with the operator's board
                     pass
                 self._append_event(
@@ -893,6 +926,11 @@ class AgentOrchestrator:
         plan = self.kernel.get_current_plan(operation_id)
         task = plan.task_by_id(task_id) if plan is not None else None
         return task is not None and task.status is TaskStatus.IN_PROGRESS
+
+    def _task_status(self, operation_id: str, task_id: str) -> TaskStatus | None:
+        plan = self.kernel.get_current_plan(operation_id)
+        task = plan.task_by_id(task_id) if plan is not None else None
+        return task.status if task is not None else None
 
     def _close_out(
         self,
@@ -1276,33 +1314,43 @@ class AgentOrchestrator:
         approval_resolver: Callable[[str], bool] | None = None,
     ) -> None:
         self.execution.registry.get(command.tool_id)
-        result = self.execution.run_tool(
-            operation_id,
-            command.tool_id,
-            command.params,
-            task_id=run.task_id,
-            approval_resolver=approval_resolver,
-        )
+        try:
+            result = self.execution.run_tool(
+                operation_id,
+                command.tool_id,
+                command.params,
+                task_id=run.task_id,
+                approval_resolver=approval_resolver,
+            )
+        except MissingBinaryError as exc:
+            # the one deterministic reason to install: a typed miss of *this*
+            # call. A scope refusal, a bad parameter or a timeout land elsewhere.
+            self._missing_binary.add((run.id, command.tool_id))
+            raise exc
         # Feed a bounded, already-redacted excerpt back into the blackboard so
-        # the next executor step can actually see what the tool returned.
+        # the next executor step can actually see what the tool returned. Status
+        # and exit ride along, and stderr with them: a failed run usually says
+        # why there and nowhere else, and stdout alone left the model blind.
+        digest = [f"status={result.run.status.value} exit={result.run.exit_code}"]
         excerpt = result.stdout.strip()[:1500]
         if excerpt:
-            # the artifact ids ride along: a finding must name evidence, and the
-            # model otherwise reaches for the note key instead of the artifact
-            evidence = (
-                f"\nartifact_ids: {', '.join(result.artifact_ids)}"
-                if result.artifact_ids
-                else ""
-            )
-            self._append_note(
-                operation_id,
-                run,
-                NoteCommand(
-                    type="note",
-                    key=f"tool-result.{command.tool_id}",
-                    value=f"{excerpt}{evidence}",
-                ),
-            )
+            digest.append(excerpt)
+        error = result.stderr.strip()[:700]
+        if error:
+            digest.append(f"stderr:\n{error}")
+        if result.artifact_ids:
+            # a finding must name evidence, and the model otherwise reaches for
+            # the note key instead of the artifact id
+            digest.append(f"artifact_ids: {', '.join(result.artifact_ids)}")
+        self._append_note(
+            operation_id,
+            run,
+            NoteCommand(
+                type="note",
+                key=f"tool-result.{command.tool_id}",
+                value="\n".join(digest),
+            ),
+        )
 
     def _command_tool_provision(
         self, operation_id: str, run: AgentRun, command: RequestToolProvisionCommand
@@ -1310,11 +1358,24 @@ class AgentOrchestrator:
         """Install from the catalogue, then let the model retry the run once.
 
         Only a missing binary is a reason to install: a scope refusal, a bad
-        parameter or a timeout means the tool is already here.
+        parameter or a timeout means the tool is already here. The gate is the
+        run's own typed `MissingBinaryError`; even then a binary that is present
+        now (installed meanwhile) is not installed again.
         """
         if self.provisioner is None:
             raise ToolExecutionError("provisioning is not configured in this runner")
-        self.execution.registry.get(command.tool_id)
+        adapter = self.execution.registry.get(command.tool_id)
+        if (run.id, command.tool_id) not in self._missing_binary:
+            raise ToolExecutionError(
+                f"provision {command.tool_id} is only for a missing binary: run the "
+                "tool once and read the refusal — a scope miss, a bad parameter or a "
+                "timeout does not need an install"
+            )
+        if self._tool_present(adapter):
+            raise ToolExecutionError(
+                f"{command.tool_id} is already installed on this machine; "
+                "retry the tool run instead of installing"
+            )
         key = (run.id, command.tool_id)
         if key in self._provisioned:
             raise ToolExecutionError(
@@ -1338,6 +1399,12 @@ class AgentOrchestrator:
                 value=(version or "ready")[:200],
             ),
         )
+
+    @staticmethod
+    def _tool_present(adapter: Any) -> bool:
+        """A native adapter answers for its own binary; others cannot tell."""
+        probe = getattr(adapter, "resolved_available", None)
+        return bool(probe()) if callable(probe) else False
 
     def _command_propose_finding(
         self, operation_id: str, run: AgentRun, command: ProposeFindingCommand
