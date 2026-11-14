@@ -872,7 +872,9 @@ def answer_prompts(process, password):
     raise RuntimeError("RDP authentication timed out")
 
 
-user, command, endpoint = sys.argv[1:4]
+user, command = sys.argv[1:3]
+files = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+endpoint = sys.argv[-1]
 host, port = endpoint.rsplit(":", 1)
 password = os.environ.get("SAMURAI_RDP_PASS", "")
 run_id = uuid.uuid4().hex[:12]
@@ -880,7 +882,6 @@ local = tempfile.mkdtemp(prefix="samurai-rdp-exec-")
 display_process = None
 session = None
 try:
-    files = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
     for name, content in files.items():
         if name != os.path.basename(name) or not name or len(content.encode()) > 65536:
             raise ValueError("RDP file names must be bare and each file at most 64 KiB")
