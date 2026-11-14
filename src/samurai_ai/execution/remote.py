@@ -874,6 +874,11 @@ def answer_prompts(process, password):
 
 def gui_actions(driver, script, local):
     for item in script.split("|"):
+        if item == "active":
+            print(subprocess.check_output(
+                [driver, "getactivewindow", "getwindowname"], text=True
+            ))
+            continue
         kind, value = item.split("=", 1)
         if kind == "key":
             subprocess.run([driver, "key", value], check=False)
