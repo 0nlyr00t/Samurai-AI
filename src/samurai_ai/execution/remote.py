@@ -799,7 +799,7 @@ def rdp_exec_command(command: str, run_id: str) -> str:
 
 
 _RDP_EXEC_DRIVER = r'''
-import json, os, select, shlex, shutil, subprocess, sys, tempfile, time, uuid
+import base64, json, os, select, shlex, shutil, subprocess, sys, tempfile, time, uuid
 
 
 def display():
@@ -877,8 +877,9 @@ def gui_actions(driver, script):
         kind, value = item.split("=", 1)
         if kind == "key":
             subprocess.run([driver, "key", value], check=False)
-        elif kind == "text":
-            subprocess.run([driver, "type", "--delay", "12", value], check=False)
+        elif kind in ("text", "b64"):
+            text = base64.b64decode(value).decode() if kind == "b64" else value
+            subprocess.run([driver, "type", "--delay", "12", text], check=False)
         elif kind == "wait":
             time.sleep(float(value))
         elif kind == "activate":
