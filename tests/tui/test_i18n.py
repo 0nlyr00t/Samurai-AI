@@ -266,7 +266,8 @@ def test_lang_command_switches_language_without_losing_operation(tmp_path: Path)
                 command_input.value = "/lang de"
                 await pilot.press("enter")
                 await pilot.pause()
-                assert any("Неподдерживаемый язык" in message for message in messages)
+                assert "Неподдерживаемый язык" in journal.text()
+                assert journal.notices[-1].has_class("notice--error")
                 assert stack[2].get_locale() == "ru"
             await pilot.press("ctrl+c")
 

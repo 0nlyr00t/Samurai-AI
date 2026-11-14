@@ -220,6 +220,25 @@ class HistoryInput(Input):
         if show_help is not None:
             show_help()
 
+    def action_close_suggestions(self) -> None:
+        """Esc closes the popup; on an empty field with no popup it unqueues.
+
+        The queue is otherwise only visible, never editable — a typo queued for
+        the running turn would have to be lived with until the boundary.
+        """
+        close = getattr(self.app, "close_suggestions", None)
+        if close is not None:
+            close()
+        if self.value:
+            return
+        popup_of = getattr(self.app, "_suggestions_popup", None)
+        popup = popup_of() if popup_of is not None else None
+        if popup is not None and popup.display:
+            return
+        drop = getattr(self.app, "drop_queued_turn_text", None)
+        if drop is not None:
+            drop()
+
     def action_history_previous(self) -> None:
         if self._suggestions_step(-1):
             return
@@ -238,11 +257,6 @@ class HistoryInput(Input):
         accept = getattr(self.app, "accept_suggestion", None)
         if accept is not None:
             accept()
-
-    def action_close_suggestions(self) -> None:
-        close = getattr(self.app, "close_suggestions", None)
-        if close is not None:
-            close()
 
     def _suggestions_step(self, direction: int) -> bool:
         step = getattr(self.app, "suggestions_step", None)

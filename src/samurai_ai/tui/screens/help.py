@@ -29,6 +29,12 @@ _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 class HelpScreen(ModalScreen[None]):
     """What the keys do, grouped by the context they work in."""
 
+    HINT_KEYS = (
+        ("pagedown", "hint.page-down"),
+        ("pageup", "hint.page-up"),
+        ("escape", "hint.close"),
+    )
+
     CSS = """
     HelpScreen {
         align: center middle;

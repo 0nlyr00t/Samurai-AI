@@ -89,6 +89,7 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
         empty_text: str,
         on_trace: Callable[[str], str] | None = None,
         trace_tooltip: str = "",
+        initial_item: str | None = None,
     ) -> None:
         super().__init__()
         self.translator = translator
@@ -101,6 +102,7 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
         self.empty_text = empty_text
         self.on_trace = on_trace
         self.trace_tooltip = trace_tooltip
+        self.initial_item = initial_item
         self.show_all = False
         self._items: list[str] = []
 
@@ -139,6 +141,15 @@ class BoardScreen(ModalScreen[tuple[str, str] | None]):
             (index for index, option in enumerate(listed.options) if option.id in self._items),
             0,
         )
+        if self.initial_item is not None:
+            first_item = next(
+                (
+                    index
+                    for index, option in enumerate(listed.options)
+                    if option.id == self.initial_item
+                ),
+                first_item,
+            )
         listed.highlighted = first_item
         listed.focus()
 

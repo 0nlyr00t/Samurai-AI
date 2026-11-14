@@ -102,9 +102,10 @@ from samurai_ai.storage.teamwork import TeamworkRepository
 from samurai_ai.storage.traffic import TrafficRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
-from samurai_ai.tui.chat import ChatController
+from samurai_ai.tui.chat import ChatController, SteerItem
 from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
+from samurai_ai.tui.hints import GENERIC_MODAL_HINTS, context_for, render_hints
 from samurai_ai.tui.hunt import REFRESH_SECONDS as HUNT_REFRESH_SECONDS
 from samurai_ai.tui.hunt import HuntController
 from samurai_ai.tui.journal import (  # noqa: F401
@@ -115,7 +116,7 @@ from samurai_ai.tui.journal import (  # noqa: F401
     entity_span,
 )
 from samurai_ai.tui.keymap import KeyMapController
-from samurai_ai.tui.killchain import AccessRow, LootEntry
+from samurai_ai.tui.killchain import AccessRow, LootEntry, task_phase
 from samurai_ai.tui.palette import CommandProvider
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import (
@@ -140,6 +141,7 @@ from samurai_ai.tui.screens.attach import AttachScreen
 from samurai_ai.tui.screens.scope_menu import ScopeMenuScreen
 from samurai_ai.tui.screens.sessions import SessionDetailScreen, SessionsScreen
 from samurai_ai.tui.sessions import SessionController
+from samurai_ai.tui.status import StatusSegment, render_status
 from samurai_ai.tui.theme import (
     BUILTIN,
     DEFAULT_THEME,
@@ -318,6 +320,13 @@ class SamuraiApp(
         padding: 0 1;
         background: $panel-alt;
         color: $text-dim;
+    }
+    #queue-bar {
+        height: auto;
+        max-height: 6;
+        padding: 0 1;
+        background: $panel-alt;
+        display: none;
     }
     #status-bar {
         height: 1;
@@ -561,7 +570,7 @@ class SamuraiApp(
         # the operator can enter it.
         self._plan_mode = False
         # Messages injected into the running turn instead of waiting for it.
-        self._steer_queue: list[str] = []
+        self._steer_queue: list[SteerItem] = []
         self._chat_busy = False
         self._stop_requested = False
         self._stop_note_sent = False
@@ -654,6 +663,11 @@ class SamuraiApp(
         return Text(text, style=style)
 
     def _write_line(self, text: str) -> None:
+        # Keep one funnel for legacy and new call sites: an error can never
+        # accidentally bypass the notice counter and `/last` navigation.
+        if text.startswith("[error]"):
+            self._write_error(text)
+            return
         journal = self.query_one("#journal", BlockJournal)
         journal.write(self._styled(text))
 
@@ -771,6 +785,7 @@ class SamuraiApp(
             yield Static(id="strip-goal", classes="strip-item")
         yield Static(id="thinking")
         yield OptionList(id="command-suggestions")
+        yield Static(id="queue-bar")
         yield HistoryInput(placeholder=self.translator.t("input.placeholder"), id="command-input")
         yield Static(id="hint-bar")
         yield Static(id="status-bar")
@@ -1092,8 +1107,11 @@ class SamuraiApp(
             if callback is not None:
                 callback(result)
             self._after_modal_closed()
+            self.call_after_refresh(self._refresh_hint_bar)
 
-        return super().push_screen(screen, closed, wait_for_dismiss)
+        pushed = super().push_screen(screen, closed, wait_for_dismiss)
+        self.call_after_refresh(self._refresh_hint_bar)
+        return pushed
 
     def _after_modal_closed(self) -> None:
         """Restore focus once the dismissed screen is really off the stack."""
@@ -1278,7 +1296,7 @@ class SamuraiApp(
             side.display = False
         elif not narrow:
             side.display = self.settings.get_value("tui.side") != "0"
-        rail.display = bool(self._killchain_phase) and not narrow
+        rail.display = bool(self._killchain_phase) and width >= 60
 
     def action_toggle_journal(self) -> None:
         views = self.query_one("#views", ContentSwitcher)
@@ -2337,7 +2355,8 @@ class SamuraiApp(
         """Fold injected messages into the turn before the next model request."""
         while self._steer_queue:
             steered = self._steer_queue.pop(0)
-            self._chat_history.append(Message(role="user", content=steered))
+            self._chat_history.append(Message(role="user", content=steered.text))
+        self._refresh_queue_bar()
 
     def _count_goal_step(self) -> None:
         """One model request against the active goal; a spent budget is raised."""
@@ -2634,6 +2653,10 @@ class SamuraiApp(
         if spec is None:
             if name.startswith("/"):
                 self._write_line("[error] " + self.translator.t("error.unknown-command", name=name))
+            elif self._chat_busy:
+                # a turn is in flight: queue instead of forking a second worker
+                # on the same journal, context and operation
+                self.enqueue_turn_text(command)
             else:
                 self._start_chat(command)
             return
@@ -2709,6 +2732,9 @@ class SamuraiApp(
 
     def action_inspect(self, kind: str, ref: str) -> None:
         """A clicked entity link: an inline summary first, Enter goes deeper."""
+        if kind == "phase":
+            self._open_phase_board(ref)
+            return
         summary = self._inspect_summary(kind, ref)
         if summary is None:
             self._write_dim(self.translator.t("inspect.unknown", kind=kind, ref=ref))
@@ -2822,6 +2848,41 @@ class SamuraiApp(
         except Exception:  # noqa: BLE001 - a stale id is a note, not a crash
             return None
         return None
+
+    def _open_phase_board(self, phase: str) -> None:
+        """Open the work behind a phase; clicking never advances the operation."""
+        if self.operation is None:
+            return
+        chain = self._killchain()
+        plan = self.kernel.get_current_plan(self.operation.id)
+        initial: str | None = None
+        if plan is not None:
+            matches = [
+                task for task in plan.tasks if task_phase(task, chain.phases) == phase
+            ]
+            for status in (
+                TaskStatus.BLOCKED,
+                TaskStatus.IN_PROGRESS,
+                TaskStatus.PENDING,
+                TaskStatus.DONE,
+                TaskStatus.SKIPPED,
+            ):
+                selected = next((task for task in matches if task.status is status), None)
+                if selected is not None:
+                    initial = selected.id
+                    break
+            if initial is None:
+                gate = next(
+                    (
+                        gate
+                        for gate in plan.gates
+                        if phase in (gate.id, gate.name) and gate.status is not GateStatus.PASSED
+                    ),
+                    None,
+                )
+                if gate is not None:
+                    initial = f"gate:{gate.id}"
+        self._show_task_board(initial)
 
     def _find_task(self, ref: str) -> Any:
         """A task by id or exact title in the operation's current plan."""
@@ -4517,7 +4578,7 @@ class SamuraiApp(
 
         widget = self.query_one("#killchain", Static)
         chain = self._killchain()
-        if not chain or self.size.width < self._NARROW_WIDTH:
+        if not chain or self.size.width < 60:
             widget.display = False
             return
         widget.display = True
@@ -4537,6 +4598,8 @@ class SamuraiApp(
         compact = self.size.width < self._COMPACT_WIDTH
         line = Text()
         for view in views:
+            if compact and view.phase != chain.current:
+                continue
             style = {
                 PhaseState.COMPLETE: "success",
                 PhaseState.ACTIVE: "bold risk-mid",
@@ -4544,7 +4607,13 @@ class SamuraiApp(
                 PhaseState.READY: "bold success",
                 PhaseState.NOT_STARTED: "dim text-faint",
             }[view.state]
-            line.append(f"{view.marker} {self._phase_label(view.phase)} ", style=self.paint(style))
+            label = f"{view.marker} {self._phase_label(view.phase)} "
+            if view.state in (PhaseState.ACTIVE, PhaseState.BLOCKED, PhaseState.READY):
+                line.append_text(
+                    entity_span(label, "phase", view.phase, base_style=self.paint(style))
+                )
+            else:
+                line.append(label, style=self.paint(style))
             if view.state in (PhaseState.ACTIVE, PhaseState.READY) and not compact:
                 hint = self.translator.t(f"killchain.exit.{view.phase}")
                 if hint != f"killchain.exit.{view.phase}":
@@ -4569,11 +4638,16 @@ class SamuraiApp(
             )
         if chain.counter_label:
             total = f"/{chain.counter_total}" if chain.counter_total else ""
-            line.append(
-                f"│ {self.translator.t('killchain.counter.' + chain.counter_label)} "
+            counter = Text(
+                f"{self.translator.t('killchain.counter.' + chain.counter_label)} "
                 f"{chain.counter_done}{total}",
                 style=self.paint("accent"),
             )
+            if compact:
+                available = max(8, self.size.width - counter.cell_len - 5)
+                line.truncate(available, overflow="ellipsis")
+            line.append("│ ")
+            line.append_text(counter)
         widget.update(line)
         if chain.current and chain.current != self._killchain_phase:
             previous, self._killchain_phase = self._killchain_phase, chain.current
@@ -4685,15 +4759,20 @@ class SamuraiApp(
         self._refresh_chrome()
 
     def _refresh_hint_bar(self) -> None:
-        """The keys that matter right now, from the live keymap."""
+        """The keys that matter in this screen and run state, from the live map."""
         bar = self.query_one("#hint-bar", Static)
-        parts = []
-        for action in ("retry_turn", "toggle_follow", "op_next", "op_close"):
-            key = self.keymap.get(action) or ""
-            if key:
-                label_key = "keys.action." + action.replace("_", "-")
-                parts.append(f"{key} {self.translator.t(label_key)}")
-        bar.update(" · ".join(parts))
+        context = context_for(self.screen, chat_busy=self._chat_busy)
+        modal_hints = getattr(self.screen, "HINT_KEYS", None)
+        bar.update(
+            render_hints(
+                context,
+                self.keymap,
+                self.translator.t,
+                width=max(0, self.size.width - 2),
+                modal_hints=modal_hints or GENERIC_MODAL_HINTS,
+                shell_running=bool(self._shell_running),
+            )
+        )
 
     def _cost_text(self) -> str:
         """Spend per model; a route with no tariff on file shows `n/a`."""
@@ -4709,6 +4788,7 @@ class SamuraiApp(
 
     def _refresh_chrome(self) -> None:
         self._refresh_hint_bar()
+        self._refresh_queue_bar()
         self._refresh_attack_map()
         self._refresh_operations_strip()
         self._refresh_killchain()
@@ -4730,10 +4810,14 @@ class SamuraiApp(
         directory = self._short_cwd()
         if not self._directory_trusted():
             directory += self.translator.t("trust.untrusted-marker")
-        bar = Text(f"{directory} | ")
+        compact = self.size.width < self._NARROW_WIDTH
+        segments = [
+            StatusSegment(Text(directory, style=self.paint("dim $text-dim")), 100, 8)
+        ]
         # Green dot: ask before running OS commands; red dot: never ask.
         mode = self._permission_mode
-        bar.append(
+        mode_text = Text()
+        mode_text.append(
             "●",
             style=self.paint(
                 {
@@ -4743,51 +4827,89 @@ class SamuraiApp(
                 }[mode]
             ),
         )
-        bar.append(f" {mode.value}")
+        mode_text.append(f" {mode.value}")
         if self._plan_mode:
-            bar.append(" | plan", style=self.paint("$accent"))
+            mode_text.append(" · plan", style=self.paint("$accent"))
         if self._autonomy_enabled():
-            bar.append(" | auto", style=self.paint("bold risk-mid"))
+            mode_text.append(" · auto", style=self.paint("bold risk-mid"))
+        segments.append(StatusSegment(mode_text, 20))
         if model:
             reasoning = self.models.default_reasoning_effort() or "off"
-            bar.append(f" | model={model} reasoning={reasoning}")
-        bar.append(" | ")
+            model_text = model.split("/")[-1] if compact else f"model={model}"
+            if reasoning != "off":
+                model_text += f" ~{reasoning}" if compact else f" reasoning={reasoning}"
+            segments.append(
+                StatusSegment(Text(model_text, style=self.paint("dim $text-dim")), 70, 8)
+            )
         limit = self._context_limit()
         if limit:
             ratio = self._ctx_tokens / limit
             token = "success" if ratio < 0.6 else ("risk-mid" if ratio < 0.85 else "danger")
-            filled = min(10, round(ratio * 10))
-            bar.append(
-                "▓" * filled + "░" * (10 - filled)
-                + f" {self._ctx_tokens // 1000}k/{limit // 1000}k",
-                style=self.paint(token),
-            )
+            if compact:
+                context_text = f"ctx {ratio:.0%}"
+            else:
+                filled = min(10, round(ratio * 10))
+                context_text = (
+                    "▓" * filled + "░" * (10 - filled)
+                    + f" {self._ctx_tokens // 1000}k/{limit // 1000}k"
+                )
+            segments.append(StatusSegment(Text(context_text, style=self.paint(token)), 10))
         else:
-            bar.append(f"ctx {self._ctx_tokens} tok")
+            context_text = f"ctx {self._ctx_tokens}" if compact else f"ctx {self._ctx_tokens} tok"
+            segments.append(StatusSegment(Text(context_text), 10))
         if self._cache_share:
-            bar.append(f" ⚡{self._cache_share:.0%}", style=self.paint("success"))
-        bar.append(
-            f" | ⇈{self._sent_tokens // 1000}k ⇊{self._recv_tokens // 1000}k"
-            f" · Σ {self._run_tokens} tok",
-            style=self.paint("dim $text-dim"),
+            segments.append(
+                StatusSegment(
+                    Text(f"⚡{self._cache_share:.0%}", style=self.paint("success")), 85
+                )
+            )
+        token_text = (
+            f"⇈{self._sent_tokens // 1000}k ⇊{self._recv_tokens // 1000}k Σ{self._run_tokens}"
+            if compact
+            else f"⇈{self._sent_tokens // 1000}k ⇊{self._recv_tokens // 1000}k"
+            f" · Σ {self._run_tokens} tok"
+        )
+        segments.append(
+            StatusSegment(Text(token_text, style=self.paint("dim $text-dim")), 80)
         )
         if self._run_costs or self._run_cost_unknown:
-            bar.append(" | " + self._cost_text(), style=self.paint("dim $text-dim"))
+            segments.append(
+                StatusSegment(Text(self._cost_text(), style=self.paint("dim $text-dim")), 90)
+            )
         if self._turn_started is not None:
             elapsed = int(time.monotonic() - self._turn_started)
-            bar.append(f" | ⏱ {elapsed // 60}:{elapsed % 60:02d}", style=self.paint("$accent"))
+            segments.append(
+                StatusSegment(
+                    Text(f"⏱ {elapsed // 60}:{elapsed % 60:02d}", style=self.paint("$accent")),
+                    0,
+                )
+            )
             if self._running_tools > 1:
                 # several commands of one round run together: count them
-                bar.append(f" | ▶ {self._running_tools}∥", style=self.paint("dim $text-dim"))
+                segments.append(
+                    StatusSegment(
+                        Text(f"▶ {self._running_tools}∥", style=self.paint("dim $text-dim")), 0
+                    )
+                )
             elif self._current_tool:
-                bar.append(
-                    f" | ▶ {self._current_tool[:32]}", style=self.paint("dim $text-dim")
+                tool_length = 16 if compact else 32
+                segments.append(
+                    StatusSegment(
+                        Text(
+                            f"▶ {self._current_tool[:tool_length]}",
+                            style=self.paint("dim $text-dim"),
+                        ),
+                        0,
+                    )
                 )
         notices = len(self.query_one("#journal", BlockJournal).notices)
         if notices:
             # findings / secrets / errors set apart; /last jumps to the newest
-            bar.append(f" | ⚑ {notices}", style=self.paint("bold $accent-alt"))
-        bar.append(" | /help")
+            segments.append(
+                StatusSegment(Text(f"⚑ {notices}", style=self.paint("bold $accent-alt")), 0)
+            )
+        segments.append(StatusSegment(Text("/help"), 50 if self._turn_started else 15))
+        bar = render_status(segments, max(0, self.size.width - 2))
         self.query_one("#status-bar", Static).update(bar)
         self._refresh_ops_strip()
         self._refresh_hunt_tab()
@@ -4820,7 +4942,7 @@ class SamuraiApp(
             )
         )
         self._steer_queue.append(
-            self.translator.t("killchain.stalled-note", stage=self._stage_label)
+            SteerItem(self.translator.t("killchain.stalled-note", stage=self._stage_label))
         )
 
     def _refresh_hunt_tab(self) -> None:

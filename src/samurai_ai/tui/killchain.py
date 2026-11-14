@@ -127,6 +127,11 @@ def _index_of(phase: str, phases: Sequence[str]) -> int:
     return phases.index(phase) if phase in phases else 0
 
 
+def task_phase(task: PlanTask, phases: Sequence[str]) -> str | None:
+    """The phase a plan task belongs to, shared by the rail and its drill-down."""
+    return _phase_from_text(task.title, phases)
+
+
 def _phase_from_text(text: str, phases: Sequence[str]) -> str | None:
     lowered = text.lower()
     for markers, candidates in _MARKERS:

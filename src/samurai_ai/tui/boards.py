@@ -93,7 +93,7 @@ class BoardController:
     def _gate_row(self, gate: StageGate) -> Row:
         return ("item", f"gate:{gate.id}", f"{gate.id} [{gate.status.value}] {gate.name}")
 
-    def _show_task_board(self) -> None:
+    def _show_task_board(self, initial_item: str | None = None) -> None:
         if not self._require_operation():
             return
         from samurai_ai.services.trace_export import export_task_trace
@@ -134,6 +134,7 @@ class BoardController:
                 self.translator.t("board.no-plan"),
                 on_trace=trace,
                 trace_tooltip=self.translator.t("board.trace-tooltip"),
+                initial_item=initial_item,
             )
         )
 
