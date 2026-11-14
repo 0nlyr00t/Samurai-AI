@@ -76,6 +76,8 @@ class ToolExecutionService:
         #: set by the host: () -> (mode, writable_roots) for host shell confinement.
         #: "off" | "write" | "strict"; roots are the trusted filesystem boundary.
         self.sandbox_policy: Callable[[], tuple[str, tuple[str, ...]]] | None = None
+        #: true only for an explicitly unattended/production session
+        self.autonomy_policy: Callable[[], bool] | None = None
 
     def list_tools(self) -> list[ToolDefinition]:
         return self.registry.definitions()
@@ -142,6 +144,10 @@ class ToolExecutionService:
             )
         check_tool(definition, operation.offline)
         self._apply_sandbox(adapter)
+        if hasattr(adapter, "autonomy_required"):
+            adapter.autonomy_required = (
+                self.autonomy_policy is not None and self.autonomy_policy()
+            )
         validated = self.registry.validate_params(definition, params or {})
         if definition.id == "shell.exec" and validated.get("command"):
             # approval, scope review and execution must all see the same command:
@@ -268,14 +274,16 @@ class ToolExecutionService:
 
     def _apply_sandbox(self, adapter: Any) -> None:
         """Hand the host shell its confinement policy, when the host set one."""
-        if self.sandbox_policy is None or not hasattr(adapter, "sandbox_mode"):
+        if self.sandbox_policy is None:
             return
         try:
             mode, roots = self.sandbox_policy()
         except Exception:  # noqa: BLE001 - a policy hiccup must not block the tool
             return
-        adapter.sandbox_mode = mode
-        adapter.sandbox_roots = tuple(roots)
+        if hasattr(adapter, "sandbox_mode"):
+            adapter.sandbox_mode = mode
+        if hasattr(adapter, "sandbox_roots"):
+            adapter.sandbox_roots = tuple(roots)
 
     def rule_decision(
         self, definition: ToolDefinition, params: Mapping[str, Any]

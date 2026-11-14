@@ -27,10 +27,12 @@ pinned-by-digest образами; egress proxy с per-run token и DNS pinning;
 placeholders с redaction; tool output помечается untrusted-external с
 injection warnings.
 
-Известные принятые ослабления (на момент review): на Docker Desktop for Mac
-scoped sandbox не даёт hard egress enforcement (bridge NAT); полный
-enforcement — только на Linux-harness. Это **блокер для direct-network
-инструментов вне egress proxy на macOS** и учитывается в решениях ниже.
+Известные принятые ослабления: на Docker Desktop for Mac scoped sandbox не даёт
+hard egress enforcement (bridge NAT); полный enforcement — только на
+Linux-harness. Unattended production поэтому отклоняет shell/native/remote
+fallback без bwrap/Docker; development ASK на macOS сохраняет предупреждение.
+Direct-network инструменты вне egress proxy на macOS не считаются hardened
+production путём и учитываются в решениях ниже.
 
 ## 2. Модель угроз по классам инструментов
 

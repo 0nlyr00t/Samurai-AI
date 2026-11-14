@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from samurai_ai.domain.execution import ToolExecutionError
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.execution import native_sandbox
 from samurai_ai.execution.process import ProcessResult
@@ -54,3 +57,35 @@ def test_missing_bwrap_falls_back_to_native(monkeypatch) -> None:  # type: ignor
     tool.sandbox_roots = ("/home/op/work",)
     tool.invoke({"command": "id"}, ScopeContract(includes=("10.0.0.5",)))
     assert manager.argv[0] in ("bash", "sh")
+
+
+def test_autonomy_refuses_missing_bwrap(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(native_sandbox, "bwrap_available", lambda: False)
+    tool, _manager = _tool()
+    tool.autonomy_required = True
+    tool.sandbox_mode = "write"
+    tool.sandbox_roots = ("/home/op/work",)
+
+    with pytest.raises(ToolExecutionError, match="unconfined host execution is refused"):
+        tool.invoke({"command": "id"}, ScopeContract(includes=("10.0.0.5",)))
+
+
+def test_autonomy_refuses_sandbox_off() -> None:
+    tool, _manager = _tool()
+    tool.autonomy_required = True
+    tool.sandbox_mode = "off"
+    tool.sandbox_roots = ("/home/op/work",)
+
+    with pytest.raises(ToolExecutionError, match="write|strict"):
+        tool.invoke({"command": "id"}, ScopeContract(includes=("10.0.0.5",)))
+
+
+def test_autonomy_uses_bwrap_when_available(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(native_sandbox, "bwrap_available", lambda: True)
+    tool, manager = _tool()
+    tool.autonomy_required = True
+    tool.sandbox_mode = "strict"
+    tool.sandbox_roots = ("/home/op/work",)
+
+    tool.invoke({"command": "id"}, ScopeContract(includes=("10.0.0.5",)))
+    assert manager.argv[0] == "bwrap"

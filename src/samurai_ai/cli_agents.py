@@ -182,6 +182,8 @@ def handle_agent_command(
         print(f"answered {len(rows)} question(s) of {args.call_id}")
         return 0
     if args.agent_command == "run":
+        if args.auto_approve:
+            orchestrator.execution.autonomy_policy = lambda: True
         model_id = args.model_id or models.default_model()
         if model_id is None:
             print(

@@ -98,6 +98,8 @@ def handle_swarm_command(
                 print(f"{task.id}\t{task.title}\tdeps={deps}")
         return 0
     if args.swarm_command == "run":
+        if args.auto_approve:
+            swarms.orchestrator.execution.autonomy_policy = lambda: True
         specializations = _parse_specs(args.specs)
         model_id = args.model_id or models.default_model()
         if model_id is None:
