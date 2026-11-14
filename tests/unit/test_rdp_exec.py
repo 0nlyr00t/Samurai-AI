@@ -9,6 +9,7 @@ def test_rdp_exec_uses_native_driver_and_secret_env() -> None:
     assert tool.definition.id == "remote.rdp-exec"
     assert "password" not in plain.values()
     assert secret["SAMURAI_RDP_PASS"] == "secret-value"
+    assert "files" in tool.definition.parameters["properties"]
 
 
 def test_rdp_exec_command_redirects_output_and_exit_code() -> None:
