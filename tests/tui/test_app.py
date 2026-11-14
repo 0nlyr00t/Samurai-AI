@@ -6581,8 +6581,11 @@ def test_a_promising_answer_is_nudged_back_to_work(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_a_settled_selection_copies_itself(tmp_path: Path) -> None:
-    """Drag-select and release: the text is on the clipboard with no keypress."""
+def test_a_settled_selection_does_not_copy_itself(tmp_path: Path) -> None:
+    """Drag-select and release: the clipboard stays untouched.
+
+    Auto-copy on selection is disabled; Ctrl+Shift+C copies explicitly.
+    """
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
 
@@ -6596,8 +6599,7 @@ def test_a_settled_selection_copies_itself(tmp_path: Path) -> None:
 
             app.screen.selections = {journal: SELECT_ALL}
             await pilot.pause(0.6)  # settle past the debounce
-            assert getattr(app, "_clipboard", "") or True  # headless clipboard may noop
-            assert app._last_auto_copy is not None and "copy-me" in app._last_auto_copy
+            assert app._last_auto_copy is None
 
     asyncio.run(exercise())
 
@@ -10854,5 +10856,173 @@ def test_tool_headers_show_outcome_duration_and_group_failures(tmp_path: Path) -
             assert "2.3s" in header
             assert "192.0.2.42" in header
             assert "2 commands · 1 ok · 1 failed" in journal.tool_blocks[1]._title.plain
+
+    asyncio.run(exercise())
+
+
+def test_open_hypotheses_are_checked_before_the_main_conclusion(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+    from samurai_ai.domain.graph import NodeKind, NodeState
+
+    class _HypothesisProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            usage = Usage(prompt_tokens=3, completion_tokens=2)
+            if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+                return ChatResponse(
+                    text="stop", usage=usage, model_id=request.model_id, provider_id="gpt"
+                )
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="open",
+                            name="open_intent",
+                            arguments={
+                                "title": "SSH allows password login",
+                                "next_test": "probe auth",
+                            },
+                        )
+                    ],
+                    usage=usage,
+                    model_id="gpt/test-model@v1",
+                    provider_id="gpt",
+                )
+            if self.calls == 2:
+                return ChatResponse(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="close",
+                            name="close_intent",
+                            arguments={
+                                "intent": "SSH allows password login",
+                                "outcome": "exhausted",
+                                "reason": "The service disallows password authentication",
+                            },
+                        )
+                    ],
+                    usage=usage,
+                    model_id="gpt/test-model@v1",
+                    provider_id="gpt",
+                )
+            return ChatResponse(
+                text="Main conclusion: password authentication is not a viable path.",
+                usage=usage,
+                model_id="gpt/test-model@v1",
+                provider_id="gpt",
+            )
+
+    provider = _HypothesisProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "check SSH and conclude"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert provider.calls == 3, app.query_one("#journal", BlockJournal).text()
+            nodes = app.graph.for_operation(operation.id)
+            intent = next(node for node in nodes if node.kind is NodeKind.INTENT)
+            assert intent.state is NodeState.EXHAUSTED
+            assert "Main conclusion" in app.query_one("#journal", BlockJournal).text()
+            reasons = [
+                event.payload["reason"]
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["completed"]
+
+    asyncio.run(exercise())
+
+
+def test_unclosed_hypotheses_end_blocked_with_a_conclusion(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+    from samurai_ai.domain.graph import NodeKind, NodeState
+
+    class _StallingProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            usage = Usage(prompt_tokens=3, completion_tokens=2)
+            if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+                return ChatResponse(
+                    text="stop", usage=usage, model_id=request.model_id, provider_id="gpt"
+                )
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="open",
+                            name="open_intent",
+                            arguments={"title": "Web has an admin bypass"},
+                        )
+                    ],
+                    usage=usage,
+                    model_id="gpt/test-model@v1",
+                    provider_id="gpt",
+                )
+            return ChatResponse(
+                text="Main conclusion with the direction still open.",
+                usage=usage,
+                model_id="gpt/test-model@v1",
+                provider_id="gpt",
+            )
+
+    provider = _StallingProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "check the admin path"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            intent = next(
+                node
+                for node in app.graph.for_operation(operation.id)
+                if node.kind is NodeKind.INTENT
+            )
+            assert intent.state is NodeState.OPEN
+            reasons = [
+                event.payload["reason"]
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["blocked"]
+            assert "Main conclusion" in app.query_one("#journal", BlockJournal).text()
+            # two real continuation prompts, not an immediate sign-off
+            notes = [
+                str(message.content)
+                for message in app._chat_history
+                if message.role == "user" and "Do not conclude yet" in str(message.content)
+            ]
+            assert len(notes) == 2
 
     asyncio.run(exercise())

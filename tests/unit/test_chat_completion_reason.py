@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from samurai_ai.domain.hypotheses import HypothesisCoverage
 from samurai_ai.i18n import Translator
 from samurai_ai.tui.chat import ChatController
 from samurai_ai.tui.progress import TerminalReason
@@ -59,4 +60,27 @@ def test_a_successful_run_in_this_turn_allows_completed() -> None:
 def test_a_turn_without_runs_stays_completed() -> None:
     stand = _controller(now={"failed": 1, "completed": 0, "timeout": 0}, findings=1)
     reason = stand._completion_reason("op_1", {"failed": 1, "completed": 0, "timeout": 0}, 1)
+    assert reason is TerminalReason.COMPLETED
+
+
+def test_open_hypotheses_override_a_goal_judge() -> None:
+    stand = _controller(now={"failed": 0, "completed": 1, "timeout": 0}, findings=1)
+    stand._hypothesis_coverage = lambda _op: HypothesisCoverage(  # type: ignore[method-assign]
+        1, 0, ("hyp-open",), ()
+    )
+
+    reason = stand._completion_reason("op_1", {"failed": 0, "completed": 0, "timeout": 0}, 1)
+
+    assert reason is TerminalReason.BLOCKED
+    assert "chat.open-hypotheses" in stand.written
+
+
+def test_closed_hypotheses_allow_a_successful_conclusion() -> None:
+    stand = _controller(now={"failed": 0, "completed": 1, "timeout": 0}, findings=1)
+    stand._hypothesis_coverage = lambda _op: HypothesisCoverage(  # type: ignore[method-assign]
+        1, 1, (), ()
+    )
+
+    reason = stand._completion_reason("op_1", {"failed": 0, "completed": 0, "timeout": 0}, 1)
+
     assert reason is TerminalReason.COMPLETED
