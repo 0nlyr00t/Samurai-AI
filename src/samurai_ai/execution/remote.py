@@ -917,6 +917,12 @@ try:
     )
     subprocess.run([driver, "type", "--delay", "12", line], check=True)
     subprocess.run([driver, "key", "Return"], check=True)
+    if "sudo " in command:
+        # sudo's interactive prompt is answered in the terminal, not through
+        # run parameters or an argv password.
+        time.sleep(2)
+        subprocess.run([driver, "type", "--delay", "12", password], check=False)
+        subprocess.run([driver, "key", "Return"], check=False)
     marker = os.path.join(local, run_id + ".code")
     output = os.path.join(local, run_id + ".out")
     deadline = time.time() + 280
