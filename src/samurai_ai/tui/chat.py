@@ -1710,6 +1710,7 @@ class ChatController:
                             operation_id, runs_at_start, findings_at_start
                         )
                         if reason is TerminalReason.COMPLETED:
+                            self._mark_goal_reached(operation_id)
                             self._write_dim(self.translator.t("chat.goal-met"))
                         return reason
                 stretches_used += 1
@@ -1802,9 +1803,9 @@ class ChatController:
                     hypothesis_nudges += 1
                     continue
                 if (
-                    tool_calls_made
-                    and completion_judges < _MAX_COMPLETION_JUDGES
+                    completion_judges < _MAX_COMPLETION_JUDGES
                     and self._operation_goal(operation_id)
+                    and self._goal_requires_judgment(operation_id, tool_calls_made)
                 ):
                     # work happened and the model says it is done: only the goal
                     # judge may agree, otherwise the turn ends on a promise
@@ -1815,11 +1816,13 @@ class ChatController:
                             operation_id, runs_at_start, findings_at_start
                         )
                         if reason is TerminalReason.COMPLETED:
+                            self._mark_goal_reached(operation_id)
                             self._write_dim(self.translator.t("chat.goal-met"))
                         return reason
                     if verdict is None:
-                        # a broken judge never stalls a run: fall back to accepting,
-                        # but a turn whose runs all collapsed is still not a success
+                        # an unavailable judge must not invent goal completion
+                        if not self.goals.reached(operation_id):
+                            return TerminalReason.BLOCKED
                         return self._completion_reason(
                             operation_id, runs_at_start, findings_at_start
                         )
@@ -1832,6 +1835,12 @@ class ChatController:
                         )
                     )
                     continue
+                if (
+                    self._operation_goal(operation_id)
+                    and self._goal_requires_judgment(operation_id, tool_calls_made)
+                    and not self.goals.reached(operation_id)
+                ):
+                    return TerminalReason.BLOCKED
                 return self._completion_reason(
                     operation_id, runs_at_start, findings_at_start
                 )
@@ -1877,6 +1886,12 @@ class ChatController:
             return TerminalReason.CANCELLED
         if not self._hypothesis_coverage(operation_id).complete:
             return self._completion_reason(operation_id, runs_at_start, findings_at_start)
+        if (
+            self._operation_goal(operation_id)
+            and self._goal_requires_judgment(operation_id, tool_calls_made)
+            and not self.goals.reached(operation_id)
+        ):
+            return TerminalReason.BLOCKED
         return TerminalReason.ROUNDS
 
 
@@ -1901,6 +1916,25 @@ class ChatController:
             # the strip reads the goal service, not the operation field: without
             # a mirrored goal the adopted condition stays invisible
             self.goals.create(self.operation.id, derived)
+
+    def _goal_requires_judgment(self, operation_id: str, tool_calls_made: int) -> bool:
+        """Explicit operation goals need proof; an incidental chat does not."""
+        if tool_calls_made:
+            return True
+        operation = self.service.get(operation_id)
+        if operation.objective.strip():
+            return True
+        for event in reversed(self.service.repository.events(operation_id)):
+            if event.event_type == "operation.goal.changed":
+                return not bool(event.payload.get("automatic", False))
+        return False
+
+    def _mark_goal_reached(self, operation_id: str) -> None:
+        """Persist the judge's STOP; readiness must survive leaving active view."""
+        goal = self.goals.current(operation_id)
+        if goal is None:
+            goal = self.goals.create(operation_id, self._operation_goal(operation_id))
+        self.goals.complete(goal.id)
 
     def _operation_goal(self, operation_id: str) -> str:
         """The goal from the store — the in-memory copy can be stale."""

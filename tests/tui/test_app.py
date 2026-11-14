@@ -10946,6 +10946,7 @@ def test_open_hypotheses_are_checked_before_the_main_conclusion(tmp_path: Path) 
                 if event.event_type == "chat.turn.end"
             ]
             assert reasons == ["completed"]
+            assert app.goals.reached(operation.id)
 
     asyncio.run(exercise())
 
@@ -11024,5 +11025,49 @@ def test_unclosed_hypotheses_end_blocked_with_a_conclusion(tmp_path: Path) -> No
                 if message.role == "user" and "Do not conclude yet" in str(message.content)
             ]
             assert len(notes) == 2
+
+    asyncio.run(exercise())
+
+
+def test_a_text_only_answer_is_judged_before_completion(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ChatResponse, Usage
+
+    class _TextOnlyProvider:
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+                return ChatResponse(
+                    text="stop", usage=Usage(), model_id=request.model_id, provider_id="gpt"
+                )
+            return ChatResponse(
+                text="A conclusion with no tools was still reviewed by the goal judge.",
+                usage=Usage(),
+                model_id="gpt/test-model@v1",
+                provider_id="gpt",
+            )
+
+    stack, operation = _chat_ready_stack(tmp_path, _TextOnlyProvider())
+    stack[0].set_goal(operation.id, "answer with a conclusion")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "answer with a conclusion"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.goals.reached(operation.id)
+            reasons = [
+                event.payload["reason"]
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["completed"]
 
     asyncio.run(exercise())
