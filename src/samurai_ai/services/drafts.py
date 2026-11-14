@@ -176,7 +176,8 @@ class DocReader:
             raise DraftError(f"{source} answered an empty body")
         return CapturedDoc(
             kind="url",
-            ref=source,
+            # Source metadata is persisted too: URL userinfo must not leak there.
+            ref=redact(source)[0],
             text=body.decode("utf-8", errors="replace"),
             truncated=truncated,
         )
@@ -443,6 +444,32 @@ def assess(document: str, candidate: dict[str, Any], *, templates: Path | None) 
     return problems
 
 
+def _reject_registry_output(output: Path) -> None:
+    """An untrusted draft must never land where a loader trusts every JSON."""
+    from samurai_ai.config import tools_directory
+    from samurai_ai.services.catalog import (
+        assets_directory,
+        recipes_directory,
+        user_recipes_directory,
+    )
+
+    resolved = output.expanduser().resolve()
+    registries = (
+        tools_directory(),
+        user_recipes_directory(),
+        recipes_directory(),
+        assets_directory() / "tools",
+        assets_directory() / "recipes",
+    )
+    for directory in registries:
+        root = directory.expanduser().resolve()
+        if resolved == root or root in resolved.parents:
+            raise DraftError(
+                f"draft output is inside a tool registry: {directory}; "
+                "choose a separate path and install it with --trusted after review"
+            )
+
+
 class DraftService:
     """Produce a draft file plus its sidecar. Installs and registers nothing."""
 
@@ -462,6 +489,7 @@ class DraftService:
     def draft(
         self, source: str, output: Path, *, offline: bool = False
     ) -> Draft:
+        _reject_registry_output(output)
         if self.extractor is None:
             raise DraftError("no candidate extractor configured")
         captured = self.reader.read(source, offline=offline)
