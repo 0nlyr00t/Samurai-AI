@@ -884,6 +884,9 @@ def gui_actions(driver, script, local):
             time.sleep(float(value))
         elif kind == "activate":
             subprocess.run([driver, "search", "--name", value, "windowactivate"], check=False)
+        elif kind == "click":
+            x, y = value.split(",", 1)
+            subprocess.run([driver, "mousemove", x, y, "click", "1"], check=False)
         elif kind == "shot":
             path = os.path.join(local, value + ".jpg")
             subprocess.run(
