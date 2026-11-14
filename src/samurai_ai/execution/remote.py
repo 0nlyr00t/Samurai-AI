@@ -821,7 +821,7 @@ def display():
     os.makedirs("/tmp/.X11-unix", exist_ok=True)
     process = subprocess.Popen(
         [binary, ":%d" % number, "-screen", "0", "1024x768x24"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
     )
     path = "/tmp/.X11-unix/X%d" % number
     deadline = time.time() + 5
@@ -829,7 +829,8 @@ def display():
         if os.path.exists(path):
             return ":%d" % number, process
         if process.poll() is not None:
-            raise RuntimeError("Xvfb failed to start")
+            detail = process.stderr.read().decode(errors="replace") if process.stderr else ""
+            raise RuntimeError("Xvfb failed to start: " + detail.strip())
         time.sleep(0.05)
     process.terminate()
     raise RuntimeError("Xvfb did not create its display socket")
