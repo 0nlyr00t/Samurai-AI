@@ -799,7 +799,7 @@ def rdp_exec_command(command: str, run_id: str) -> str:
 
 
 _RDP_EXEC_DRIVER = r'''
-import os, select, shlex, shutil, subprocess, sys, tempfile, time, uuid
+import json, os, select, shlex, shutil, subprocess, sys, tempfile, time, uuid
 
 
 def display():
@@ -880,6 +880,12 @@ local = tempfile.mkdtemp(prefix="samurai-rdp-exec-")
 display_process = None
 session = None
 try:
+    files = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
+    for name, content in files.items():
+        if name != os.path.basename(name) or not name or len(content.encode()) > 65536:
+            raise ValueError("RDP file names must be bare and each file at most 64 KiB")
+        with open(os.path.join(local, name), "w", encoding="utf-8") as handle:
+            handle.write(content)
     display_name, display_process = display()
     os.environ["DISPLAY"] = display_name
     binary = shutil.which("rdesktop")
@@ -987,6 +993,11 @@ class RdpExecTool(_RemoteTool):
                     "user": {"type": "string", "minLength": 1, "maxLength": 256},
                     "password": {"type": "string", "minLength": 0, "maxLength": 1024},
                     "command": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "files": {
+                        "type": "object",
+                        "description": "Small files copied into the redirected drive before exec",
+                        "additionalProperties": {"type": "string"},
+                    },
                 },
                 "required": ["host", "user", "password", "command"],
                 "additionalProperties": False,
@@ -1004,8 +1015,16 @@ class RdpExecTool(_RemoteTool):
         }
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        import json
+
         return self._run(
-            ["-c", _RDP_EXEC_DRIVER, str(params["user"]), str(params["command"])],
+            [
+                "-c",
+                _RDP_EXEC_DRIVER,
+                str(params["user"]),
+                str(params["command"]),
+                json.dumps(params.get("files", {}), ensure_ascii=False),
+            ],
             params,
             scope,
         )
