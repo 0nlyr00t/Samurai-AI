@@ -893,9 +893,22 @@ try:
     )
     answer_prompts(session, password)
     time.sleep(2)
-    ids = subprocess.check_output([driver, "search", "--class", "xterm"], text=True).split()
+    ids = []
+    for _attempt in range(20):
+        found = subprocess.run(
+            [driver, "search", "--class", "xterm"],
+            text=True, capture_output=True, check=False,
+        )
+        if found.returncode == 0 and found.stdout.strip():
+            ids = found.stdout.split()
+            break
+        time.sleep(0.5)
     if ids:
         subprocess.run([driver, "windowactivate", ids[-1]], check=False)
+    else:
+        # a fresh desktop may not have opened xterm yet: open it explicitly
+        subprocess.run([driver, "key", "ctrl+alt+t"], check=False)
+        time.sleep(2)
     line = "sh -c " + shlex.quote(
         command + " > ~/thinclient_drives/samurai/" + run_id + ".out 2>&1; "
         "printf '%s' \"$?\" > ~/thinclient_drives/samurai/" + run_id + ".code"
