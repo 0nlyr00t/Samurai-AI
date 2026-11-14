@@ -818,6 +818,7 @@ def display():
     binary = shutil.which("Xvfb")
     if not binary:
         raise RuntimeError("RDP exec needs an X display or Xvfb")
+    os.makedirs("/tmp/.X11-unix", exist_ok=True)
     process = subprocess.Popen(
         [binary, ":%d" % number, "-screen", "0", "1024x768x24"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
