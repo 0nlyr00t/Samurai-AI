@@ -885,8 +885,11 @@ def gui_actions(driver, script, local):
         elif kind == "activate":
             subprocess.run([driver, "search", "--class", value, "windowactivate"], check=False)
         elif kind == "shot":
-            path = os.path.join(local, value + ".png")
-            subprocess.run(["import", "-window", "root", path], check=False)
+            path = os.path.join(local, value + ".jpg")
+            subprocess.run(
+                ["import", "-window", "root", "-resize", "50%", "-quality", "60", path],
+                check=False,
+            )
             print(base64.b64encode(open(path, "rb").read()).decode())
 
 
