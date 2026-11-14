@@ -72,6 +72,38 @@ def service(answer: dict[str, object] | None = None, **kwargs: object) -> DraftS
     return DraftService(extractor=lambda _doc: body, **kwargs)  # type: ignore[arg-type]
 
 
+def test_a_draft_cannot_write_directly_into_a_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.config import tools_directory
+    from samurai_ai.services.catalog import user_recipes_directory
+
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "state"))
+    source = write_doc(tmp_path)
+    for directory in (tools_directory(), user_recipes_directory()):
+        output = directory / "scan.samuraidemo.json"
+        with pytest.raises(DraftError, match="registry"):
+            service().draft(str(source), output)
+        assert not output.exists()
+
+
+def test_a_symlinked_output_cannot_escape_into_a_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.services.catalog import user_recipes_directory
+
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "state"))
+    registry = user_recipes_directory()
+    registry.mkdir(parents=True)
+    target = registry / "scan.samuraidemo.json"
+    output = tmp_path / "draft.json"
+    output.symlink_to(target)
+
+    with pytest.raises(DraftError, match="registry"):
+        service().draft(str(write_doc(tmp_path)), output)
+    assert not target.exists()
+
+
 # --- redaction -----------------------------------------------------------
 
 
@@ -141,6 +173,16 @@ def test_a_non_http_scheme_is_refused() -> None:
 def test_a_url_without_a_host_is_refused() -> None:
     with pytest.raises(DraftError, match="no host"):
         DocReader().read("http://", offline=False)
+
+
+def test_source_metadata_does_not_keep_url_credentials() -> None:
+    reader = DocReader(fetcher=lambda _url, _timeout, _limit: (b"body", False))
+
+    captured = reader.read("https://user:pw@example.com/doc", offline=False)
+
+    assert "user:pw" not in captured.ref
+    assert "pw" not in captured.ref
+    assert captured.ref == "https://[REDACTED]@example.com/doc"
 
 
 def test_a_missing_file_is_refused(tmp_path: Path) -> None:
