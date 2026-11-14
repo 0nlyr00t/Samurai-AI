@@ -872,6 +872,19 @@ def answer_prompts(process, password):
     raise RuntimeError("RDP authentication timed out")
 
 
+def gui_actions(driver, script):
+    for item in script.split("|"):
+        kind, value = item.split("=", 1)
+        if kind == "key":
+            subprocess.run([driver, "key", value], check=False)
+        elif kind == "text":
+            subprocess.run([driver, "type", "--delay", "12", value], check=False)
+        elif kind == "wait":
+            time.sleep(float(value))
+        elif kind == "activate":
+            subprocess.run([driver, "search", "--class", value, "windowactivate"], check=False)
+
+
 user, command = sys.argv[1:3]
 files = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
 endpoint = sys.argv[-1]
@@ -899,6 +912,9 @@ try:
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     answer_prompts(session, password)
+    if command.startswith("GUI:"):
+        gui_actions(driver, command[4:])
+        raise SystemExit(0)
     time.sleep(2)
     ids = []
     for _attempt in range(20):
