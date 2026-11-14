@@ -505,6 +505,34 @@ excludes и запрет выполнения out-of-scope не меняются
 scope. Обоснование хранится только с id доказательств, без секретов и тел
 артефактов. Реализация и тесты описаны в `.thinkrail/context/TASK-scope-autonomy-rationale.md`.
 
+## 9r. Этап 20 — production readiness и следующая HTB (в работе)
+
+**Исключено из текущего этапа:** выбор/fallback моделей. Их разбор отложен в
+последнюю очередь и не блокирует транспорт, evidence и операционную надёжность.
+
+Порядок работ:
+
+1. **Приёмочная серия HTB + Linux lab.** Повторные сценарии с одной моделью:
+   `user.txt`/`root.txt`, hypothesis coverage, terminal correctness, wall/cost,
+   blocked reasons и evidence success. Следующая операция — `192.0.2.106`.
+2. **Scope UI.** Показывать причину auto-add, finding/evidence id, автора и время;
+   exclude не стирает аудит и запрещает повторное автодобавление до явного
+   `/scope add`. RU/EN, 80 колонок и regression tests.
+3. **Универсальный session API.** `open → exec → read/write → reconnect → close`
+   для PTY, interactive shell, Metasploit/C2. Обязательны per-run cancel,
+   recovery и запрет повторного выполнения неизвестного внешнего результата.
+4. **RDP hardening.** DevTools/HTTP вместо координатной GUI-автоматизации где
+   возможно; `remote.rdp-auth` приводить к реальному exec verdict; Docker belt
+   получает rdesktop/xdotool либо явно остаётся force_native.
+5. **Network boundaries.** Direct nmap документирован как scope-before-spawn
+   без egress audit; production остаётся Linux, macOS development.
+6. **Bootstrap.** Stateful recipes и healthchecks для интерактивных инструментов;
+   non-interactive `agent draft → review → install` уже работает и не ломается.
+7. **Операционное закрытие.** Завершить challenge playbook и writeup Lab,
+   `eval readiness`, redaction aporter в vault и проверка старых artifacts.
+8. **Regression и live CI.** RDP exec, GUI/file transfer, CUPS, scope expansion
+   и production isolation проверяются не только unit, но и на реальном Linux.
+
 ## 9p. Этап 18 (добор) — видимость Loot и дорожка важного (в работе)
 
 Мелкое, но бьёт по глазам: вкладка **Loot** не видна — `#view-tabs` ограничен
