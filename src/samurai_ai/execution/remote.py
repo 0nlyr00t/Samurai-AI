@@ -819,21 +819,26 @@ def display():
     if not binary:
         raise RuntimeError("RDP exec needs an X display or Xvfb")
     os.makedirs("/tmp/.X11-unix", exist_ok=True)
-    process = subprocess.Popen(
-        [binary, ":%d" % number, "-screen", "0", "1024x768x24"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-    )
-    path = "/tmp/.X11-unix/X%d" % number
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        if os.path.exists(path):
-            return ":%d" % number, process
-        if process.poll() is not None:
-            detail = process.stderr.read().decode(errors="replace") if process.stderr else ""
-            raise RuntimeError("Xvfb failed to start: " + detail.strip())
-        time.sleep(0.05)
-    process.terminate()
-    raise RuntimeError("Xvfb did not create its display socket")
+    # A private bwrap /tmp hides the host's X sockets, so a number that looks
+    # free here may still be owned outside. Try the next displays on failure.
+    last_error = ""
+    for candidate in range(number, number + 10):
+        process = subprocess.Popen(
+            [binary, ":%d" % candidate, "-screen", "0", "1024x768x24"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        path = "/tmp/.X11-unix/X%d" % candidate
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if os.path.exists(path):
+                return ":%d" % candidate, process
+            if process.poll() is not None:
+                detail = process.stderr.read().decode(errors="replace") if process.stderr else ""
+                last_error = detail.strip()
+                break
+            time.sleep(0.05)
+        process.terminate()
+    raise RuntimeError("Xvfb failed to start on every display: " + last_error)
 
 
 def answer_prompts(process, password):
