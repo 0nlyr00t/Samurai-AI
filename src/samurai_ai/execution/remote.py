@@ -93,6 +93,8 @@ class _RemoteTool(_ScopedSandboxTool):
     executable = "python3"
     default_port = 22
     autonomy_required = False
+    #: drivers that own a headless display cannot use the remote belt container
+    force_native = False
 
     def _host_port(self, params: dict[str, Any]) -> tuple[str, int]:
         host = str(params["host"]).strip()
@@ -137,7 +139,7 @@ class _RemoteTool(_ScopedSandboxTool):
         env, secret_env = self.build_env(params)
         native_note = ""
         try:
-            if await self.runner.docker_available():
+            if not self.force_native and await self.runner.docker_available():
                 endpoint = f"host.docker.internal:{tunnel.port}"
                 outcome = await self.runner.run_async(
                     profile,
@@ -784,6 +786,201 @@ class RdpAuthTool(_RemoteTool):
         # pass the full params through: build_env needs the password, and
         # _host_port already applies the 3389 default for the tunnel
         return self._run(["-c", _RDP_AUTH_DRIVER, str(params["user"])], params, scope)
+
+
+def rdp_exec_command(command: str, run_id: str) -> str:
+    """Remote shell line: bounded output and a deterministic completion marker."""
+    import shlex
+
+    output = f"~/thinclient_drives/samurai/{run_id}.out"
+    marker = f"~/thinclient_drives/samurai/{run_id}.code"
+    script = f"{command} > {output} 2>&1; printf '%s' \"$?\" > {marker}"
+    return f"sh -c {shlex.quote(script)}"
+
+
+_RDP_EXEC_DRIVER = r'''
+import os, select, shlex, shutil, subprocess, sys, tempfile, time, uuid
+
+
+def display():
+    if os.environ.get("DISPLAY"):
+        return os.environ["DISPLAY"], None
+    used = set()
+    try:
+        for name in os.listdir("/tmp/.X11-unix"):
+            if name.startswith("X") and name[1:].isdigit():
+                used.add(int(name[1:]))
+    except OSError:
+        pass
+    number = 99
+    while number in used:
+        number += 1
+    binary = shutil.which("Xvfb")
+    if not binary:
+        raise RuntimeError("RDP exec needs an X display or Xvfb")
+    process = subprocess.Popen(
+        [binary, ":%d" % number, "-screen", "0", "1024x768x24"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    path = "/tmp/.X11-unix/X%d" % number
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if os.path.exists(path):
+            return ":%d" % number, process
+        if process.poll() is not None:
+            raise RuntimeError("Xvfb failed to start")
+        time.sleep(0.05)
+    process.terminate()
+    raise RuntimeError("Xvfb did not create its display socket")
+
+
+def answer_prompts(process, password):
+    buffer = b""
+    started = time.time()
+    sent_password = False
+    sent_certificate = False
+    while time.time() - started < 20:
+        if process.poll() is not None:
+            raise RuntimeError("rdesktop exited during authentication")
+        ready, _, _ = select.select([process.stdout], [], [], 0.2)
+        if ready:
+            chunk = os.read(process.stdout.fileno(), 8192)
+            buffer += chunk
+            lowered = buffer.lower()
+            if b"do you trust this certificate" in lowered and not sent_certificate:
+                process.stdin.write(b"yes\n")
+                process.stdin.flush()
+                sent_certificate = True
+            if b"password:" in lowered and not sent_password:
+                process.stdin.write(password.encode() + b"\n")
+                process.stdin.flush()
+                sent_password = True
+        # Some builds do not flush the password prompt: send after a quiet beat.
+        if not sent_password and time.time() - started > 3:
+            process.stdin.write(password.encode() + b"\n")
+            process.stdin.flush()
+            sent_password = True
+        if sent_password and time.time() - started > 5:
+            return
+    raise RuntimeError("RDP authentication timed out")
+
+
+user, command, endpoint = sys.argv[1:4]
+host, port = endpoint.rsplit(":", 1)
+password = os.environ.get("SAMURAI_RDP_PASS", "")
+run_id = uuid.uuid4().hex[:12]
+local = tempfile.mkdtemp(prefix="samurai-rdp-exec-")
+display_process = None
+session = None
+try:
+    display_name, display_process = display()
+    os.environ["DISPLAY"] = display_name
+    binary = shutil.which("rdesktop")
+    driver = shutil.which("xdotool")
+    if not binary or not driver:
+        raise RuntimeError("RDP exec requires rdesktop and xdotool on the host")
+    session = subprocess.Popen(
+        [binary, "-r", "disk:samurai=" + local, "-u", user, "-p", "-",
+         "-s", "xterm", host + ":" + port],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    answer_prompts(session, password)
+    time.sleep(2)
+    ids = subprocess.check_output([driver, "search", "--class", "xterm"], text=True).split()
+    if ids:
+        subprocess.run([driver, "windowactivate", ids[-1]], check=False)
+    line = "sh -c " + shlex.quote(
+        command + " > ~/thinclient_drives/samurai/" + run_id + ".out 2>&1; "
+        "printf '%s' \"$?\" > ~/thinclient_drives/samurai/" + run_id + ".code"
+    )
+    subprocess.run([driver, "type", "--delay", "12", line], check=True)
+    subprocess.run([driver, "key", "Return"], check=True)
+    marker = os.path.join(local, run_id + ".code")
+    output = os.path.join(local, run_id + ".out")
+    deadline = time.time() + 280
+    while not os.path.exists(marker):
+        if session.poll() is not None:
+            raise RuntimeError("RDP session ended before the command completed")
+        if time.time() > deadline:
+            raise TimeoutError("RDP command timed out")
+        time.sleep(0.2)
+    code = int(open(marker).read().strip() or "1")
+    text = open(output, errors="replace").read() if os.path.exists(output) else ""
+    sys.stdout.write(text)
+    raise SystemExit(code)
+except TimeoutError as error:
+    print(str(error), file=sys.stderr)
+    raise SystemExit(124)
+except Exception as error:
+    print(str(error), file=sys.stderr)
+    raise SystemExit(3)
+finally:
+    if session is not None:
+        session.terminate()
+        try:
+            session.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            session.kill()
+    if display_process is not None:
+        display_process.terminate()
+    shutil.rmtree(local, ignore_errors=True)
+'''
+
+
+class RdpExecTool(_RemoteTool):
+    """Execute one command inside an RDP desktop and return its output.
+
+    This is the stateful counterpart of ``remote.rdp-auth``: the desktop runs a
+    terminal, output and the completion code cross a redirected drive. It uses
+    the native driver because the remote belt has no headless display tooling.
+    """
+
+    default_port = 3389
+    force_native = True
+
+    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+        super().__init__(runner)
+        self._definition = ToolDefinition(
+            id="remote.rdp-exec",
+            version=1,
+            kind=ToolKind.SANDBOX,
+            description="Run a shell command inside an RDP desktop on an in-scope "
+            "host and return stdout/stderr plus the exit code; credentials come "
+            "from the vault, output crosses a redirected drive as evidence",
+            risk_class=RiskClass.R3,
+            network=NetworkAccess.PROXIED,
+            timeout_seconds=300,
+            output_limit_bytes=262144,
+            parameters={
+                "type": "object",
+                "properties": {
+                    **_HOST_PORT,
+                    "port": {"type": "integer", "default": 3389},
+                    "user": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "password": {"type": "string", "minLength": 0, "maxLength": 1024},
+                    "command": {"type": "string", "minLength": 1, "maxLength": 4000},
+                },
+                "required": ["host", "user", "password", "command"],
+                "additionalProperties": False,
+            },
+            capabilities=("remote", "rdp", "exec", "windows", "linux"),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def build_env(self, params: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
+        return {"HOME": "/tmp", "TMPDIR": "/tmp"}, {
+            "SAMURAI_RDP_PASS": str(params["password"])
+        }
+
+    def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        return self._run(
+            ["-c", _RDP_EXEC_DRIVER, str(params["user"]), str(params["command"])],
+            params,
+            scope,
+        )
 
 
 class AdbTool(_RemoteTool):
