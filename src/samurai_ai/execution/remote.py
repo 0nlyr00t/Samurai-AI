@@ -872,7 +872,7 @@ def answer_prompts(process, password):
     raise RuntimeError("RDP authentication timed out")
 
 
-def gui_actions(driver, script):
+def gui_actions(driver, script, local):
     for item in script.split("|"):
         kind, value = item.split("=", 1)
         if kind == "key":
@@ -884,6 +884,10 @@ def gui_actions(driver, script):
             time.sleep(float(value))
         elif kind == "activate":
             subprocess.run([driver, "search", "--class", value, "windowactivate"], check=False)
+        elif kind == "shot":
+            path = os.path.join(local, value + ".png")
+            subprocess.run(["import", "-window", "root", path], check=False)
+            print(base64.b64encode(open(path, "rb").read()).decode())
 
 
 user, command = sys.argv[1:3]
@@ -914,7 +918,7 @@ try:
     )
     answer_prompts(session, password)
     if command.startswith("GUI:"):
-        gui_actions(driver, command[4:])
+        gui_actions(driver, command[4:], local)
         raise SystemExit(0)
     time.sleep(2)
     ids = []
