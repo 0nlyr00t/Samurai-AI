@@ -66,6 +66,7 @@ from samurai_ai.domain.permission import (
 from samurai_ai.domain.scope import ScopeContract, scope_relatedness
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
+from samurai_ai.execution.native import MissingBinaryError
 from samurai_ai.i18n import Translator
 from samurai_ai.services import goal_judge, title_smith
 from samurai_ai.services.chat import ChatHistoryService, marker
@@ -174,6 +175,12 @@ def _bounded_call(call: ToolCall) -> ToolCall:
     return call.model_copy(update={"arguments": {**call.arguments, "command": bounded}})
 
 
+def _tool_present(adapter: Any) -> bool:
+    """A native adapter answers for its own binary; other adapters cannot tell."""
+    probe = getattr(adapter, "resolved_available", None)
+    return bool(probe()) if callable(probe) else False
+
+
 def _short_tool(tool_id: str, command: str) -> str:
     """`bash · prlctl exec … echo…` — the tool plus a cut command, one line."""
     name = tool_id.split(".")[-1]
@@ -268,6 +275,7 @@ class ChatController:
         _running_tools: int
         _cache_share: float
         _round_approvals: dict[str, bool]
+        _missing_binary_tools: set[str]
         _session_allowed_tools: set[str]
         _background_results: list[Message]
         _process_block: list[str]
@@ -612,7 +620,8 @@ class ChatController:
                 "Install a tool that is missing on this machine, from the reviewed "
                 "catalogue, then run it once more. Use it only when a run answered "
                 "that the binary is missing: a scope refusal, a bad parameter or a "
-                "timeout do not need an install. The plan is shown and approved "
+                "timeout do not need an install, and the harness refuses the request "
+                "while the binary is present. The plan is shown and approved "
                 "before anything changes."
             ),
             parameters={
@@ -916,7 +925,7 @@ class ChatController:
         return counts
 
     def _completion_reason(
-        self, operation_id: str, runs_at_start: dict[str, int]
+        self, operation_id: str, runs_at_start: dict[str, int], findings_at_start: int
     ) -> TerminalReason:
         """COMPLETED, unless this turn's tool runs collapsed with nothing to show.
 
@@ -925,11 +934,15 @@ class ChatController:
         (a dead VPN/VM, an open circuit breaker). Reporting that as COMPLETED is
         exactly how an operator mistakes a fallen run for a finished one, so it
         ends BLOCKED with a visible reason instead.
+
+        "No finding" is the count *this turn* added, not the operation total: an
+        old finding otherwise masks a collapsed turn forever.
         """
         now = self._run_outcome_counts(operation_id)
         ran = sum(now[key] - runs_at_start.get(key, 0) for key in now)
         completed = now["completed"] - runs_at_start.get("completed", 0)
-        if ran > 0 and completed <= 0 and self._finding_count() == 0:
+        fresh_finding = self._finding_count() > findings_at_start
+        if ran > 0 and completed <= 0 and not fresh_finding:
             self._write_dim(self.translator.t("chat.run-collapsed"), process=False)
             return TerminalReason.BLOCKED
         return TerminalReason.COMPLETED
@@ -1607,7 +1620,11 @@ class ChatController:
         self._drift_nudged = False
         self._strategist_spawned_turn = False
         self._turn_facts: list[str] = []
-        findings_before = self._finding_count()
+        self._missing_binary_tools = set()
+        findings_at_start = self._finding_count()
+        # the loop's own baseline moves with each finding (progress); the turn
+        # baseline stays fixed so the collapse check can tell new evidence apart
+        findings_before = findings_at_start
         self._carry_previous_reason()
         self._log_shadow_lessons()
         reasoning = (
@@ -1649,7 +1666,9 @@ class ChatController:
                     verdict = await self._judge_goal(operation_id, model_id)
                     if verdict == goal_judge.STOP:
                         self._write_dim(self.translator.t("chat.goal-met"))
-                        return self._completion_reason(operation_id, runs_at_start)
+                        return self._completion_reason(
+                            operation_id, runs_at_start, findings_at_start
+                        )
                 stretches_used += 1
                 self._write_dim(
                     self.translator.t(
@@ -1747,11 +1766,15 @@ class ChatController:
                     verdict = await self._judge_goal(operation_id, model_id)
                     if verdict == goal_judge.STOP:
                         self._write_dim(self.translator.t("chat.goal-met"))
-                        return self._completion_reason(operation_id, runs_at_start)
+                        return self._completion_reason(
+                            operation_id, runs_at_start, findings_at_start
+                        )
                     if verdict is None:
                         # a broken judge never stalls a run: fall back to accepting,
                         # but a turn whose runs all collapsed is still not a success
-                        return self._completion_reason(operation_id, runs_at_start)
+                        return self._completion_reason(
+                            operation_id, runs_at_start, findings_at_start
+                        )
                     # CONTINUE or unclear: no sign-off without a clear STOP
                     self._write_dim(self.translator.t("chat.goal-not-met"))
                     self._remember(
@@ -1761,7 +1784,9 @@ class ChatController:
                         )
                     )
                     continue
-                return self._completion_reason(operation_id, runs_at_start)
+                return self._completion_reason(
+                    operation_id, runs_at_start, findings_at_start
+                )
             if response.text.strip():
                 self._remember(Message(role="assistant", content=response.text))
                 # reasoning between tool calls is narrative, not an answer: it
@@ -2177,6 +2202,13 @@ class ChatController:
         self._refresh_chrome()
         return valid
 
+    def _chat_adapter(self, tool_id: str) -> Any:
+        """The adapter for a tool id, or None when the catalogue has no such tool."""
+        try:
+            return self.execution.registry.get(tool_id)
+        except Exception:  # noqa: BLE001 - an unknown tool is the plan's refusal
+            return None
+
     async def _run_check_scope_tool(self, call: ToolCall) -> Message:
         """The model asks before touching: is this resource inside the scope?"""
         target = str(call.arguments.get("target", "") or "").strip()
@@ -2242,13 +2274,31 @@ class ChatController:
         )
 
     async def _run_provision_tool(self, call: ToolCall) -> Message:
-        """The model asks for a missing tool; the operator sees the plan first."""
+        """The model asks for a missing tool; the operator sees the plan first.
+
+        The install is gated on a machine-readable miss: a typed
+        `MissingBinaryError` seen in this turn, or an adapter that reports its
+        binary absent. A tool run that failed for another reason — a scope miss,
+        a bad parameter, a timeout — leaves the binary where it is, so the gate
+        refuses before the operator is asked to approve anything.
+        """
         tool_id = str(call.arguments.get("tool_id", "") or "").strip()
         if self.operation is None:
             return Message(role="user", content="[tool provision_tool] no open operation")
         provisioner = getattr(self, "provisioner", None)
         if provisioner is None:
             return Message(role="user", content="[tool provision_tool] provisioning is off")
+        recorded = tool_id in getattr(self, "_missing_binary_tools", set())
+        adapter = self._chat_adapter(tool_id)
+        if adapter is not None and not recorded and _tool_present(adapter):
+            return Message(
+                role="user",
+                content=(
+                    f"[tool provision_tool] {tool_id} is already installed here: the "
+                    "install is only for a missing binary (a scope refusal, a bad "
+                    "parameter and a timeout do not need one) — run it once more"
+                ),
+            )
         from samurai_ai.domain.provision import ProvisionError, ProvisionLockedError
         from samurai_ai.services.provisioner import Provisioner
 
@@ -2878,6 +2928,11 @@ class ChatController:
             )
         except ToolScopeError as exc:
             return await self._offer_scope(exc, call, tool_id, command, mode)
+        except MissingBinaryError as exc:
+            # the typed miss the provision gate needs: the binary is absent
+            self._missing_binary_tools.add(exc.tool_id)
+            self._write_line(f"[error] {call.name}: {exc}")
+            return Message(role="user", content=f"[tool {call.name}] error: {exc}")
         except TimeoutError:
             run_id = holder.get("run", "")
             self._park(task, call_label)

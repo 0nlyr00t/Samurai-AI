@@ -414,6 +414,12 @@ def test_propose_hypothesis_without_a_ctf_service_is_rejected(
 def test_complete_task_without_required_artifact_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A blocked task cannot leave a completed run behind.
+
+    The run used to return COMPLETED while its own task sat BLOCKED, so a
+    caller reading the run status believed the objective was met. The run is
+    now FAILED with the blocking reason and the finish event says the same.
+    """
     service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
     operation_id = make_operation(service)
     make_plan(kernel, operation_id, required=("probe-proof",))
@@ -428,7 +434,7 @@ def test_complete_task_without_required_artifact_rejected(
         '{"commands": [{"type": "complete_task", "no_finding": "scripted"}]}',
     )
     run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
-    assert run.status is AgentRunStatus.COMPLETED
+    assert run.status is AgentRunStatus.FAILED
     plan = kernel.get_current_plan(operation_id)
     assert plan is not None
     # the closing attempts are spent: the task is blocked, not left hanging
@@ -436,7 +442,90 @@ def test_complete_task_without_required_artifact_rejected(
     events = service.events(operation_id)
     rejected = [e for e in events if e.event_type == "agent.command.rejected"]
     assert rejected and "missing required artifact" in rejected[0].payload["reason"]
-    assert any(e.event_type == "task.blocked" for e in events)
+    blocked = [e for e in events if e.event_type == "task.blocked"]
+    assert blocked and "closing" in blocked[-1].payload["reason"]
+    finish = [e for e in events if e.event_type == "agent.run.finish"]
+    assert finish[-1].payload["status"] == "failed"
+    assert "blocked" in finish[-1].payload["reason"]
+    assert orchestrator.get_run(run.id).status is AgentRunStatus.FAILED
+
+
+def test_a_run_with_a_closed_task_stays_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The negative result is honest: `complete_task(no_finding=...)` is success."""
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["finish"]}',
+        '{"commands": [{"type": "complete_task", "no_finding": "nothing on :80"}]}',
+    )
+    run = orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    assert run.status is AgentRunStatus.COMPLETED
+    plan = kernel.get_current_plan(operation_id)
+    assert plan is not None
+    assert plan.task_by_id("probe").status is TaskStatus.DONE  # type: ignore[union-attr]
+    events = service.events(operation_id)
+    assert not [e for e in events if e.event_type == "task.blocked"]
+
+
+def test_resume_of_a_blocked_task_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`resume` must judge the run by the task too, not by "steps ran fine"."""
+    from samurai_ai.storage.agents import RunCheckpointRepository
+
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    orchestrator.checkpoints = RunCheckpointRepository(kernel.kernel.database)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    # the run dies on step 2: no answer for the second step's prompt
+    fake.queue(
+        '{"steps": ["first", "second"]}',
+        '{"commands": [{"type": "note", "key": "a", "value": "one"}]}',
+    )
+    with pytest.raises(AssertionError):
+        orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    run = orchestrator.runs.list_runs(operation_id)[-1]
+    assert run.status is AgentRunStatus.RUNNING
+    # the operator parks the task while it is interrupted
+    kernel.block_task(operation_id, "probe")
+
+    fake.queue('{"commands": [{"type": "note", "key": "b", "value": "two"}]}')
+    resumed = orchestrator.resume(run.id)
+    assert resumed is not None
+    # the leftover step ran, but the task is still blocked: not a success
+    assert resumed.status is AgentRunStatus.FAILED
+    finish = [
+        e for e in service.events(operation_id) if e.event_type == "agent.run.finish"
+    ]
+    assert finish[-1].payload["status"] == "failed"
+    assert "blocked" in finish[-1].payload["reason"]
+
+
+def test_resume_after_closing_the_task_completes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resume that closes the task is the success path, not a failure."""
+    from samurai_ai.storage.agents import RunCheckpointRepository
+
+    service, kernel, _, orchestrator, fake = make_stack(tmp_path, monkeypatch)
+    orchestrator.checkpoints = RunCheckpointRepository(kernel.kernel.database)
+    operation_id = make_operation(service)
+    make_plan(kernel, operation_id)
+    fake.queue(
+        '{"steps": ["first", "second"]}',
+        '{"commands": [{"type": "note", "key": "a", "value": "one"}]}',
+    )
+    with pytest.raises(AssertionError):
+        orchestrator.run_task(operation_id, "probe", [MODEL_ID])
+    run = orchestrator.runs.list_runs(operation_id)[-1]
+
+    fake.queue('{"commands": [{"type": "complete_task", "no_finding": "nothing"}]}')
+    resumed = orchestrator.resume(run.id)
+    assert resumed is not None
+    assert resumed.status is AgentRunStatus.COMPLETED
 
 
 def test_budget_exceeded_mid_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

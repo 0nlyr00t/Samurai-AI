@@ -496,6 +496,8 @@ class SamuraiApp(
         #: set by the host when the reviewed catalogue is available
         self.provisioner: Any = None
         self._round_approvals: dict[str, bool] = {}
+        #: tool ids whose run proved a missing binary: the install gate's evidence
+        self._missing_binary_tools: set[str] = set()
         #: tools the operator allowed for the whole session from the prompt
         #: ("Allow for this session"); risky shapes still surface per decide()
         self._session_allowed_tools: set[str] = set()
