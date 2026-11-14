@@ -67,6 +67,13 @@ class ApprovalMeta:
 class AccessPromptScreen(ModalScreen[str]):
     """Allow/deny prompt for a governed action (e.g. a remote model call)."""
 
+    HINT_KEYS = (
+        ("a", "access.allow"),
+        ("d", "access.deny"),
+        ("v", "hint.reveal"),
+        ("escape", "hint.close"),
+    )
+
     CSS = """
     AccessPromptScreen {
         align: center middle;

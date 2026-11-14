@@ -1153,15 +1153,12 @@ def test_chat_without_model_shows_error(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             journal = app.query_one("#journal", BlockJournal)
-            messages: list[str] = []
             command_input = app.query_one("#command-input", Input)
-            with patch.object(
-                journal, "write", side_effect=lambda message: messages.append(message)
-            ):
-                command_input.value = "hello"
-                await pilot.press("enter")
-                await pilot.pause()
-                assert any("pick one with /model" in str(m) for m in messages)
+            command_input.value = "hello"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "pick one with /model" in journal.text()
+            assert journal.notices[-1].has_class("notice--error")
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -2338,7 +2335,7 @@ def test_ctrl_s_steers_the_running_turn(tmp_path: Path) -> None:
             command_input.value = "no, check the other host"
             await pilot.press("ctrl+s")
             await pilot.pause()
-            assert app._steer_queue == ["no, check the other host"]
+            assert [item.text for item in app._steer_queue] == ["no, check the other host"]
             assert command_input.value == ""
 
             provider.release()
@@ -2350,6 +2347,54 @@ def test_ctrl_s_steers_the_running_turn(tmp_path: Path) -> None:
                 for message in provider.requests[-1].messages
             ]
             assert any("check the other host" in str(entry) for entry in contents)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_plain_text_during_a_turn_queues_instead_of_forking(tmp_path: Path) -> None:
+    """A second Enter used to start a parallel ``_chat`` worker on the same journal."""
+    provider = _BlockingProvider()
+    stack, _provider, _operation = _sequence_stack(tmp_path, [])
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings = stack[2]
+    settings.set_locale("en")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Queue lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("*.example.com",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            command_input = app.query_one("#command-input", Input)
+            command_input.value = "start"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app._chat_busy is True
+
+            command_input.value = "also try the API"
+            await pilot.press("enter")
+            await pilot.pause()
+            # no fork: one queued item, the input cleared, the bar visible
+            assert [item.text for item in app._steer_queue] == ["also try the API"]
+            assert command_input.value == ""
+            queue_bar = app.query_one("#queue-bar", Static)
+            assert queue_bar.display is True
+            assert "also try the API" in str(queue_bar.render())
+
+            # Esc on an empty field takes it back out of the queue
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app._steer_queue == []
+            assert queue_bar.display is False
+            assert provider.calls == 1
+            provider.release()
+            await app.workers.wait_for_complete()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -3736,7 +3781,7 @@ def test_bare_shell_streak_nudges_toward_structure_once_a_turn(tmp_path: Path) -
             app._note_unstructured_shell()
             text = journal.text()
             assert "nothing recorded" in text
-            assert any("record_fact" in note for note in app._steer_queue)
+            assert any("record_fact" in item.text for item in app._steer_queue)
             # once per turn: more bare shells do not repeat the nudge
             for _ in range(5):
                 app._note_unstructured_shell()
@@ -3770,7 +3815,7 @@ def test_local_drift_guard_fires_outside_the_workspace(tmp_path: Path) -> None:
             app._note_local_drift("cat /Users/desh/Temp/operation-state.json")
             text = journal.text()
             assert "not the target" in text
-            assert any("in-scope work" in note for note in app._steer_queue)
+            assert any("in-scope work" in item.text for item in app._steer_queue)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -6143,16 +6188,44 @@ def test_a_failed_tool_block_carries_the_error_and_opens(tmp_path: Path) -> None
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             journal = app.query_one("#journal", BlockJournal)
-            app._write_tool_block("⚙ cmd — exit 2", 2, "", "prlctl: Invalid argument")
+            app._write_tool_block(
+                "⚙ cmd — exit 2", 2, "stdout context", "prlctl: Invalid argument"
+            )
             app._write_tool_block("⚙ silent — exit 2", 2, "", "")
             app._write_tool_block("⚙ fine — exit 0", 0, "ok", "")
             await pilot.pause()
             first, second, third = journal.tool_blocks
             assert "Invalid argument" in first._title.plain
-            assert first.failed and not first.expanded
+            assert first.failed and first.expanded
+            assert first._body == ["prlctl: Invalid argument", "stdout context"]
             assert "no output" in second._title.plain
-            assert second.failed and not second.expanded
+            assert second.failed and second.expanded
             assert not third.failed and not third.expanded
+
+    asyncio.run(exercise())
+
+
+def test_tool_block_pages_respond_to_pgup_and_pgdn(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._write_tool_block(
+                "⚙ long — exit 0", 0, "\n".join(f"line-{i}" for i in range(130)), ""
+            )
+            await pilot.pause()
+            block = app.query_one("#journal", BlockJournal).tool_blocks[-1]
+            block.query_one(ToolHeader).focus()
+            await pilot.press("pagedown")
+            await pilot.pause()
+            assert block.page == 1 and block.expanded
+            assert "line-60" in str(block._render_body())
+            await pilot.press("pageup")
+            await pilot.pause()
+            assert block.page == 0
 
     asyncio.run(exercise())
 
@@ -6599,6 +6672,40 @@ def test_the_stage_rail_follows_the_plan_and_names_the_mode_counter(tmp_path: Pa
     asyncio.run(exercise())
 
 
+def test_clicking_a_phase_opens_its_blocked_task(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens import BoardScreen
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Phase drill-down", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    stack[1].create_plan(
+        operation.id,
+        "Plan",
+        [
+            PlanTask(id="recon-done", title="Recon network", status=TaskStatus.DONE),
+            PlanTask(id="recon-blocked", title="Recon web", status=TaskStatus.BLOCKED),
+        ],
+        [],
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.action_inspect("phase", "recon")
+            await pilot.pause()
+            assert isinstance(app.screen, BoardScreen)
+            assert app.screen.selected() == "recon-blocked"
+            # The drill-down is read-only with respect to phase and task state.
+            plan = stack[1].get_current_plan(operation.id)
+            assert plan is not None
+            assert plan.task_by_id("recon-blocked").status is TaskStatus.BLOCKED  # type: ignore[union-attr]
+
+    asyncio.run(exercise())
+
+
 def test_the_rail_shows_the_current_stage_exit_hint(tmp_path: Path) -> None:
     """The current phase carries what must be proven to leave it."""
     stack = _minimal_stack(tmp_path)
@@ -6644,7 +6751,9 @@ def test_a_stalled_stage_gets_a_replan_nudge(tmp_path: Path) -> None:
             app._watch_stage_stall()
             journal = app.query_one("#journal", BlockJournal).text()
             assert "has not moved" in journal
-            assert any("re-plan" in note or "перепланир" in note for note in app._steer_queue)
+            assert any(
+                "re-plan" in item.text or "перепланир" in item.text for item in app._steer_queue
+            )
             # once per stall: a second tick stays quiet until the stage moves
             app._watch_stage_stall()
             assert app.query_one("#journal", BlockJournal).text().count("has not moved") == 1
@@ -9638,7 +9747,7 @@ def test_restored_context_is_marked_off_from_new_messages(tmp_path: Path) -> Non
 
 
 def test_a_narrow_terminal_folds_the_chrome_and_keeps_the_journal(tmp_path: Path) -> None:
-    """80 columns: no side column, no rail, journal still full width."""
+    """80 columns: no side column, a compact phase rail, journal still full width."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     operation = stack[0].create(
@@ -9652,7 +9761,9 @@ def test_a_narrow_terminal_folds_the_chrome_and_keeps_the_journal(tmp_path: Path
             app._refresh_killchain()
             await pilot.pause()
             assert not app.query_one("#side", Vertical).display
-            assert not app.query_one("#killchain", Static).display
+            rail = app.query_one("#killchain", Static)
+            assert rail.display
+            assert "recon" in str(rail.render()) and "flags 0" in str(rail.render())
             journal = app.query_one("#journal", BlockJournal)
             assert journal.size.width >= 60
             # the operator can force the panels back on a narrow screen
@@ -10608,5 +10719,134 @@ def test_skills_learned_command_sets_mode_and_lists(tmp_path: Path) -> None:
             await pilot.pause()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_hint_bar_tracks_run_state_and_modal_screen(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        from samurai_ai.tui.screens.help import HelpScreen
+
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            bar = app.query_one("#hint-bar", Static)
+            assert "Ctrl+P command palette" in str(bar.render())
+            assert "keys.action." not in str(bar.render())
+
+            app._chat_busy = True
+            app._refresh_hint_bar()
+            await pilot.pause()
+            assert "Ctrl+C stop the run / quit" in str(bar.render())
+            assert "Ctrl+S steer the running turn" in str(bar.render())
+            assert "Ctrl+B" not in str(bar.render())
+
+            app.push_screen(HelpScreen(app.translator, app.keymap))
+            await pilot.pause()
+            assert "Pagedown next page" in str(bar.render())
+            assert "Escape close" in str(bar.render())
+
+    asyncio.run(exercise())
+
+
+def test_status_bar_preserves_run_facts_at_every_terminal_width(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("model.default", "deepseek/deepseek-chat")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(140, 30)) as pilot:
+            await pilot.pause()
+            app._turn_started = time.monotonic() - 134
+            app._chat_busy = True
+            app._current_tool = "scan.nmap -sT 192.0.2.10"
+            app._sent_tokens = 12_000
+            app._recv_tokens = 3_000
+            app._run_tokens = 15_000
+            app._run_costs = {"deepseek/deepseek-chat": 0.0123}
+            app._cache_share = 0.5
+            app._write_notice("important finding")
+            app._refresh_chrome()
+            await pilot.pause()
+            bar = app.query_one("#status-bar", Static)
+
+            for width in (140, 100, 80, 60):
+                await pilot.resize_terminal(width, 30)
+                app._refresh_chrome()
+                await pilot.pause()
+                rendered = str(bar.render())
+                assert Text(rendered).cell_len <= width - 2
+                assert "⏱ 2:14" in rendered
+                assert "▶ scan.nmap" in rendered
+                assert "⚑ 1" in rendered
+                assert "ctx 0" in rendered
+
+    asyncio.run(exercise())
+
+
+def test_errors_become_notices_with_counter_and_last_navigation(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            app._write_line("[error] provider unavailable")
+            await pilot.pause()
+
+            assert len(journal.notices) == 1
+            notice = journal.notices[-1]
+            assert notice.has_class("notice--error")
+            assert "[error] provider unavailable" in journal.text()
+            assert "⚑ 1" in str(app.query_one("#status-bar", Static).render())
+
+            app._jump_to_last_notice()
+            await pilot.pause()
+            assert journal.last_notice() is notice
+            assert not journal._follow
+
+    asyncio.run(exercise())
+
+
+def test_tool_headers_show_outcome_duration_and_group_failures(tmp_path: Path) -> None:
+    from datetime import timedelta
+
+    from samurai_ai.domain.execution import ToolResult, ToolRun
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            run = ToolRun(operation_id="op", tool_id="scan.nmap", tool_version=1)
+            run.start()
+            run.complete(exit_code=0)
+            run.started_at = run.finished_at - timedelta(seconds=2.34)  # type: ignore[operator]
+            app._exec_quiet = False
+            app._shell_result_message(
+                "scan_nmap",
+                "scan.nmap",
+                "nmap -sT --top-ports 1000 192.0.2.42",
+                ToolResult(run=run, stdout="22/tcp open"),
+                None,
+            )
+            app._append_exec_group("echo ok", 1)
+            app._close_exec_group(failed=True)
+            await pilot.pause()
+
+            journal = app.query_one("#journal", BlockJournal)
+            header = journal.tool_blocks[0]._title.plain
+            assert "exit 0" in header
+            assert "2.3s" in header
+            assert "192.0.2.42" in header
+            assert "2 commands · 1 ok · 1 failed" in journal.tool_blocks[1]._title.plain
 
     asyncio.run(exercise())

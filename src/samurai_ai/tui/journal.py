@@ -26,8 +26,43 @@ from textual.widgets import Markdown, Static
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
-#: body lines shown when a tool block is opened; the middle is cut
-_TOOL_BODY_LIMIT = 60
+#: body lines kept for display; the middle is cut, the raw run keeps the rest
+_TOOL_BODY_LIMIT = 240
+#: one page inside an expanded tool block
+_TOOL_PAGE_LINES = 60
+
+
+def elide_middle(text: str, width: int) -> str:
+    """Keep both the command's flags and its target inside one terminal line."""
+    if width <= 0:
+        return ""
+    if Text(text).cell_len <= width:
+        return text
+    if width == 1:
+        return "…"
+    head_width = (width - 1) // 2
+    tail_width = width - 1 - head_width
+    head = Text(text)
+    head.truncate(head_width, overflow="crop")
+    tail = ""
+    for char in reversed(text):
+        candidate = char + tail
+        if Text(candidate).cell_len > tail_width:
+            break
+        tail = candidate
+    return head.plain + "…" + tail
+
+
+def format_duration(seconds: float | None) -> str:
+    """A compact measured duration; an unknown measurement stays empty."""
+    if seconds is None or seconds < 0:
+        return ""
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    whole = int(seconds)
+    return f"{whole // 60}:{whole % 60:02d}"
 
 
 def _selection_text(visual: Any, selection: Selection) -> tuple[str, str] | None:
@@ -108,6 +143,9 @@ class NoticeBlock(SelectableBlock):
         border-left: thick $accent-alt;
         background: $panel;
     }
+    NoticeBlock.notice--error {
+        border-left: thick $danger;
+    }
     """
 
 
@@ -136,7 +174,11 @@ class StreamBlock(SelectableBlock):
 class ToolHeader(SelectableBlock, can_focus=True):
     """The one-line summary of a tool run; click or Enter toggles the body."""
 
-    BINDINGS = [Binding("enter", "toggle_body", show=False)]
+    BINDINGS = [
+        Binding("enter", "toggle_body", show=False),
+        Binding("pagedown", "next_page", show=False),
+        Binding("pageup", "previous_page", show=False),
+    ]
 
     def on_click(self, event: events.Click) -> None:
         # a click that landed on a link span belongs to the link's action
@@ -151,6 +193,16 @@ class ToolHeader(SelectableBlock, can_focus=True):
         block = self.parent
         if isinstance(block, ToolBlock):
             block.toggle()
+
+    def action_next_page(self) -> None:
+        block = self.parent
+        if isinstance(block, ToolBlock):
+            block.next_page()
+
+    def action_previous_page(self) -> None:
+        block = self.parent
+        if isinstance(block, ToolBlock):
+            block.previous_page()
 
 
 class LiveAnswerBlock(StreamBlock):
@@ -216,7 +268,8 @@ class ToolBlock(Vertical):
         self._body = body
         self._failed = failed
         self._body_style = body_style
-        self.expanded = False if expanded is None else expanded
+        self.expanded = failed if expanded is None else expanded
+        self._page = 0
 
     def compose(self) -> ComposeResult:
         yield ToolHeader(self._render_title())
@@ -233,6 +286,7 @@ class ToolBlock(Vertical):
         """Replace the body in place — the thinking block grows during a turn."""
         self._body = body
         self._body_style = style
+        self._page = 0
         if self.is_mounted:
             self.query_one(".tool-body", Static).update(self._render_body())
             self._apply_state()
@@ -258,6 +312,23 @@ class ToolBlock(Vertical):
         self.expanded = not self.expanded
         self._apply_state()
 
+    @property
+    def page(self) -> int:
+        return self._page
+
+    @property
+    def page_count(self) -> int:
+        return max(1, (len(self._display_lines()) + _TOOL_PAGE_LINES - 1) // _TOOL_PAGE_LINES)
+
+    def next_page(self) -> None:
+        self.expanded = True
+        self._page = min(self.page_count - 1, self._page + 1)
+        self._apply_state()
+
+    def previous_page(self) -> None:
+        self._page = max(0, self._page - 1)
+        self._apply_state()
+
     def _apply_state(self) -> None:
         try:
             header = self.query_one(ToolHeader)
@@ -265,26 +336,34 @@ class ToolBlock(Vertical):
         except Exception:  # not mounted yet
             return
         header.update(self._render_title())
+        body.update(self._render_body())
         body.display = self.expanded
 
     def _render_title(self) -> Text:
         marker = "▾" if self.expanded else "▸"
         return Text.assemble(marker, " ", self._title)
 
+    def _display_lines(self) -> list[str]:
+        if len(self._body) <= _TOOL_BODY_LIMIT:
+            return self._body
+        keep_head = _TOOL_BODY_LIMIT // 2
+        keep_tail = _TOOL_BODY_LIMIT - keep_head - 1  # one omission marker
+        return [
+            *self._body[:keep_head],
+            f"… {len(self._body) - _TOOL_BODY_LIMIT} more lines …",
+            *self._body[-keep_tail:],
+        ]
+
     def _render_body(self) -> Text:
-        lines = self._body
-        if len(lines) > _TOOL_BODY_LIMIT:
-            keep_head = _TOOL_BODY_LIMIT // 2
-            keep_tail = _TOOL_BODY_LIMIT - keep_head
-            lines = [
-                *lines[:keep_head],
-                f"… {len(self._body) - _TOOL_BODY_LIMIT} more lines …",
-                *lines[-keep_tail:],
-            ]
-        text = Text("\n").join(
-            Text(f"  {line}", style=self._body_style) for line in lines
+        lines = self._display_lines()
+        self._page = min(self._page, self.page_count - 1)
+        start = self._page * _TOOL_PAGE_LINES
+        page_lines = lines[start : start + _TOOL_PAGE_LINES]
+        if self.page_count > 1:
+            page_lines = [*page_lines, f"─ {self._page + 1}/{self.page_count} · PgUp/PgDn ─"]
+        return Text("\n").join(
+            Text(f"  {line}", style=self._body_style) for line in page_lines
         )
-        return text
 
 
 class InspectSummaryBlock(SelectableBlock, can_focus=True):
@@ -436,9 +515,9 @@ class BlockJournal(VerticalScroll, can_focus=False):
                 return block
         return None
 
-    def add_notice(self, renderable: Any) -> NoticeBlock:
+    def add_notice(self, renderable: Any, *, error: bool = False) -> NoticeBlock:
         """An important event, set apart with an accent rail and tracked."""
-        block = NoticeBlock(renderable)
+        block = NoticeBlock(renderable, classes="notice--error" if error else "")
         self.notices.append(block)
         self._mount(block)
         return block

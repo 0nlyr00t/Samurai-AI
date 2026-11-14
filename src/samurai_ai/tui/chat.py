@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
@@ -72,7 +73,13 @@ from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.tool_digest import summarize_for_model
 from samurai_ai.services.vault import VaultService
-from samurai_ai.tui.journal import BlockJournal, ToolBlock, entity_span
+from samurai_ai.tui.journal import (
+    BlockJournal,
+    ToolBlock,
+    elide_middle,
+    entity_span,
+    format_duration,
+)
 from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import AccessPromptScreen
 
@@ -113,6 +120,18 @@ _MAX_PROMISE_NUDGES = 2
 #: a worked turn (tool calls happened) that claims to be done while a goal
 #: exists gets judged before it may end; this many times per turn at most
 _MAX_COMPLETION_JUDGES = 2
+
+
+@dataclass(frozen=True)
+class SteerItem:
+    """One message waiting for the turn's next model request.
+
+    ``from_operator`` separates what the operator typed from the harness's own
+    nudges (structure, drift), so the queue bar shows only the former.
+    """
+
+    text: str
+    from_operator: bool = False
 
 
 def _resolve_image(raw: str, cwd: Path) -> Path:
@@ -231,7 +250,7 @@ class ChatController:
         constraints: Any
         traffic: Any
         _graph_used: bool
-        _steer_queue: list[str]
+        _steer_queue: list[SteerItem]
         _chat_busy: bool
         _stop_requested: bool
         _stop_note_sent: bool
@@ -320,9 +339,47 @@ class ChatController:
                 command_input.value = ""
                 command_input.post_message(Input.Submitted(command_input, text))
             return
-        self._steer_queue.append(text)
+        self.enqueue_turn_text(text)
         command_input.value = ""
-        self._write_dim("↳ " + self.translator.t("chat.steer", text=text))
+
+    def enqueue_turn_text(self, text: str) -> None:
+        """Queue a message for the running turn instead of forking a second one.
+
+        Text sent while a turn runs used to start a parallel ``_chat`` worker on
+        the same journal, context and operation; the queue is drained at the
+        round boundary (``_drain_steering``), so the turn keeps its order.
+        """
+        self._steer_queue.append(SteerItem(text, from_operator=True))
+        self._refresh_queue_bar()
+
+    def drop_queued_turn_text(self) -> bool:
+        """Esc on an empty field takes the newest operator message back out."""
+        for index in range(len(self._steer_queue) - 1, -1, -1):
+            if self._steer_queue[index].from_operator:
+                dropped = self._steer_queue.pop(index)
+                self._write_dim(
+                    self.translator.t("chat.queue-dropped", text=dropped.text), process=False
+                )
+                self._refresh_queue_bar()
+                return True
+        return False
+
+    def _refresh_queue_bar(self) -> None:
+        """The queued rows above the input; hidden again once the queue empties."""
+        bar = self.query_one("#queue-bar", Static)
+        operator = [item.text for item in self._steer_queue if item.from_operator]
+        if not operator:
+            bar.display = False
+            bar.update("")
+            return
+        rows = Text()
+        for position, text in enumerate(operator):
+            if position:
+                rows.append("\n")
+            rows.append("⏳ " + text, style=self.paint("risk-mid"))
+        rows.append("\n" + self.translator.t("chat.queue-hint"), style=self.paint("text-dim"))
+        bar.display = True
+        bar.update(rows)
 
     # --- AI chat ---------------------------------------------------------
 
@@ -999,7 +1056,7 @@ class ChatController:
         self._write_dim(
             self.translator.t("chat.structure-nudge", count=self._unstructured_shells)
         )
-        self._steer_queue.append(self.translator.t("chat.structure-note"))
+        self._steer_queue.append(SteerItem(self.translator.t("chat.structure-note")))
 
     def _note_structure_written(self) -> None:
         """A fact, intent or finding re-arms the bare-shell counter."""
@@ -1014,7 +1071,7 @@ class ChatController:
             return
         self._drift_nudged = True
         self._write_dim(self.translator.t("chat.drift-nudge"))
-        self._steer_queue.append(self.translator.t("chat.drift-note"))
+        self._steer_queue.append(SteerItem(self.translator.t("chat.drift-note")))
 
     def _drift_paths(self, command: str) -> list[str]:
         """Absolute local paths a command reads outside the workspace."""
@@ -1210,6 +1267,9 @@ class ChatController:
         if model_id is None:
             self._write_line("[error] " + self.translator.t("chat.no-model"))
             return
+        # Busy is taken here, not only when the worker's first frame runs: a
+        # second Enter in the same frame used to fork a parallel turn.
+        self._chat_busy = True
         # the first words are an instant placeholder; a cheap model then
         # replaces them with the task's gist (see _refine_title)
         title = " ".join(text.split()[:6])
@@ -1403,13 +1463,17 @@ class ChatController:
                 "chat.tool-collapsed",
                 command=f"!{command}",
                 code=result.run.exit_code,
-                code_mark="" if result.run.exit_code == 0 else f" ✗{result.run.exit_code}",
                 lines=len(result.stdout.strip().splitlines()),
             ),
             result.run.exit_code,
             result.stdout,
             result.stderr,
             run_id=result.run.id,
+            duration_s=(
+                (result.run.finished_at - result.run.started_at).total_seconds()
+                if result.run.started_at and result.run.finished_at
+                else None
+            ),
         )
         body = (result.stdout if result.stdout.strip() else result.stderr).rstrip()
         self._remember(
@@ -3114,19 +3178,23 @@ class ChatController:
             self._append_exec_group(command, lines)
         else:
             # a failure (or verbose mode) speaks for itself and ends the group
-            self._close_exec_group()
+            self._close_exec_group(failed=failed)
             self._write_tool_block(
                 self.translator.t(
                     "chat.tool-collapsed",
-                    command=_short_tool(tool_id, command),
+                    command=f"{tool_id.split('.')[-1]} · {_one_line(command)}",
                     code=exit_code,
-                    code_mark="" if exit_code == 0 else f" ✗{exit_code}",
                     lines=lines,
                 ),
                 exit_code,
                 result.stdout,
                 result.stderr,
                 run_id=result.run.id,
+                duration_s=(
+                    (result.run.finished_at - result.run.started_at).total_seconds()
+                    if result.run.started_at and result.run.finished_at
+                    else None
+                ),
             )
         # The model gets a distilled summary, not the raw dump: structured facts
         # for known tools, a cleaned head-and-tail slice otherwise. The operator
@@ -3152,6 +3220,7 @@ class ChatController:
         stdout: str,
         stderr: str,
         run_id: str | None = None,
+        duration_s: float | None = None,
     ) -> None:
         """A tool run as a collapsible block; a failure speaks and opens.
 
@@ -3160,17 +3229,23 @@ class ChatController:
         carries the last error line, or says outright that there was no output.
         """
         journal = self.query_one("#journal", BlockJournal)
-        # a long command must not wrap the header: one line, cut with an ellipsis
+        measured = format_duration(duration_s)
+        if measured:
+            title += f" · {measured}"
+        # Keep the tool/flags at the left and the target/output path at the right.
         columns = getattr(self.size, "width", 100) if hasattr(self, "size") else 100
         width = max(40, columns - 28)
-        if len(title) > width:
-            title = title[: width - 1] + "…"
+        title = elide_middle(title, width)
         failed = exit_code not in (0, None)
         if failed:
             error = (stderr.strip() or stdout.strip()).splitlines()
             tail = error[-1] if error else f"exit {exit_code}, no output"
-            title = title[: max(20, width - 30)] + "  ← " + tail[:26]
-        body = (stdout if stdout.strip() else stderr).rstrip()
+            title = elide_middle(title, max(20, width - 30)) + "  ← " + tail[:26]
+        if failed:
+            # The reason comes first; stdout remains below as supporting context.
+            body = "\n".join(part for part in (stderr.rstrip(), stdout.rstrip()) if part)
+        else:
+            body = (stdout if stdout.strip() else stderr).rstrip()
         title_text = Text(title, style=self.paint(self._DIM_STYLE))
         if run_id:
             title_text.append(" ")
@@ -3184,7 +3259,15 @@ class ChatController:
         self._current_tool = ""
 
     def _exec_group_title(self) -> str:
-        return self.translator.t("chat.exec-group", count=self._exec_group_ok)
+        count = self._exec_group_ok + self._exec_group_fail
+        if self._exec_group_fail:
+            return self.translator.t(
+                "chat.exec-group-detail",
+                count=count,
+                ok=self._exec_group_ok,
+                failed=self._exec_group_fail,
+            )
+        return self.translator.t("chat.exec-group", count=count)
 
     def _append_exec_group(self, command: str, lines: int) -> None:
         """Fold a successful run into the rolling group block (quiet mode).
@@ -3216,8 +3299,13 @@ class ChatController:
         self._exec_group.set_body(self._exec_group_rows, self.paint(self._DIM_STYLE))
         self._current_tool = ""
 
-    def _close_exec_group(self) -> None:
+    def _close_exec_group(self, *, failed: bool = False) -> None:
         """End the current run group; the next run starts a fresh one."""
+        if failed and self._exec_group is not None:
+            self._exec_group_fail += 1
+            self._exec_group.set_title(
+                Text(self._exec_group_title(), style=self.paint(self._DIM_STYLE))
+            )
         self._exec_group = None
         self._exec_group_rows = []
         self._exec_group_ok = 0
@@ -3233,6 +3321,10 @@ class ChatController:
             )
         )
 
+    def _write_error(self, text: str) -> None:
+        """An error is an important event, not another line of process chatter."""
+        self._write_notice(text, style="bold $danger", error=True)
+
     def _write_notice(
         self,
         text: str,
@@ -3241,6 +3333,7 @@ class ChatController:
         ref: str | None = None,
         label: str | None = None,
         style: str = "bold $accent-alt",
+        error: bool = False,
     ) -> None:
         """An important event, set apart so a burst of runs can't bury it.
 
@@ -3260,7 +3353,7 @@ class ChatController:
                     base_style=self.paint("accent"),
                 )
             )
-        journal.add_notice(body)
+        journal.add_notice(body, error=error)
         try:
             self._refresh_chrome()
         except Exception:  # noqa: BLE001 - the badge is a nicety, never a blocker
