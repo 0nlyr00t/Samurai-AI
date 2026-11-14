@@ -147,6 +147,15 @@ class NativeTool:
             self._runner = ProcessManager(allowed_executables=frozenset(allowed))
         return self._runner
 
+    def _with_defaults(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Recipe defaults belong to invocation, not only to documentation."""
+        defaults = {
+            name: spec.default
+            for name, spec in self.recipe.params.items()
+            if spec.default is not None and name not in params
+        }
+        return {**defaults, **params}
+
     def _with_script(self, params: dict[str, Any]) -> dict[str, Any]:
         script = self.script
         if script is None:
@@ -157,7 +166,7 @@ class NativeTool:
 
     def preflight(self, params: dict[str, Any]) -> None:
         """Everything that can fail is checked before the approval is asked."""
-        render_native_argv(self.recipe, self._with_script(params))
+        render_native_argv(self.recipe, self._with_script(self._with_defaults(params)))
         if not self.path:
             raise MissingBinaryError(self.recipe.id, self.recipe.executable)
 
@@ -165,7 +174,10 @@ class NativeTool:
         executable = self.path or self.recipe.executable
         if not self.path:
             raise MissingBinaryError(self.recipe.id, self.recipe.executable)
-        argv = [executable, *render_native_argv(self.recipe, self._with_script(params))]
+        argv = [
+            executable,
+            *render_native_argv(self.recipe, self._with_script(self._with_defaults(params))),
+        ]
         if any("\x00" in argument for argument in argv):
             raise ToolValidationError(f"{self.recipe.id}: argv cannot contain NUL")
         if self.autonomy_required:

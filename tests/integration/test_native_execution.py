@@ -207,6 +207,25 @@ class _RecordingRunner:
         return ProcessResult(exit_code=0, stdout="ok", stderr="")
 
 
+def test_recipe_defaults_are_applied_to_native_argv(tmp_path: Path) -> None:
+    binary = _fake_binary(tmp_path)
+    runner = _RecordingRunner()
+    tool = NativeTool(
+        _recipe(tmp_path, ["-p", "{ports}", "{targets}"]),
+        _definition(),
+        runner=runner,  # type: ignore[arg-type]
+        executable_path=binary,
+    )
+
+    tool.invoke({"targets": ["10.0.0.5"], "ports": "1-1000"}, SCOPE)
+    runner.argv.clear()
+    # Omitting ports uses the recipe's documented default; `-p` must never eat
+    # the target as its value.
+    tool.invoke({"targets": ["10.0.0.5"]}, SCOPE)
+
+    assert runner.argv[-3:] == ["-p", "80", "10.0.0.5"]
+
+
 def test_autonomous_native_tool_requires_bwrap(tmp_path: Path, monkeypatch) -> None:
     binary = _fake_binary(tmp_path)
     tool = NativeTool(
