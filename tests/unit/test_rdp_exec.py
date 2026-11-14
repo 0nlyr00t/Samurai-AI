@@ -14,7 +14,7 @@ def test_rdp_exec_uses_native_driver_and_secret_env() -> None:
 def test_rdp_exec_command_redirects_output_and_exit_code() -> None:
     command = rdp_exec_command("id; whoami", "run-1")
 
-    assert command.startswith("sh -c '")
+    assert command.startswith("sh -c '(")
     assert "~/thinclient_drives/samurai/run-1.out" in command
     assert "~/thinclient_drives/samurai/run-1.code" in command
     assert "2>&1" in command

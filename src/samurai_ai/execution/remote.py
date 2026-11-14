@@ -794,7 +794,7 @@ def rdp_exec_command(command: str, run_id: str) -> str:
 
     output = f"~/thinclient_drives/samurai/{run_id}.out"
     marker = f"~/thinclient_drives/samurai/{run_id}.code"
-    script = f"{command} > {output} 2>&1; printf '%s' \"$?\" > {marker}"
+    script = f"({command}) > {output} 2>&1; printf '%s' \"$?\" > {marker}"
     return f"sh -c {shlex.quote(script)}"
 
 
@@ -912,7 +912,7 @@ try:
     # The remote shell may need the credential for sudo; the expansion happens
     # only in the live terminal, never in run parameters or command artifacts.
     line = "export SAMURAI_RDP_PASS=" + shlex.quote(password) + "; sh -c " + shlex.quote(
-        command + " > ~/thinclient_drives/samurai/" + run_id + ".out 2>&1; "
+        "(" + command + ") > ~/thinclient_drives/samurai/" + run_id + ".out 2>&1; "
         "printf '%s' \"$?\" > ~/thinclient_drives/samurai/" + run_id + ".code"
     )
     subprocess.run([driver, "type", "--delay", "12", line], check=True)
