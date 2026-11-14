@@ -89,6 +89,10 @@ class GoalService:
     def list(self, operation_id: str) -> list[Goal]:
         return self.goals.list(operation_id)
 
+    def reached(self, operation_id: str) -> bool:
+        """A completed goal stays reached after it leaves the active-goal view."""
+        return any(goal.state is GoalState.COMPLETE for goal in self.goals.list(operation_id))
+
     # --- transitions ------------------------------------------------------
 
     def pause(self, goal_id: str) -> Goal:

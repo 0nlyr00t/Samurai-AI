@@ -10,6 +10,7 @@ actions, interventions or false positives). Exit codes follow the contract:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -80,6 +81,12 @@ def register_eval_commands(
         "history", help="Past benchmark runs, newest last"
     )
     history.add_argument("--limit", type=int, default=20)
+    readiness = eval_commands.add_parser(
+        "readiness",
+        help="Evidence and hypothesis coverage of one operation; 1 while work remains",
+    )
+    readiness.add_argument("operation_id")
+    readiness.add_argument("--json", action="store_true", dest="json_output")
     bench.add_argument("--quiet", action="store_true", help="no progress lines on stderr")
 
 
@@ -90,6 +97,8 @@ def handle_eval_command(args: argparse.Namespace, services: tuple[Any, ...] = ()
         return _handle_bench(args, services)
     if args.eval_command == "history":
         return _handle_history(args)
+    if args.eval_command == "readiness":
+        return _handle_readiness(args, services)
     service = EvalService()
     if args.eval_command == "run":
         suite = load_suite(args.suite)
@@ -125,6 +134,42 @@ def handle_eval_command(args: argparse.Namespace, services: tuple[Any, ...] = ()
     for regression in comparison.regressions:
         print(f"regression: {regression}", file=sys.stderr)
     return 0 if comparison.passed else 1
+
+
+def _handle_readiness(args: argparse.Namespace, services: tuple[Any, ...]) -> int:
+    from samurai_ai.services.graph import GraphService
+    from samurai_ai.services.readiness import ReadinessService
+    from samurai_ai.storage.graph import GraphRepository
+
+    if not services:
+        print("readiness needs the service stack", file=sys.stderr)
+        return 2
+    operations, kernel, _settings, _recovery, execution, _vault, _mcp, _models, *_rest = services
+    ctf, goals = services[11], services[15]
+    graph = GraphService(operations, kernel, GraphRepository(operations.repository.database))
+    report = ReadinessService(operations, kernel, execution, ctf, graph, goals).report(
+        args.operation_id
+    )
+    payload = report.model_dump(mode="json")
+    payload["hypotheses_complete"] = report.hypotheses_complete
+    payload["evidence_success"] = report.evidence_success
+    if args.json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"{report.operation_id}\thypotheses {report.hypotheses_closed}/"
+            f"{report.hypotheses_total} closed\tgoal={report.goal_reached}"
+        )
+        for hypothesis_id in (*report.open_ids, *report.testing_ids):
+            print(f"open\t{hypothesis_id}")
+        print(
+            f"terminal\t{report.terminal_reason or '-'}\t"
+            f"runs={report.tool_runs} failed={report.failed_runs} "
+            f"artifacts={report.artifacts} wall={report.wall_seconds:.1f}s "
+            f"cost=${report.cost_usd:.4f}"
+        )
+        print(f"evidence-success\t{report.evidence_success}")
+    return 0 if report.evidence_success else 1
 
 
 def _handle_bench(args: argparse.Namespace, services: tuple[Any, ...]) -> int:

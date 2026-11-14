@@ -33,8 +33,8 @@ from samurai_ai.domain.bench import (
     BenchVerdict,
     judge,
 )
-from samurai_ai.domain.ctf import HypothesisStatus
 from samurai_ai.domain.graph import NodeKind, NodeState
+from samurai_ai.domain.hypotheses import hypothesis_coverage
 from samurai_ai.domain.permission import PermissionMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.graph import GraphService
@@ -338,6 +338,7 @@ class BenchRunner:
             ],
         )
         hypotheses = self.ctf.list_hypotheses(operation_id)
+        coverage = hypothesis_coverage(graph, hypotheses)
         goal = self.goals.current(operation_id)
         return BenchMetrics(
             wall_seconds=round(time.monotonic() - started, 3),
@@ -355,13 +356,9 @@ class BenchRunner:
             transport_failures=len(transport),
             chain_phase=phase.current,
             chain_index=phase.phases.index(phase.current) if phase.current in phase.phases else 0,
-            goal_reached=goal.state.value == "done" if goal is not None else False,
-            open_hypotheses=sum(
-                1 for item in hypotheses if item.status is HypothesisStatus.OPEN
-            ),
-            closed_hypotheses=sum(
-                1 for item in hypotheses if item.status is not HypothesisStatus.OPEN
-            ),
+            goal_reached=self.goals.reached(operation_id),
+            open_hypotheses=coverage.unfinished,
+            closed_hypotheses=coverage.closed,
             flags=len(self.ctf.list_flags(operation_id)),
             artifacts=len(graph),
         )
