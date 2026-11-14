@@ -13,11 +13,14 @@ from samurai_ai.domain.execution import ToolDefinition, ToolKind, ToolValidation
 from samurai_ai.domain.kernel import RiskClass
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.domain.tool_manifest import ToolManifest
+from samurai_ai.execution import native_sandbox
 from samurai_ai.execution.native import (
     MissingBinaryError,
     NativeTool,
+    NativeToolError,
     render_native_argv,
 )
+from samurai_ai.execution.process import ProcessResult
 
 SCOPE = ScopeContract(includes=("10.0.0.0/24",))
 
@@ -193,6 +196,49 @@ def test_the_recipe_and_adapter_schema_agree() -> None:
     assert recipes["scan.nmap"].executable == "nmap"
     assert recipes["scan.nmap"].limits.timeout_seconds >= 60
     json.dumps({name: recipe.model_dump(mode="json") for name, recipe in recipes.items()})
+
+
+class _RecordingRunner:
+    def __init__(self) -> None:
+        self.argv: list[str] = []
+
+    async def run(self, argv, **_kwargs):  # type: ignore[no-untyped-def]
+        self.argv = list(argv)
+        return ProcessResult(exit_code=0, stdout="ok", stderr="")
+
+
+def test_autonomous_native_tool_requires_bwrap(tmp_path: Path, monkeypatch) -> None:
+    binary = _fake_binary(tmp_path)
+    tool = NativeTool(
+        _recipe(tmp_path, ["-p", "{ports}", "{targets}"]),
+        _definition(),
+        runner=_RecordingRunner(),  # type: ignore[arg-type]
+        executable_path=binary,
+    )
+    tool.autonomy_required = True
+    tool.sandbox_roots = (str(tmp_path),)
+    monkeypatch.setattr(native_sandbox, "bwrap_available", lambda: False)
+
+    with pytest.raises(NativeToolError, match="unconfined native execution is refused"):
+        tool.invoke({"targets": ["10.0.0.5"], "ports": "80"}, SCOPE)
+
+
+def test_autonomous_native_tool_is_confined(tmp_path: Path, monkeypatch) -> None:
+    binary = _fake_binary(tmp_path)
+    runner = _RecordingRunner()
+    tool = NativeTool(
+        _recipe(tmp_path, ["-p", "{ports}", "{targets}"]),
+        _definition(),
+        runner=runner,  # type: ignore[arg-type]
+        executable_path=binary,
+    )
+    tool.autonomy_required = True
+    tool.sandbox_roots = (str(tmp_path),)
+    monkeypatch.setattr(native_sandbox, "bwrap_available", lambda: True)
+
+    tool.invoke({"targets": ["10.0.0.5"], "ports": "80"}, SCOPE)
+    assert runner.argv[0] == "bwrap"
+    assert binary in runner.argv and "10.0.0.5" in runner.argv
 
 
 def test_scope_and_approval_survive_the_native_path(tmp_path: Path) -> None:

@@ -109,6 +109,9 @@ class NativeTool:
         self._runner = runner
         self._path = executable_path
         self._script_dir = script_dir
+        #: trusted roots and the unattended flag are supplied per run by the service
+        self.sandbox_roots: tuple[str, ...] = ()
+        self.autonomy_required = False
 
     @property
     def definition(self) -> ToolDefinition:
@@ -140,7 +143,7 @@ class NativeTool:
 
     def _runner_manager(self) -> ProcessManager:
         if self._runner is None:
-            allowed = {self.recipe.executable}
+            allowed = {self.recipe.executable, "bwrap"}
             self._runner = ProcessManager(allowed_executables=frozenset(allowed))
         return self._runner
 
@@ -165,6 +168,19 @@ class NativeTool:
         argv = [executable, *render_native_argv(self.recipe, self._with_script(params))]
         if any("\x00" in argument for argument in argv):
             raise ToolValidationError(f"{self.recipe.id}: argv cannot contain NUL")
+        if self.autonomy_required:
+            from samurai_ai.execution.native_sandbox import build_bwrap_argv, bwrap_available
+
+            if not self.sandbox_roots:
+                raise NativeToolError(
+                    f"{self.recipe.id}: autonomous native execution needs a trusted root"
+                )
+            if not bwrap_available():
+                raise NativeToolError(
+                    f"{self.recipe.id}: autonomous production requires bubblewrap; "
+                    "unconfined native execution is refused (use Linux with bwrap)"
+                )
+            argv = build_bwrap_argv(argv, self.sandbox_roots, strict=False)
         result = asyncio.run(
             self._runner_manager().run(
                 argv,

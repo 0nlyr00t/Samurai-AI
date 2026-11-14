@@ -19,6 +19,7 @@ from samurai_ai.domain.bench import (
     BenchVerdict,
     judge,
 )
+from samurai_ai.execution import native_sandbox
 from samurai_ai.services.bench import (
     BenchRunner,
     history_directory,
@@ -79,6 +80,14 @@ def _stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-
     settings.set_value("model.default", "gpt/test-model@v1")
     provider = _IdleProvider()
     models.provider_factory = lambda _provider: provider
+    # These tests measure the chat/bench loop, not OS isolation. The dedicated
+    # autonomy tests prove refusal/wrapping; keep the fake shell unwrapped here.
+    monkeypatch.setattr(native_sandbox, "bwrap_available", lambda: True)
+    monkeypatch.setattr(
+        native_sandbox,
+        "build_bwrap_argv",
+        lambda argv, _roots, strict=False: argv,
+    )
     return services, provider
 
 

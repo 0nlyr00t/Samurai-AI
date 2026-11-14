@@ -17,6 +17,7 @@ from samurai_ai.config import sandbox_allowlist_path, vault_key_path
 from samurai_ai.domain.execution import (
     NetworkAccess,
     ToolDefinition,
+    ToolExecutionError,
     ToolKind,
     ToolNotFoundError,
     ToolValidationError,
@@ -390,6 +391,8 @@ class ShellExecTool:
         self.sandbox_mode = "off"
         #: directories a sandboxed command may write under (the trusted roots)
         self.sandbox_roots: tuple[str, ...] = ()
+        #: set by the execution service only for an unattended production run
+        self.autonomy_required = False
         self._definition = ToolDefinition(
             id="shell.exec",
             version=1,
@@ -437,10 +440,20 @@ class ShellExecTool:
                 bwrap_available,
             )
 
+            if self.autonomy_required and not bwrap_available():
+                raise ToolExecutionError(
+                    "autonomous production requires bubblewrap for shell.exec; "
+                    "unconfined host execution is refused (use Linux with bwrap)"
+                )
             if bwrap_available():
                 argv = build_bwrap_argv(
                     argv, self.sandbox_roots, strict=self.sandbox_mode == "strict"
                 )
+        elif self.autonomy_required:
+            raise ToolExecutionError(
+                "autonomous production requires shell sandbox mode write|strict "
+                "and at least one trusted root"
+            )
         result = asyncio.run(
             self.manager.run(
                 argv,

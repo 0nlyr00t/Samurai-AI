@@ -35,6 +35,18 @@
   `Database.backup()` (sqlite online backup) или копию файла при остановленном
   приложении.
 
+## Production autonomy и платформы
+
+Unattended режим (`agent.autonomy`, live bench, `--auto-approve`) имеет более
+строгую границу, чем development ASK. Reference platform — Linux с bubblewrap
+и/или Docker. `shell.exec` требует `sandbox write|strict` и trusted root; native
+recipe запускается под bwrap; remote driver без Docker требует bwrap. Если
+изоляции нет, запуск отклоняется с причиной вместо unconfined fallback. На macOS
+интерактивный ASK сохраняет прежние предупреждения, но unattended fallback без
+Docker/bwrap запрещён. Direct-network инструменты (nmap) по-прежнему проверяют
+scope только до spawn и не получают scoped egress audit; production readiness
+не утверждает обратное.
+
 ## Модели и провайдеры
 
 - Model id имеет формат `<provider>/<model>@v<N>`; регистрация модели без

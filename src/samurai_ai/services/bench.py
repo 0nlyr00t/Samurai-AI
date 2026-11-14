@@ -93,6 +93,9 @@ class BenchRunner:
             self.skills,  # 17
             *_rest,
         ) = services
+        # A live bench is unattended production evaluation, not development ASK:
+        # unconfined fallbacks must fail instead of producing a reassuring score.
+        self.execution.autonomy_policy = lambda: True
         self.graph = GraphService(
             self.operations, self.kernel, GraphRepository(self.operations.repository.database)
         )

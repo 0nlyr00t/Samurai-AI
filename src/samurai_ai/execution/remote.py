@@ -16,6 +16,7 @@ from typing import Any
 from samurai_ai.domain.execution import (
     NetworkAccess,
     ToolDefinition,
+    ToolExecutionError,
     ToolKind,
     ToolScopeError,
     ToolValidationError,
@@ -91,6 +92,7 @@ class _RemoteTool(_ScopedSandboxTool):
     profile_id = "sandbox.remote@v1"
     executable = "python3"
     default_port = 22
+    autonomy_required = False
 
     def _host_port(self, params: dict[str, Any]) -> tuple[str, int]:
         host = str(params["host"]).strip()
@@ -204,8 +206,13 @@ class _RemoteTool(_ScopedSandboxTool):
         When bubblewrap is absent too (e.g. macOS) the driver runs unconfined and
         the note says so.
         """
-        inner = [self.executable, *args]
         confined = bwrap_available()
+        if self.autonomy_required and not confined:
+            raise ToolExecutionError(
+                f"{self.definition.id}: autonomous production requires Docker or "
+                "bubblewrap; unconfined remote driver fallback is refused"
+            )
+        inner = [self.executable, *args]
         full = build_bwrap_argv(inner, (), strict=False) if confined else inner
         note = (
             "[native: docker unavailable — ran under bubblewrap, reduced isolation]"

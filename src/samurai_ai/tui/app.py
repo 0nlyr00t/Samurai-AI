@@ -796,6 +796,7 @@ class SamuraiApp(
         self._thread_id = threading.get_ident()
         # host shell.exec is confined to the trusted roots when bwrap is available
         self.execution.sandbox_policy = self._sandbox_policy
+        self.execution.autonomy_policy = self._autonomy_enabled
         self._apply_mouse()
         # a finished drag copies itself — the operator should never think
         # about *how* to copy; like Claude Code, selection IS the copy
@@ -1135,11 +1136,12 @@ class SamuraiApp(
         self.restore_focus()
 
     def _on_screen_selections(self) -> None:
-        """Selection changes during the drag; copy once it settles."""
-        timer = self._selection_copy_timer
-        if timer is not None:
-            timer.stop()
-        self._selection_copy_timer = self.set_timer(0.35, self._copy_settled_selection)
+        """Selection changes during the drag; auto-copy is disabled.
+
+        Use Ctrl+Shift+C (action_copy_selection) to copy explicitly — writing
+        to the clipboard on every drag overwrote the operator's clipboard.
+        """
+        return
 
     def _copy_settled_selection(self) -> None:
         self._selection_copy_timer = None

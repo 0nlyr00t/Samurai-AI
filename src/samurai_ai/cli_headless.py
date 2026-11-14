@@ -72,6 +72,8 @@ def handle_headless_command(args: argparse.Namespace, swarms: SwarmService) -> i
     reports: list[dict[str, Any]] = []
     done = 0
     failed = 0
+    if args.auto_approve:
+        swarms.orchestrator.execution.autonomy_policy = lambda: True
     while True:
         ready = swarms.ready_tasks(args.operation_id)
         if not ready:
