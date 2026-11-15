@@ -8025,6 +8025,25 @@ def test_clearing_the_chat_empties_the_gauge(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_a_cancelled_background_task_leaves_an_unobserved_result(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            cancelled: asyncio.Future[object] = asyncio.Future()
+            cancelled.cancel()
+            app._park(cancelled, "shell_exec: echo cancelled")
+            await pilot.pause()
+            assert app._background_results
+            assert "cancelled" in app._background_results[0].content
+            assert "outcome unobserved" in app._background_results[0].content
+
+    asyncio.run(exercise())
+
+
 def test_a_slow_command_goes_to_the_background_instead_of_holding_the_turn(
     tmp_path: Path,
 ) -> None:

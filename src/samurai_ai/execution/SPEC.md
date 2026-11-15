@@ -105,7 +105,8 @@ Explicit `agent_spawn` не завершает parent turn до handback: род
 result и продолжает тот же turn с фактическим status. Ручной `/subagent` не
 удерживает turn; auto-strategist по новым facts запускается до terminal verdict и
 использует тот же handback. Operator stop не блокируется ожиданием. Parked
-background tools аналогично дожидаются результатов и drain перед terminal verdict.
+background tools аналогично дожидаются результатов и drain перед terminal verdict;
+cancelled parked future оставляет `cancelled + outcome unobserved`, а не пустую очередь.
 
 Run завершается только после recovery/closing и проверки task/evidence. `repair_interrupted`
 не выполняет tools: он либо подтверждает уже достигнутый task, либо завершает run
