@@ -135,6 +135,7 @@ def parse_completion(
         model_id=model_id,
         provider_id=provider_id,
         latency_ms=latency_ms,
+        stop_reason=str(choices[0].get("finish_reason") or ""),
     )
 
 

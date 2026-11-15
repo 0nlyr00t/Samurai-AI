@@ -40,6 +40,8 @@ class ToolOutput:
     stderr: str
     exit_code: int
     timed_out: bool = False
+    #: the remote outcome could not be observed; retry requires reconciliation
+    unknown: bool = False
     secrets: tuple[str, ...] = ()
     egress_events: tuple[dict[str, Any], ...] = ()
     #: request/response pairs the service records as evidence (research reads)
@@ -647,6 +649,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
         ResearchSearchTool,
         SubfinderPassiveTool,
     )
+    from samurai_ai.execution.session_tools import SessionControlTool
     from samurai_ai.execution.virtualization import VmControlTool, VmDiskTool
 
     registry = ToolRegistry(
@@ -670,6 +673,7 @@ def default_registry(dynamic_resolver: DynamicToolResolver | None = None) -> Too
             RdpCheckTool(),
             RdpAuthTool(),
             RdpExecTool(),
+            SessionControlTool(),
             AdbTool(),
             VmControlTool(),
             VmDiskTool(),

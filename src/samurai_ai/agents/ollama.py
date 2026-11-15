@@ -147,6 +147,7 @@ def parse_chat_response(
         model_id=model_id,
         provider_id="ollama",
         latency_ms=latency_ms,
+        stop_reason=str(payload.get("done_reason") or ""),
     )
 
 

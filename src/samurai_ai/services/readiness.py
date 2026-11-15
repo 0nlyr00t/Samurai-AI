@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from samurai_ai.domain.execution import ToolRunStatus
 from samurai_ai.domain.hypotheses import hypothesis_coverage
 
 
@@ -90,7 +91,10 @@ class ReadinessService:
             terminal_reason=terminal,
             model_calls=len(calls),
             tool_runs=len(runs),
-            failed_runs=sum(run.exit_code not in (0, None) for run in runs),
+            failed_runs=sum(
+                run.exit_code not in (0, None) or run.status is ToolRunStatus.UNKNOWN
+                for run in runs
+            ),
             artifacts=len(self.kernel.kernel.list_artifacts(operation_id)),
             approvals_requested=sum(
                 event.event_type == "approval.requested" for event in events

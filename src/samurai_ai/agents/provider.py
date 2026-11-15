@@ -90,6 +90,8 @@ class ChatResponse(BaseModel):
     latency_ms: int = 0
     #: reasoning the provider streamed separately from the answer, when it does
     reasoning: str = ""
+    #: provider stop reason; `length` blocks execution of possibly truncated calls
+    stop_reason: str = ""
 
 
 class ModelProvider(Protocol):

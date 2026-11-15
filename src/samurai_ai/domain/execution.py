@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -60,6 +60,7 @@ class ToolRunStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
+    UNKNOWN = "unknown"
 
 
 class OutputTrust(StrEnum):
@@ -100,6 +101,8 @@ class ToolDefinition(BaseModel):
     #: Plan mode admits read-only calls only, so this flag is the gate — and it
     #: must stay honest, hence the risk-class coupling checked by the registry.
     read_only: bool = False
+    #: independent read-only calls may run in parallel; stateful tools are sequential
+    execution_mode: Literal["parallel", "sequential"] = "parallel"
     network: NetworkAccess = NetworkAccess.NONE
     timeout_seconds: int = Field(default=30, ge=1)
     output_limit_bytes: int = Field(default=65536, ge=1)
@@ -200,6 +203,13 @@ class ToolRun(BaseModel):
         self.finished_at = datetime.now(UTC)
         self.version += 1
 
+    def mark_unknown(self, *, exit_code: int | None = None) -> None:
+        self._require_running(ToolRunStatus.UNKNOWN)
+        self.status = ToolRunStatus.UNKNOWN
+        self.exit_code = exit_code
+        self.finished_at = datetime.now(UTC)
+        self.version += 1
+
     def _require_running(self, target: ToolRunStatus) -> None:
         if self.status != ToolRunStatus.RUNNING:
             raise ToolStateError(
@@ -259,6 +269,10 @@ class SecretRedactor:
         re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
         re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}"),
         re.compile(r"(?i)(api[_-]?key|secret|token|password|passwd)(\s*[:=]\s*)\S+"),
+        re.compile(
+            r'(?i)(["\']?(?:api[_-]?key|secret|token|password|passwd|csrf|credential|private[_-]?key)'
+            r'[a-z0-9_-]*["\']?\s*[:=]\s*)(["\']?)([^\s,"}\]]+)'
+        ),
     )
     PLACEHOLDER: ClassVar[str] = "***REDACTED***"
 

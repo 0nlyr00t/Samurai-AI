@@ -55,6 +55,19 @@ def test_stdin_data_reaches_the_child_and_closes() -> None:
     assert result.stdout.splitlines() == ["example.com", "www.example.com"]
 
 
+def test_interactive_write_supports_keep_open_stdin_and_eof() -> None:
+    manager = ProcessManager(allowed_executables=frozenset({"cat"}))
+
+    async def exercise() -> None:
+        handle = await manager.start(("cat",), keep_stdin_open=True)
+        await manager.write(handle.id, b"first\n")
+        await manager.write(handle.id, b"second\n", eof=True)
+        result = await manager.wait(handle.id, timeout_seconds=2)
+        assert result.stdout.splitlines() == ["first", "second"]
+
+    asyncio.run(exercise())
+
+
 def test_stdin_without_data_is_devnull() -> None:
     manager = ProcessManager(allowed_executables=frozenset({"cat"}))
     result = asyncio.run(manager.run(("cat",)))

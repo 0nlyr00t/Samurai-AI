@@ -117,6 +117,23 @@ class ProcessManager:
         text = data.decode("utf-8", errors="replace")
         return text[-limit:]
 
+    async def write(self, handle_id: str, data: bytes, *, eof: bool = False) -> None:
+        """Write to a running interactive process, optionally closing its stdin."""
+        self._validate_stdin(data)
+        entry = self._running.get(handle_id)
+        if entry is None:
+            raise ProcessNotFoundError(f"process not found: {handle_id}")
+        stream = entry.process.stdin
+        if stream is None or stream.is_closing():
+            raise ToolExecutionError(f"process {handle_id} stdin is closed")
+        try:
+            stream.write(data)
+            await stream.drain()
+            if eof:
+                stream.close()
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            raise ToolExecutionError(f"process {handle_id} stdin is unavailable") from exc
+
     def collect(self, handle_id: str) -> ProcessResult:
         """The finished result, kept after `wait` so an attach does not re-run."""
         result = self._collected.get(handle_id)
@@ -152,6 +169,7 @@ class ProcessManager:
         env: Mapping[str, str] | None = None,
         stdin_data: bytes | None = None,
         inherit_env: bool = True,
+        keep_stdin_open: bool = False,
     ) -> ManagedProcess:
         arguments = tuple(argv)
         self._validate_argv(arguments)
@@ -168,7 +186,7 @@ class ProcessManager:
                 *arguments,
                 stdin=(
                     asyncio.subprocess.PIPE
-                    if stdin_data is not None
+                    if stdin_data is not None or keep_stdin_open
                     else asyncio.subprocess.DEVNULL
                 ),
                 stdout=asyncio.subprocess.PIPE,
@@ -184,7 +202,8 @@ class ProcessManager:
             # deadlock-free and the child sees EOF immediately afterwards.
             process.stdin.write(stdin_data)
             await process.stdin.drain()
-            process.stdin.close()
+            if not keep_stdin_open:
+                process.stdin.close()
         handle = ManagedProcess(
             id=f"proc_{uuid4().hex[:12]}",
             argv=arguments,

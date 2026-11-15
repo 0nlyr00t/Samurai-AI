@@ -111,7 +111,10 @@ class ToolExecutionService:
         """
         candidate = canonical_command(self.redactor.redact(command).text)
         for run in reversed(self.runs.list_runs(operation_id)):
-            if run.tool_id != tool_id or run.status is not ToolRunStatus.TIMEOUT:
+            if run.tool_id != tool_id or run.status not in (
+                ToolRunStatus.TIMEOUT,
+                ToolRunStatus.UNKNOWN,
+            ):
                 continue
             previous = str(run.parameters.get("command", ""))
             if previous and canonical_command(previous) == candidate:
@@ -263,6 +266,7 @@ class ToolExecutionService:
 
         try:
             resolved["_run_id"] = run.id
+            resolved["_operation_id"] = operation_id
             output = adapter.invoke(resolved, operation.scope)
         except ToolExecutionError:
             self._fail_run(run, action.id)
@@ -388,7 +392,14 @@ class ToolExecutionService:
         if stderr_artifact_id is not None:
             artifact_ids.append(stderr_artifact_id)
 
-        if output.timed_out:
+        if output.unknown:
+            run.mark_unknown(exit_code=output.exit_code)
+            run.redaction_count = redaction_count
+            run.injection_warnings = warnings
+            run.stdout_artifact_id = stdout_artifact_id
+            run.stderr_artifact_id = stderr_artifact_id
+            event_type = "tool.run.unknown"
+        elif output.timed_out:
             run.mark_timeout(exit_code=output.exit_code)
             run.redaction_count = redaction_count
             run.injection_warnings = warnings

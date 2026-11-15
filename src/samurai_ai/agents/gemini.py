@@ -121,6 +121,7 @@ def parse_generate_content_response(
         model_id=model_id,
         provider_id=provider_id,
         latency_ms=latency_ms,
+        stop_reason=str(candidates[0].get("finishReason") or ""),
     )
 
 

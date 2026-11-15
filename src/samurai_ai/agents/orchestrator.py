@@ -18,6 +18,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, TypeVar
 
 from samurai_ai.agents.blackboard import Blackboard, make_note_event
@@ -102,6 +103,18 @@ SITE_STOP = 14
 _SITE_KEYS = ("targets", "target", "host", "url", "path", "port", "asset")
 #: a run cannot outlive this, whatever the steps do (overridable per call)
 DEFAULT_MAX_WALL_SECONDS = 900.0
+
+
+def _ensure_complete_tool_calls(
+    commands: tuple[AgentCommand, ...], stop_reason: str
+) -> None:
+    """A truncated model response must never execute a damaged tool call."""
+    if stop_reason == "length" and any(
+        isinstance(command, RequestToolRunCommand) for command in commands
+    ):
+        raise AgentOutputError(
+            "model output was truncated before tool execution; re-issue complete commands"
+        )
 
 
 _OVERFLOW_MARKERS = (
@@ -315,6 +328,7 @@ class AgentOrchestrator:
         self._missing_binary: set[tuple[str, str]] = set()
         #: (operation, task) pairs this harness blocked after the closing attempts
         self._blocked_by_closing: set[tuple[str, str]] = set()
+        self._stop_reasons: dict[str, str] = {}
         #: set by the host so a surfaced question can reach the operator
         self.question_notice: Callable[[str], None] | None = None
 
@@ -545,6 +559,28 @@ class AgentOrchestrator:
             elif event.event_type == "agent.step" and payload.get("step") == "finding-proposed":
                 produced = True
         return produced, invalid
+
+    def repair_interrupted(self, run_id: str) -> AgentRun | None:
+        """Settle an interrupted run without replaying any tool or remote action."""
+        run = self.get_run(run_id)
+        if run.status is not AgentRunStatus.RUNNING:
+            return None
+        if self._task_status(run.operation_id, run.task_id) is TaskStatus.DONE:
+            self._settle_run(run.operation_id, run, 0, run.workspace, ())
+        else:
+            self._finish_failed(
+                run,
+                AgentRunStatus.FAILED,
+                "interrupted before settlement; start a new run instead of replaying",
+            )
+        self._append_event(
+            OperationEvent(
+                operation_id=run.operation_id,
+                event_type="agent.run.repaired",
+                payload={"run_id": run.id, "status": run.status.value},
+            )
+        )
+        return self.get_run(run.id)
 
     def resume(self, run_id: str) -> AgentRun | None:
         """Pick an interrupted run up from its last checkpoint.
@@ -813,6 +849,19 @@ class AgentOrchestrator:
         repeat_notes: list[str] | None = None,
         sites: SiteWindow | None = None,
     ) -> tuple[list[str], int]:
+        if self._parallel_read_only_batch(commands, read_only_only=read_only_only):
+            return self._run_parallel_commands(
+                operation_id,
+                run,
+                commands,
+                consecutive_rejects,
+                read_only_only=read_only_only,
+                approval_resolver=approval_resolver,
+                stop_event=stop_event,
+                repeat_counts=repeat_counts,
+                repeat_notes=repeat_notes,
+                sites=sites,
+            )
         rejects: list[str] = []
         applied = 0
         for command in commands:
@@ -850,6 +899,76 @@ class AgentOrchestrator:
             # a step that got something done does not need re-asking
             return [], consecutive_rejects
         return rejects, consecutive_rejects
+
+    def _parallel_read_only_batch(
+        self, commands: tuple[AgentCommand, ...], *, read_only_only: bool
+    ) -> bool:
+        if not read_only_only or len(commands) < 2:
+            return False
+        if not all(isinstance(command, RequestToolRunCommand) for command in commands):
+            return False
+        tool_commands = [
+            command for command in commands if isinstance(command, RequestToolRunCommand)
+        ]
+        try:
+            definitions = [
+                self.execution.registry.get(command.tool_id).definition
+                for command in tool_commands
+            ]
+        except Exception:  # noqa: BLE001 - unknown tools use the normal refusal path
+            return False
+        return all(
+            definition.read_only and definition.execution_mode != "sequential"
+            for definition in definitions
+        )
+
+    def _run_parallel_commands(
+        self,
+        operation_id: str,
+        run: AgentRun,
+        commands: tuple[AgentCommand, ...],
+        consecutive_rejects: int,
+        *,
+        read_only_only: bool,
+        approval_resolver: Callable[[str], bool] | None,
+        stop_event: threading.Event | None,
+        repeat_counts: dict[str, int] | None,
+        repeat_notes: list[str] | None,
+        sites: SiteWindow | None,
+    ) -> tuple[list[str], int]:
+        """Run an independent read-only batch concurrently, preserving result order."""
+        rejects: list[str] = []
+        applied = 0
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(
+                    self._apply_command,
+                    operation_id,
+                    run,
+                    command,
+                    read_only_only=read_only_only,
+                    approval_resolver=approval_resolver,
+                    stop_event=stop_event,
+                )
+                for command in commands
+            ]
+            reasons = [future.result() for future in futures]
+        for command, reason in zip(commands, reasons, strict=True):
+            if reason is None:
+                consecutive_rejects = 0
+                applied += 1
+                if sites is not None and isinstance(command, RequestToolRunCommand):
+                    self._note_site(run, command, sites, repeat_notes)
+                continue
+            rejects.append(reason)
+            if approval_resolver is not None and reason.startswith("approval-required"):
+                continue
+            consecutive_rejects += 1
+            if consecutive_rejects > MAX_CONSECUTIVE_REJECTS:
+                raise AgentError(
+                    f"too many consecutive rejected commands (>{MAX_CONSECUTIVE_REJECTS})"
+                )
+        return ([], consecutive_rejects) if applied else (rejects, consecutive_rejects)
 
     def _note_site(
         self,
@@ -1053,6 +1172,7 @@ class AgentOrchestrator:
             stop_event=stop_event,
             rebuild=build,
         )
+        _ensure_complete_tool_calls(commands, self._stop_reasons.get(run.id, ""))
         self._append(
             operation_id,
             "agent.step",
@@ -1120,6 +1240,9 @@ class AgentOrchestrator:
                 )
                 continue
             try:
+                if not hasattr(self, "_stop_reasons"):
+                    self._stop_reasons = {}
+                self._stop_reasons[run.id] = getattr(response, "stop_reason", "") or ""
                 return parse(response.text)
             except AgentOutputError as exc:
                 if attempt == MAX_PARSE_RETRIES:
@@ -1181,6 +1304,10 @@ class AgentOrchestrator:
             if isinstance(command, RequestToolProvisionCommand):
                 self._command_tool_provision(operation_id, run, command)
             elif isinstance(command, RequestToolRunCommand):
+                if run.parent_run_id is not None and self._privileged_child_tool(command.tool_id):
+                    reason = "privileged execution belongs to the parent agent"
+                    self._reject(operation_id, run, command, reason)
+                    return reason
                 if read_only_only and not self._is_read_only(command.tool_id):
                     reason = "plan mode allows read-only tool calls only"
                     self._reject(operation_id, run, command, reason)
@@ -1233,6 +1360,11 @@ class AgentOrchestrator:
             self._reject(operation_id, run, command, str(exc))
             return str(exc)
         return None
+
+    def _privileged_child_tool(self, tool_id: str) -> bool:
+        """Children receive results, not authority over privileged remote sessions."""
+        definition = self.execution.registry.get(tool_id).definition
+        return bool({"admin", "sessions", "c2"} & set(definition.capabilities))
 
     def _note_missing_finding(self, operation_id: str, run: AgentRun) -> None:
         """A closed task with no finding is the quiet way to end up empty-handed."""
