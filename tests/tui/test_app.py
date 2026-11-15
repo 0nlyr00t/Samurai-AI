@@ -887,6 +887,51 @@ def test_loot_tab_shows_findings_creds_and_flags(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_loot_entries_open_full_details_and_copy_their_value(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens.inspector import InspectorScreen
+
+    stack = _minimal_stack(tmp_path)
+    service, settings, vault, ctf = stack[0], stack[2], stack[5], stack[10]
+    settings.set_locale("en")
+    operation = service.create(
+        "Loot details", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    vault.add("admin-password", "hunter2", operation.id)
+    ctf.ctf.add_flag(
+        FlagRecord(operation_id=operation.id, name="user", value="HTB{l00t}"),
+        OperationEvent(operation_id=operation.id, event_type="flag.captured", payload={}),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        copied: list[str] = []
+        app._copy_text = lambda text, _message: copied.append(text)  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            assert "hunter2" not in "\n".join(
+                str(line) for line in app._loot_lines()
+            )
+
+            app.action_inspect("secret", "admin-password")
+            await pilot.pause()
+            assert isinstance(app.screen, InspectorScreen)
+            details = "\n".join(str(node.render()) for node in app.screen.query(Static))
+            assert "admin-password" in details and "hunter2" in details
+            await pilot.press("c")
+            await pilot.pause()
+            assert copied == ["hunter2"]
+            assert not isinstance(app.screen, InspectorScreen)
+
+            app.action_inspect("flag", ctf.list_flags(operation.id)[0].id)
+            await pilot.pause()
+            assert isinstance(app.screen, InspectorScreen)
+            await pilot.press("c")
+            await pilot.pause()
+            assert copied == ["hunter2", "HTB{l00t}"]
+
+    asyncio.run(exercise())
+
+
 def test_command_suggestions(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")

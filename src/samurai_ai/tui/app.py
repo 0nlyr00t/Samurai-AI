@@ -1995,7 +1995,8 @@ class SamuraiApp(
                 Text(self.translator.t("status.no-operation"), style=self.paint(self._DIM_STYLE))
             ]
         lines: list[str | Text] = [
-            Text(self.translator.t("loot.findings"), style=self.paint("bold $accent-alt"))
+            Text(self.translator.t("loot.findings"), style=self.paint("bold $accent-alt")),
+            Text(self.translator.t("loot.interaction"), style=self.paint(self._DIM_STYLE)),
         ]
         lines.extend(self._finding_lines())
         lines.append(Text(self.translator.t("loot.creds"), style=self.paint("bold $accent")))
@@ -2013,7 +2014,9 @@ class SamuraiApp(
             lines.append(
                 Text.assemble(
                     ("[secret] ", self.paint("text-faint")),
-                    (meta.name, self.paint("bold $text")),
+                    entity_span(
+                        meta.name, "secret", meta.name, base_style=self.paint("bold $text")
+                    ),
                     (f" | {meta.created_at.strftime('%H:%M')}{used}", self.paint("$text-dim")),
                 )
             )
@@ -2027,7 +2030,9 @@ class SamuraiApp(
             lines.append(
                 Text.assemble(
                     ("[flag] ", self.paint("success")),
-                    (flag.value, self.paint("bold $text")),
+                    entity_span(
+                        flag.value, "flag", flag.id, base_style=self.paint("bold $text")
+                    ),
                     (f" | {flag.created_at.strftime('%H:%M')}", self.paint("$text-dim")),
                 )
             )
@@ -2799,6 +2804,9 @@ class SamuraiApp(
         if kind == "phase":
             self._open_phase_board(ref)
             return
+        if kind in {"secret", "flag"}:
+            self._inspect_full(kind, ref)
+            return
         summary = self._inspect_summary(kind, ref)
         if summary is None:
             self._write_dim(self.translator.t("inspect.unknown", kind=kind, ref=ref))
@@ -2971,12 +2979,83 @@ class SamuraiApp(
         if kind == "finding":
             self._show_finding_detail(ref)
             return
+        if kind in {"secret", "flag"}:
+            detail = self._loot_detail(kind, ref)
+            if detail is None:
+                self._write_dim(self.translator.t("inspect.unknown", kind=kind, ref=ref))
+                return
+            title, body, copy_text = detail
+            actions: dict[str, object] = {
+                "c": lambda: self._copy_text(
+                    copy_text, self.translator.t("loot.copy")
+                )
+            }
+            self.push_screen(
+                InspectorScreen(self.translator, title, body, actions)  # type: ignore[arg-type]
+            )
+            return
         sections = self._inspect_sections(kind, ref)
         if sections is None:
             self._write_dim(self.translator.t("inspect.unknown", kind=kind, ref=ref))
             return
         title, body = sections
         self.push_screen(InspectorScreen(self.translator, title, body, {}))
+
+    def _loot_detail(
+        self, kind: str, ref: str
+    ) -> tuple[str, list[Section], str] | None:
+        """Full LOOT value for an explicit detail view, never for the list."""
+        if self.operation is None:
+            return None
+        if kind == "secret":
+            metadata = next(
+                (
+                    item
+                    for item in self.vault.list_metadata(self.operation.id)
+                    if item.name == ref and not self._is_service_key(item.name)
+                ),
+                None,
+            )
+            if metadata is None:
+                return None
+            value = self.vault.get(ref, self.operation.id)
+            used = self.translator.t("loot.used") if self._secret_used(ref) else "—"
+            meta = [
+                f"name: {metadata.name}",
+                f"created: {metadata.created_at:%Y-%m-%d %H:%M:%S}",
+                f"by: {metadata.created_by}",
+                f"status: {used}",
+            ]
+            return (
+                metadata.name,
+                [
+                    (self.translator.t("inspect.meta"), meta),
+                    (self.translator.t("inspect.content"), value.splitlines() or [""]),
+                ],
+                value,
+            )
+        if kind == "flag":
+            flag = next(
+                (item for item in self.ctf.list_flags(self.operation.id) if item.id == ref),
+                None,
+            )
+            if flag is None:
+                return None
+            meta = [
+                f"name: {flag.name}",
+                f"captured: {flag.created_at:%Y-%m-%d %H:%M:%S}",
+                f"by: {flag.submitted_by}",
+                f"proof: {flag.proof_artifact_id or '—'}",
+            ]
+            return (
+                f"{flag.name} · {flag.id}",
+                [
+                    (self.translator.t("inspect.meta"), meta),
+                    (self.translator.t("inspect.content"), flag.value.splitlines()),
+                ],
+                flag.value,
+            )
+        return None
 
     def _inspect_sections(self, kind: str, ref: str) -> tuple[str, list[Section]] | None:
         if kind == "artifact":
