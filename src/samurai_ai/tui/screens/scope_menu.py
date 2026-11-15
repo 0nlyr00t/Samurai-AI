@@ -42,21 +42,30 @@ class ScopeMenuScreen(ModalScreen[str | None]):
         color: $accent;
         padding-bottom: 1;
     }
+    #scopemenu-rationale {
+        color: $text-dim;
+        padding-bottom: 1;
+    }
     #scopemenu-list {
         height: auto;
         background: $panel;
     }
     """
 
-    def __init__(self, translator: Translator, rule: str, *, excluded: bool) -> None:
+    def __init__(
+        self, translator: Translator, rule: str, *, excluded: bool, rationale: str = ""
+    ) -> None:
         super().__init__()
         self.translator = translator
         self.rule = rule
         self.excluded = excluded
+        self.rationale = rationale
 
     def compose(self) -> ComposeResult:
         with Vertical(id="scopemenu-dialog"):
             yield Static(self.rule, id="scopemenu-title")
+            if self.rationale:
+                yield Static(self.rationale, id="scopemenu-rationale")
             toggle_key = "scope.menu-restore" if self.excluded else "scope.menu-exclude"
             yield OptionList(
                 Option(self.translator.t(toggle_key), id=TOGGLE),
