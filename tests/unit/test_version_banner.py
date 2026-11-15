@@ -8,6 +8,12 @@ from samurai_ai import __version__
 from samurai_ai.cli import build_parser, print_version_banner
 
 
+def test_version_matches_installed_distribution() -> None:
+    from importlib.metadata import version
+
+    assert __version__ == version("samurai-ai")
+
+
 def test_version_banner_prints_the_name_and_the_version(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

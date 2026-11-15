@@ -79,7 +79,9 @@ IP/domain include покрывает HTTP(S) URL на любом валидно�
 target перед parsing. Literal `NAME=value`/`export NAME=value` подставляется в
 host/port, включая nested shell; unknown variables остаются fail-closed. Data-only
 `echo`/`printf`/`cat`/`tee` payload не является destination, а nested `bash -c`
-проверяется. Parameter suffix удаляется только при неизменном host.
+проверяется. Parameter suffix удаляется только при неизменном host. Variable
+refusal объясняет, что assignments живут в одном shell call, а variable port
+записывается как `:$PORT`; malformed target не превращается в scope widening.
 
 ## RDP
 

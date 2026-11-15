@@ -64,6 +64,11 @@ class ScopeGuardError(ToolScopeError):
     def __init__(self, literal: str, parameter: str, detail: str) -> None:
         self.literal = literal
         self.parameter = parameter
+        if "$" in literal:
+            detail = (
+                f"{detail}; assign variables in the same shell call and use "
+                ":$PORT for a variable port"
+            )
         self.detail = detail
         super().__init__(
             f"{literal!r} (parameter {parameter!r}) is outside the operation scope: {detail}"
