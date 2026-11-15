@@ -289,7 +289,9 @@ class Provisioner:
         resolution = resolver.resolve(tool_id, recipe)
         if resolution.reason is not ProvisionReason.INSTALLED:
             return None
-        if not resolution.path:
+        if not resolution.path or resolution.path == "docker":
+            # A usable container runtime says nothing about the native binary
+            # named by this plan's healthcheck.
             return None
         output, healthy = self._healthcheck(
             ProvisionPlan(
