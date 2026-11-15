@@ -16,8 +16,13 @@ from uuid import uuid4
 
 STATE_RUNNING = "running"
 STATE_DONE = "done"
+STATE_PARTIAL = "partial"
 STATE_CANCELLED = "cancelled"
 STATE_FAILED = "failed"
+
+#: how the work callable's own verdict lands on the handle: a run whose tasks did
+#: not all land must not report the daemon-level `done`, or a client reads success
+_OUTCOME_STATES = {"partial": STATE_PARTIAL, "failed": STATE_FAILED}
 
 
 class RunBusy(RuntimeError):
@@ -101,7 +106,7 @@ class RunRegistry:
 
     async def _supervise(self, handle: RunHandle) -> None:
         try:
-            await self.work(handle)
+            outcome = await self.work(handle)
         except asyncio.CancelledError:  # pragma: no cover - shutdown
             handle.state = STATE_CANCELLED
             handle.detail = "daemon stopped"
@@ -110,7 +115,10 @@ class RunRegistry:
             handle.state = STATE_FAILED
             handle.detail = str(exc)
         else:
-            handle.state = STATE_DONE if not handle.stop_event.is_set() else STATE_CANCELLED
+            state = _OUTCOME_STATES.get(getattr(outcome, "value", ""), STATE_DONE)
+            handle.state = state if not handle.stop_event.is_set() else STATE_CANCELLED
+            if state != STATE_DONE and handle.state == state:
+                handle.detail = f"run finished {state}"
         finally:
             if handle.stop_event.is_set() and handle.state == STATE_DONE:
                 handle.state = STATE_CANCELLED
