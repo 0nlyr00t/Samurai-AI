@@ -3368,6 +3368,14 @@ class ChatController:
         def _deliver(done: asyncio.Future[Any]) -> None:
             try:
                 result, approval_id = done.result()
+            except asyncio.CancelledError:
+                self._background_results.append(
+                    Message(
+                        role="user",
+                        content=f"[tool {label}] cancelled; outcome unobserved",
+                    )
+                )
+                return
             except ToolScopeError as exc:
                 journal = self.query_one("#journal", BlockJournal)
                 journal.write(Text(f"[scope] {exc}", style=self.paint("accent")))
