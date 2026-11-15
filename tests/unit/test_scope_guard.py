@@ -118,8 +118,10 @@ def test_literal_shell_variables_resolve_without_widening_scope() -> None:
     guard(SCOPE, {"command": "IP=10.10.0.5; bash -c 'curl https://$IP:8443'"})
     with pytest.raises(ScopeGuardError, match="outside.example.org"):
         guard(SCOPE, {"command": "IP=outside.example.org; curl -s https://$IP:8443"})
-    with pytest.raises(ScopeGuardError):
+    with pytest.raises(ScopeGuardError, match="same shell call"):
         guard(SCOPE, {"command": "curl -s https://$UNKNOWN:8443"})
+    with pytest.raises(ScopeGuardError, match=r":\$PORT"):
+        guard(SCOPE, {"command": "curl -s http://10.10.0.5$p"})
 
 
 def test_key_value_flags_are_judged_by_the_value() -> None:
