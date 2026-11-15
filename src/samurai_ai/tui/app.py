@@ -73,6 +73,7 @@ from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.killchain import KillchainService, PhaseOverrideError  # noqa: I001
 from samurai_ai.services.learned_skills import LearnedSkillService
 from samurai_ai.services.lessons import LessonService
+from samurai_ai.services.loot import LootExportService, default_loot_root
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
@@ -343,6 +344,7 @@ class SamuraiApp(
         "tab-hunt": "view-hunt",
         "tab-scope": "view-scope",
         "tab-loot": "view-loot",
+        "tab-swarm": "view-swarm",
     }
     _TAB_BY_VIEW = {pane: tab for tab, pane in _VIEW_BY_TAB.items()}
 
@@ -461,6 +463,15 @@ class SamuraiApp(
         self._history_index: int | None = None
         self._history_draft = ""
         self._cwd = Path.cwd().resolve()
+        self.loot_export = LootExportService(
+            kernel,
+            vault,
+            ctf,
+            default_loot_root(self._cwd),
+            service_key=self._is_service_key,
+        )
+        self._loot_exported_signature = ""
+        self._loot_export_error = ""
         self._session_trusted: set[str] = set()
         self._dir_trusted: bool | None = None
         self._last_ai_text: str | None = None
@@ -757,6 +768,7 @@ class SamuraiApp(
                 Tab(self.translator.t("tabs.hunt"), id="tab-hunt"),
                 Tab(self.translator.t("tabs.scope"), id="tab-scope"),
                 Tab(self.translator.t("tabs.loot"), id="tab-loot"),
+                Tab(self.translator.t("tabs.swarm"), id="tab-swarm"),
                 id="view-tabs",
                 active="",
             )
@@ -775,6 +787,7 @@ class SamuraiApp(
                 yield BlockJournal(id="view-hunt")
                 yield ScopeList(id="view-scope")
                 yield BlockJournal(id="view-loot")
+                yield BlockJournal(id="view-swarm")
             with Vertical(id="side"):
                 yield Static(id="side-workspace")
                 yield Static(id="side-swarm")
@@ -860,6 +873,7 @@ class SamuraiApp(
             ("tab-hunt", "tabs.hunt"),
             ("tab-scope", "tabs.scope"),
             ("tab-loot", "tabs.loot"),
+            ("tab-swarm", "tabs.swarm"),
         ):
             tab = tabs.query_one(f"#{tab_id}", Tab)
             tab.label = self.translator.t(key)
@@ -1241,6 +1255,7 @@ class SamuraiApp(
             ("journal", "tab-chat"), ("view-ops", "tab-ops"),
             ("view-bounty", "tab-bounty"), ("view-hunt", "tab-hunt"),
             ("view-scope", "tab-scope"), ("view-loot", "tab-loot"),
+            ("view-swarm", "tab-swarm"),
         ) if pane == "journal" or self.query_one(f"#{tab}", Tab).display]
         current = self.query_one("#views", ContentSwitcher).current or "journal"
         index = panes.index(current) if current in panes else 0
@@ -1690,6 +1705,8 @@ class SamuraiApp(
             return self._hunt_lines()
         if pane == "view-loot":
             return self._loot_lines()
+        if pane == "view-swarm":
+            return self._swarm_lines(self.child_runs())
         return []
 
     def _toggle_scope_rule(self, rule: str) -> None:
@@ -4315,6 +4332,16 @@ class SamuraiApp(
     def _refresh_swarm_panel(self) -> None:
         """Every running member of the current swarm: task, tool, last note."""
         panel = self.query_one("#side-swarm", Static)
+        children = self.child_runs()
+        self.query_one("#tab-swarm", Tab).display = bool(children)
+        if not children:
+            if self.query_one("#views", ContentSwitcher).current == "view-swarm":
+                self.query_one("#views", ContentSwitcher).current = "journal"
+                self.query_one("#view-tabs", Tabs).active = "tab-chat"
+        else:
+            self.query_one("#view-swarm", BlockJournal).set_lines(
+                self._swarm_lines(children)
+            )
         if self.operation is None:
             panel.update("")
             return
@@ -4333,6 +4360,41 @@ class SamuraiApp(
                 lines.append(f"  {tool.strip()}", style=self.paint("dim text-faint"))
             lines.append("\n")
         panel.update(lines)
+
+    def _swarm_lines(self, runs: list[AgentRun]) -> list[str | Text]:
+        """Live and finished child sessions behind the dynamic SWARM tab."""
+        active = sum(run.status is AgentRunStatus.RUNNING for run in runs)
+        lines: list[str | Text] = [
+            Text(
+                self.translator.t("swarm.title", active=active, total=len(runs)),
+                style=self.paint("bold $accent-alt"),
+            ),
+            Text(self.translator.t("swarm.interaction"), style=self.paint(self._DIM_STYLE)),
+        ]
+        notes: dict[str, str] = {}
+        if self.operation is not None:
+            for event in self.service.events(self.operation.id):
+                if event.event_type != "agent.note":
+                    continue
+                run_id = str(event.payload.get("run_id", ""))
+                notes[run_id] = (
+                    f"{event.payload.get('key')}={str(event.payload.get('value'))[:160]}"
+                )
+        for run in runs:
+            running = run.status is AgentRunStatus.RUNNING
+            lines.append(
+                Text.assemble(
+                    ("▶ " if running else "· ", self.paint("risk-mid")),
+                    entity_span(run.id, "agent", run.id, base_style=self.paint("accent")),
+                    (
+                        f" | {run.status.value} | {run.specialization.value} | {run.task_id}",
+                        self.paint("text"),
+                    ),
+                )
+            )
+            if notes.get(run.id):
+                lines.append(Text(f"  {notes[run.id]}", style=self.paint(self._DIM_STYLE)))
+        return lines
 
     def _is_service_key(self, name: str) -> bool:
         """Provider and tool keys belong to settings, not to LOOT."""
@@ -4419,6 +4481,26 @@ class SamuraiApp(
                 style=self.paint("accent"),
             )
         loot_block.update(secrets)
+        self._export_loot_files()
+
+    def _export_loot_files(self) -> None:
+        """Refresh the private on-disk snapshot only when LOOT changed."""
+        if self.operation is None:
+            return
+        self.loot_export.root = default_loot_root(self._cwd)
+        signature = self.loot_export.signature(self.operation.id)
+        if signature == self._loot_exported_signature:
+            return
+        try:
+            self.loot_export.export(self.operation.id)
+        except Exception as exc:  # noqa: BLE001 - export must not stop the operation
+            error = str(exc)
+            if error != self._loot_export_error:
+                self._loot_export_error = error
+                self._write_dim(self.translator.t("loot.export-error", error=error))
+            return
+        self._loot_export_error = ""
+        self._loot_exported_signature = signature
 
     def _access_rows(self) -> list[Any]:
         """Confirmed facts as host/level rows, keeping each fact's node id."""

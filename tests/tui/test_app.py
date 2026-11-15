@@ -881,6 +881,14 @@ def test_loot_tab_shows_findings_creds_and_flags(tmp_path: Path) -> None:
             assert "FINDINGS" in text and "SQLi on /login" in text
             assert "CREDENTIALS" in text and "admin-password" in text
             assert "FLAGS" in text and "HTB{l00t}" in text
+            exported = json.loads(
+                (tmp_path / "loot" / operation.id / "credentials.json").read_text()
+            )
+            assert exported[0]["value"] == "hunter2"
+            exported_flags = json.loads(
+                (tmp_path / "loot" / operation.id / "flags.json").read_text()
+            )
+            assert exported_flags[0]["value"] == "HTB{l00t}"
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -3207,6 +3215,53 @@ def test_subagent_bootstraps_a_plan_task(tmp_path: Path) -> None:
             assert plan.tasks[0].status is TaskStatus.IN_PROGRESS
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_swarm_tab_appears_for_children_and_shows_live_members(tmp_path: Path) -> None:
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            tab = app.query_one("#tab-swarm", Tab)
+            assert not tab.display
+            run_id = await app.spawn_subagent("look around")
+            assert run_id is not None
+            for _ in range(10):
+                await pilot.pause()
+            assert tab.display
+
+            tabs = app.query_one("#view-tabs", Tabs)
+            switcher = app.query_one("#views", ContentSwitcher)
+            tabs.active = "tab-swarm"
+            await pilot.pause()
+            assert switcher.current == "view-swarm"
+            text = "\n".join(
+                strip.text for strip in app.query_one("#view-swarm", BlockJournal).lines
+            )
+            assert run_id in text
+            assert "look around" in text or "sub-" in text
+
+            app.service.repository.append_event(
+                OperationEvent(
+                    operation_id=operation.id,
+                    event_type="agent.note",
+                    payload={"run_id": run_id, "key": "surface", "value": "mapped"},
+                )
+            )
+            app._refresh_swarm_panel()
+            text = "\n".join(
+                strip.text for strip in app.query_one("#view-swarm", BlockJournal).lines
+            )
+            assert "surface=mapped" in text
+            app.action_inspect("agent", run_id)
+            await pilot.pause()
+            from samurai_ai.tui.screens import SessionDetailScreen
+
+            assert isinstance(app.screen, SessionDetailScreen)
 
     asyncio.run(exercise())
 
