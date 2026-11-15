@@ -11113,6 +11113,46 @@ def test_a_write_outside_the_trusted_dir_is_blocked_in_yolo(tmp_path: Path) -> N
     asyncio.run(exercise())
 
 
+def test_shell_scratch_writes_work_but_other_escapes_explain_the_boundary(tmp_path: Path) -> None:
+    from uuid import uuid4
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    stack[2].set_value("tui.yolo", "1")
+    operation = stack[0].create(
+        "Scratch lab", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+    scratch = Path("/tmp") / f"samurai-scratch-{uuid4().hex}.txt"
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            try:
+                message = await app._run_shell_tool(
+                    ToolCall(
+                        id="scratch",
+                        name="shell_exec",
+                        arguments={"command": f"printf ok > {scratch}"},
+                    )
+                )
+                assert "exit=0" in message.content
+
+                denied = await app._run_shell_tool(
+                    ToolCall(
+                        id="outside",
+                        name="shell_exec",
+                        arguments={"command": "mkdir /opt/evil"},
+                    )
+                )
+                assert "filesystem scope denied" in denied.content
+                assert "/opt/evil" in denied.content
+            finally:
+                scratch.unlink(missing_ok=True)
+
+    asyncio.run(exercise())
+
+
 def test_skills_learned_command_sets_mode_and_lists(tmp_path: Path) -> None:
     """`/skills learned mode inject` flips the mode; `/skills learned` lists safely."""
     stack = _minimal_stack(tmp_path)

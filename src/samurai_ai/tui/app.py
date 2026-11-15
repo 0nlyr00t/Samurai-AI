@@ -2192,7 +2192,13 @@ class SamuraiApp(
         by ``decide`` (Layer 1) and by the bwrap sandbox (Layer 2) — the
         filesystem counterpart of the network scope.
         """
-        roots = [str(self._cwd), *self._stored_trusted_dirs(), *sorted(self._session_trusted)]
+        roots = [
+            str(self._cwd),
+            *self._stored_trusted_dirs(),
+            *sorted(self._session_trusted),
+            "/tmp",
+            "/var/tmp",
+        ]
         return tuple(dict.fromkeys(roots))
 
     def _sandbox_mode(self) -> str:

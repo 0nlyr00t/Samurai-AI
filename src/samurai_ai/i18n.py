@@ -442,6 +442,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "change the hypothesis or parameters"
         ),
         "chat.tool-denied": "denied by operator: {command}",
+        "chat.filesystem-denied": (
+            "filesystem scope denied: {paths}; use /tmp or /var/tmp for scratch"
+        ),
         "chat.doctrine": (
             "Work the target like an operator, not a crawler: when a "
             "registration form exists, register and log in; after logging in "
@@ -1359,6 +1362,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "измени гипотезу или параметры"
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
+        "chat.filesystem-denied": "filesystem scope denied: {paths}; scratch — /tmp или /var/tmp",
         "chat.doctrine": (
             "Работай цель как оператор, а не как краулер: есть форма регистрации — "
             "зарегистрируйся и залогинься; после логина перечисли, что изменилось; "
