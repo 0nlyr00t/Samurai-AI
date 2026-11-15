@@ -2262,7 +2262,9 @@ class ChatController:
             return
         self._extend_scope(targets)
 
-    def _extend_scope(self, added: list[str]) -> list[str]:
+    def _extend_scope(
+        self, added: list[str], *, author: str = "operator", record: bool = True
+    ) -> list[str]:
         """Widen only on genuinely new, non-excluded targets; return what landed."""
         assert self.operation is not None
         scope = self.operation.scope
@@ -2285,6 +2287,9 @@ class ChatController:
         self._write_dim(
             self.translator.t("scope.extended", rules=", ".join(valid)), process=False
         )
+        if record:
+            for target in valid:
+                self._scope_event("include", target, "operator added it", author=author)
         self._refresh_chrome()
         return valid
 
@@ -3068,7 +3073,7 @@ class ChatController:
                 content=f"[tool {call.name}] out of scope — {reason}: {exc}",
             )
         self._scope_declined.discard(key)
-        self._extend_scope([target])
+        self._extend_scope([target], author="agent", record=False)
         holder: dict[str, str] = {}
         retry = asyncio.ensure_future(
             self._execute_shell(call.name, tool_id, command, mode, holder)
@@ -3136,7 +3141,14 @@ class ChatController:
                 return await self._scope_ask_operator(target, exc)
             self._scope_event("decline", target, "scope agent unavailable")
             return False, "scope agent unavailable"
-        self._scope_event("include" if verdict else "decline", target, why)
+        finding_ids, artifact_ids = self._scope_evidence_ids() if verdict else ([], [])
+        self._scope_event(
+            "include" if verdict else "decline",
+            target,
+            why,
+            finding_ids=finding_ids,
+            artifact_ids=artifact_ids,
+        )
         self._write_dim(
             self.translator.t(
                 "scope.auto-included" if verdict else "scope.auto-declined",
@@ -3193,7 +3205,7 @@ class ChatController:
             ScopeAskScreen(self.translator, target, getattr(exc, "detail", ""))
         )
         if allowed:
-            self._scope_event("include", target, "operator added it")
+            self._scope_event("include", target, "operator added it", author="operator")
             return True, "operator added it"
         self._scope_event("decline", target, "operator skipped it")
         return False, "operator skipped it"
@@ -3208,15 +3220,45 @@ class ChatController:
             return ""
         return " ".join(f"{f.title} {f.summary}" for f in findings)
 
-    def _scope_event(self, decision: str, target: str, reason: str) -> None:
-        """Record every autonomous scope verdict for the audit trail."""
+    def _scope_evidence_ids(self) -> tuple[list[str], list[str]]:
+        """Bounded evidence references for an auto-added rule, never secret bodies."""
+        if self.operation is None:
+            return [], []
+        try:
+            findings = self.kernel.kernel.list_findings(self.operation.id)
+            artifacts = self.kernel.kernel.list_artifacts(self.operation.id)
+        except Exception:  # noqa: BLE001 - missing evidence must not block a verdict
+            return [], []
+        return (
+            [item.id for item in findings[-2:]],
+            [item.id for item in artifacts[-2:]],
+        )
+
+    def _scope_event(
+        self,
+        decision: str,
+        target: str,
+        reason: str,
+        *,
+        author: str = "agent",
+        finding_ids: list[str] | None = None,
+        artifact_ids: list[str] | None = None,
+    ) -> None:
+        """Record every scope verdict with its author and evidence references."""
         if self.operation is None:
             return
         self.service.repository.append_event(
             OperationEvent(
                 operation_id=self.operation.id,
                 event_type="operation.scope.auto",
-                payload={"decision": decision, "target": target, "reason": reason},
+                payload={
+                    "decision": decision,
+                    "target": target,
+                    "reason": reason,
+                    "author": author,
+                    "finding_ids": finding_ids or [],
+                    "artifact_ids": artifact_ids or [],
+                },
             )
         )
 

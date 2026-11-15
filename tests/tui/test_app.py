@@ -10586,16 +10586,17 @@ def test_scope_rule_right_click_menu_edits_and_removes(tmp_path: Path) -> None:
 class _ScopeVerdictProvider(_ChatProvider):
     """Returns a fixed scope verdict so the scope agent can be exercised."""
 
-    def __init__(self, decision: str = "include") -> None:
+    def __init__(self, decision: str = "include", reason: str = "same subnet") -> None:
         super().__init__()
         self.decision = decision
+        self.reason = reason
 
     async def complete(self, request):  # type: ignore[no-untyped-def]
         from samurai_ai.agents.provider import ChatResponse, Usage
 
         self.calls += 1
         return ChatResponse(
-            text=f'{{"decision": "{self.decision}", "reason": "same subnet"}}',
+            text=f'{{"decision": "{self.decision}", "reason": "{self.reason}"}}',
             usage=Usage(prompt_tokens=3, completion_tokens=2),
             model_id=request.model_id,
             provider_id="gpt",
@@ -10658,6 +10659,109 @@ def test_scope_agent_decides_autonomously(tmp_path: Path) -> None:
             assert included is False and "budget" in reason
             assert provider.calls == calls
 
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_scope_auto_rationale_is_visible_and_operator_restore_wins(tmp_path: Path) -> None:
+    from samurai_ai.domain.execution import ToolScopeError
+    from samurai_ai.domain.permission import PermissionMode
+    from samurai_ai.tui.screens.scope_menu import ScopeMenuScreen
+
+    reason = "same subnet with related finding evidence " * 8
+    provider = _ScopeVerdictProvider("include", reason=reason)
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings, vault, models = stack[2], stack[5], stack[-1]
+    settings.set_locale("en")
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Scope rationale",
+        OperationMode.CTF_HTB,
+        ScopeContract(includes=("10.0.0.5",)),
+    )
+    artifact = stack[1].register_artifact(operation.id, ArtifactKind.NOTE, "proof")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            exc = ToolScopeError("out of scope")
+            included, _ = await app._decide_scope("10.0.0.90", exc, PermissionMode.YOLO)
+            assert included is True
+            app._extend_scope(["10.0.0.90"], author="agent", record=False)
+            labels = [str(option.prompt) for option in app._scope_options()]
+            auto = next(label for label in labels if "10.0.0.90" in label)
+            manual = next(label for label in labels if "10.0.0.5" in label)
+            assert "agent" in auto and "agent" not in manual
+            assert "operator" in manual
+            assert artifact.id in auto
+            assert len(auto) <= 80
+            service_event = next(
+                event for event in reversed(stack[0].events(operation.id))
+                if event.event_type == "operation.scope.auto"
+            )
+            assert service_event.payload["author"] == "agent"
+            assert service_event.payload["artifact_ids"] == [artifact.id]
+            assert service_event.payload["reason"] == reason[:200]
+
+            app._scope_rule_menu("10.0.0.90")
+            await pilot.pause()
+            assert isinstance(app.screen, ScopeMenuScreen)
+            detail = app.screen.query_one("#scopemenu-rationale", Static).render().plain
+            assert reason[:200] in detail
+            assert artifact.id in detail
+            app.screen.dismiss(None)
+
+            app._toggle_scope_rule("10.0.0.90")
+            assert "10.0.0.90" not in app.service.get(operation.id).scope.includes
+            assert "10.0.0.90" in app.service.get(operation.id).scope.excludes
+            calls = provider.calls
+            included, why = await app._decide_scope("10.0.0.90", exc, PermissionMode.YOLO)
+            assert included is False and "excluded" in why
+            assert provider.calls == calls
+
+            app._toggle_scope_rule("10.0.0.90")
+            restored_label = next(
+                str(option.prompt) for option in app._scope_options()
+                if "10.0.0.90" in str(option.prompt)
+            )
+            assert "agent" not in restored_label and "operator" in restored_label
+            restore_event = next(
+                event for event in reversed(stack[0].events(operation.id))
+                if event.event_type == "operation.scope.auto"
+            )
+            assert restore_event.payload["author"] == "operator"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_scope_rationale_is_localized_in_russian(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("ru")
+    operation = stack[0].create(
+        "Scope locale",
+        OperationMode.CTF_HTB,
+        ScopeContract(includes=("10.0.0.5",)),
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            app._scope_event("include", "10.0.0.90", "связанная цель")
+            app._extend_scope(["10.0.0.90"], author="agent", record=False)
+            labels = [str(option.prompt) for option in app._scope_options()]
+            auto = next(label for label in labels if "10.0.0.90" in label)
+            manual = next(label for label in labels if "10.0.0.5" in label)
+            assert "агент" in auto and "связанная цель" in auto
+            assert "оператор" in manual
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 

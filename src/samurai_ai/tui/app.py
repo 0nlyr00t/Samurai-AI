@@ -1714,6 +1714,10 @@ class SamuraiApp(
             )
             note = self.translator.t("scope.rule-excluded", rule=rule)
         self.operation = self.service.replace_scope(self.operation.id, updated)
+        if rule in scope.excludes:
+            self._scope_event("include", rule, "operator restored it", author="operator")
+        else:
+            self._scope_event("exclude", rule, "operator excluded it", author="operator")
         self._write_dim(note, process=False)
         self._refresh_chrome()
 
@@ -1723,7 +1727,12 @@ class SamuraiApp(
             return
         excluded = rule in self.operation.scope.excludes
         self.push_screen(
-            ScopeMenuScreen(self.translator, rule, excluded=excluded),
+            ScopeMenuScreen(
+                self.translator,
+                rule,
+                excluded=excluded,
+                rationale=self._scope_rationale_detail(rule),
+            ),
             lambda choice: self._on_scope_menu(choice, rule),
         )
 
@@ -1781,8 +1790,37 @@ class SamuraiApp(
         )
         self._refresh_chrome()
 
+    def _scope_rationale_events(self) -> dict[str, OperationEvent]:
+        """Latest include verdict per target; operator restores override agent history."""
+        if self.operation is None:
+            return {}
+        latest: dict[str, OperationEvent] = {}
+        for event in self.service.events(self.operation.id):
+            if event.event_type != "operation.scope.auto":
+                continue
+            if event.payload.get("decision") != "include":
+                continue
+            target = str(event.payload.get("target", "")).lower()
+            if target:
+                latest[target] = event
+        return latest
+
+    def _scope_rationale_detail(self, rule: str) -> str:
+        event = self._scope_rationale_events().get(rule.lower())
+        if event is None:
+            return ""
+        payload = event.payload
+        author = str(payload.get("author", "agent"))
+        ids = [*(payload.get("finding_ids") or []), *(payload.get("artifact_ids") or [])]
+        references = ", ".join(ids) if ids else "—"
+        timestamp = event.created_at.strftime("%H:%M")
+        return (
+            f"{self.translator.t('scope.author-' + author)}: "
+            f"{payload.get('reason', '')}\n{references}, {timestamp}"
+        )
+
     def _scope_options(self) -> list[Option]:
-        """One option per active include rule: ●/○ hit status, no exclusions."""
+        """One option per active include rule with its author and rationale."""
         from samurai_ai.tui.killchain import hosts_in, scope_rows
 
         if self.operation is None:
@@ -1793,6 +1831,7 @@ class SamuraiApp(
             if run.exit_code == 0
         )
         scope = self.operation.scope
+        rationales = self._scope_rationale_events()
         options: list[Option] = []
         for row in scope_rows(scope, touched):
             excluded = row.rule in scope.excludes
@@ -1804,6 +1843,27 @@ class SamuraiApp(
                 label = f"{'●' if row.hit else '○'} {row.rule}"
             if row.note:
                 label += f"  {row.note}"
+            event = rationales.get(row.rule.lower())
+            author = str(event.payload.get("author", "agent")) if event else "operator"
+            if event is not None and author == "agent":
+                ids = [
+                    *(event.payload.get("finding_ids") or []),
+                    *(event.payload.get("artifact_ids") or []),
+                ]
+                references = ", ".join(ids) if ids else "—"
+                timestamp = event.created_at.strftime("%H:%M")
+                reason = str(event.payload.get("reason", ""))
+                budget = max(12, 80 - len(label) - len(references) - 18)
+                if len(reason) > budget:
+                    reason = reason[: max(1, budget - 1)] + "…"
+                label += (
+                    f"  · {self.translator.t('scope.author-agent')}: "
+                    f"{reason} [{references}, {timestamp}]"
+                )
+            else:
+                label += f"  · {self.translator.t('scope.author-operator')}"
+            if len(label) > 80:
+                label = label[:79] + "…"
             options.append(Option(label, id=row.rule))
         return options
 
