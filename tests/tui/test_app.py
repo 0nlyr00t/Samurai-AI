@@ -3421,6 +3421,38 @@ def test_parent_turn_waits_for_agent_spawn_and_continues(tmp_path: Path) -> None
     asyncio.run(exercise())
 
 
+def test_parent_turn_waits_for_background_results(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Background wait", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+
+            async def finish() -> None:
+                await asyncio.sleep(0.02)
+                app._background_results.append(
+                    Message(role="user", content="background proof")
+                )
+                app._running_tools = 0
+
+            app._background_results = []
+            app._running_tools = 1
+            asyncio.create_task(finish())
+            assert await app._continue_after_background()
+            assert app._background_results == []
+            assert any(
+                message.content == "background proof"
+                for message in app._chat_history
+            )
+
+    asyncio.run(exercise())
+
+
 def test_agent_spawn_accepts_the_strategist_specialization(tmp_path: Path) -> None:
     from samurai_ai.agents.provider import ToolCall
 
