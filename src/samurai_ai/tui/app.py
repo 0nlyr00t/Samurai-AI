@@ -1143,13 +1143,18 @@ class SamuraiApp(
         """
         return
 
+    @staticmethod
+    def _selection_clipboard_text(text: str) -> str:
+        """A shell tool row copies as a paste-ready command, not its label."""
+        return text.removeprefix("shell.exec ") if text.startswith("shell.exec ") else text
+
     def _copy_settled_selection(self) -> None:
         self._selection_copy_timer = None
         text = self._selected_text()
         if not text or text == self._last_auto_copy:
             return
         self._last_auto_copy = text
-        self.copy_to_clipboard(text)
+        self.copy_to_clipboard(self._selection_clipboard_text(text))
 
     def _selected_text(self) -> str | None:
         """What is selected, the focused input's selection included.
@@ -1174,7 +1179,7 @@ class SamuraiApp(
         if text is None:
             self._write_dim(self.translator.t("mouse.nothing-selected"))
             return
-        self.copy_to_clipboard(text)
+        self.copy_to_clipboard(self._selection_clipboard_text(text))
         self._write_dim(self.translator.t("mouse.copied", chars=len(text)))
 
     def action_quit_requested(self) -> None:
@@ -1189,7 +1194,7 @@ class SamuraiApp(
         # case once something is highlighted
         selected = self._selected_text()
         if selected is not None:
-            self.copy_to_clipboard(selected)
+            self.copy_to_clipboard(self._selection_clipboard_text(selected))
             self._write_dim(self.translator.t("mouse.copied", chars=len(selected)))
             return
         now = time.monotonic()
