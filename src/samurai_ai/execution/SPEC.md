@@ -53,6 +53,10 @@ Direct nmap проверяет scope до spawn, но не имеет scoped egr
 ограничение transport, а не скрытое поведение: production принимается только на
 Linux, а отсутствие enforceable audit не выдаётся за контролируемый proxy.
 
+IP/domain include покрывает HTTP(S) URL на любом валидном порту; явный URL include
+остаётся origin-specific. ScopeGuard отделяет trailing shell `;`, `&`, `|` от target
+перед parsing, поэтому разделитель команды не становится частью номера порта.
+
 ## RDP
 
 `RdpBackend` использует один desktop master и redirected drive; exec передаёт

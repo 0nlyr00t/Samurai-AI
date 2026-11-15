@@ -75,6 +75,13 @@ def test_the_unspecified_address_is_not_a_target() -> None:
     guard(SCOPE, {"command": "ssh vm27 'hostname; id'"})
 
 
+def test_a_shell_semicolon_is_not_part_of_the_url_port() -> None:
+    guard(SCOPE, {"command": "curl -s http://10.10.0.5:8443; echo done"})
+    guard(SCOPE, {"command": "curl -s https://example.com:8443/path; echo done"})
+    with pytest.raises(ScopeGuardError, match="outside.example.org"):
+        guard(SCOPE, {"command": "curl -s https://outside.example.org:8443; echo done"})
+
+
 def test_key_value_flags_are_judged_by_the_value() -> None:
     with pytest.raises(ScopeGuardError, match="10.9.9.9"):
         guard(SCOPE, {"command": "curl --resolve=example.com:443:10.9.9.9 https://example.com/"})
