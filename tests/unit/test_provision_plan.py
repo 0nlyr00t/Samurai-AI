@@ -101,6 +101,34 @@ def test_dry_run_leaves_the_state_untouched(tmp_path: Path) -> None:
     assert provisioner.state("scan.nmap").status is ProvisionStatus.PLANNED
 
 
+def test_container_availability_does_not_skip_native_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Docker daemon is not proof that the host healthcheck binary exists."""
+    from samurai_ai.execution.process import ProcessResult
+    from samurai_ai.services.fabric import ProvisionReason, Resolution, ToolResolver
+
+    monkeypatch.setattr(
+        ToolResolver,
+        "resolve",
+        lambda *_args, **_kwargs: Resolution(
+            tool_id="scan.nmap", path="docker", reason=ProvisionReason.INSTALLED
+        ),
+    )
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], _timeout: float) -> ProcessResult:
+        calls.append(argv)
+        return ProcessResult(exit_code=0, stdout="Nmap version 7.95", stderr="")
+
+    provisioner = _provisioner(tmp_path)
+    provisioner._runner = run
+    provisioner.run("op_1", "scan.nmap", _profile(docker_daemon=True))
+
+    assert calls[0][0] == "sudo"
+    assert "apt-get" in calls[0]
+
+
 def test_offline_refuses_with_a_reason(tmp_path: Path) -> None:
     with pytest.raises(ProvisionRefusedError) as caught:
         _provisioner(tmp_path).plan("scan.nmap", _profile(offline=True))
