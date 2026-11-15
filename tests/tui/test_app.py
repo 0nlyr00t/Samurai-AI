@@ -6239,6 +6239,30 @@ def test_ctrl_shift_c_copies_and_says_so(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_shell_selection_copies_the_command_without_its_tool_prefix(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        copied: list[str] = []
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._selected_text = lambda: "shell.exec curl -s https://example.com/path"  # type: ignore[method-assign]
+            with patch.object(app, "copy_to_clipboard", side_effect=copied.append):
+                app.action_copy_selection()
+                await pilot.pause()
+            assert copied == ["curl -s https://example.com/path"]
+
+            app._selected_text = lambda: "copy shell.exec in prose"  # type: ignore[method-assign]
+            with patch.object(app, "copy_to_clipboard", side_effect=copied.append):
+                app.action_copy_selection()
+                await pilot.pause()
+            assert copied[-1] == "copy shell.exec in prose"
+
+    asyncio.run(exercise())
+
+
 def test_without_a_selection_ctrl_c_still_stops_and_quits(tmp_path: Path) -> None:
     provider = _TwoToolRoundsProvider()
     stack, operation = _chat_ready_stack(tmp_path, provider)

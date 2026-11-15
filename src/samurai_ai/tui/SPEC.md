@@ -38,6 +38,10 @@ Stream/LiveAnswer/Tool blocks: после layout один coalesced scroll уд�
 tail. Ручная прокрутка вверх отключает follow и streaming не сдвигает viewport;
 возврат на bottom включает его снова.
 
+Selection copy превращает leading `shell.exec ` tool label в paste-ready command;
+остальной выделенный текст копируется без изменений. Inspector `C` использует
+исходные command parameters, а не display text.
+
 ## Результаты инструментов
 
 Сводка прогона сохраняет смысл команды и измеренный исход: при нехватке ширины
