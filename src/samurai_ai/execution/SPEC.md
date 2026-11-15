@@ -76,8 +76,10 @@ Linux, а отсутствие enforceable audit не выдаётся за ко
 
 IP/domain include покрывает HTTP(S) URL на любом валидном порту; явный URL include
 остаётся origin-specific. ScopeGuard отделяет trailing shell `;`, `&`, `|`, `)` от
-target перед parsing. Parameter expansion после literal host/port удаляется только
-если host не меняется; variable/unknown host остаётся fail-closed.
+target перед parsing. Literal `NAME=value`/`export NAME=value` подставляется в
+host/port, включая nested shell; unknown variables остаются fail-closed. Data-only
+`echo`/`printf`/`cat`/`tee` payload не является destination, а nested `bash -c`
+проверяется. Parameter suffix удаляется только при неизменном host.
 
 ## RDP
 

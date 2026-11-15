@@ -90,6 +90,38 @@ def test_shell_expansion_after_a_literal_url_port_is_not_the_port() -> None:
         guard(SCOPE, {"command": "curl -s https://outside.example.org:8443$p"})
 
 
+def test_xml_and_script_payloads_are_not_network_targets() -> None:
+    guard(
+        SCOPE,
+        {
+            "command": (
+                "printf '%s' '<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>' "
+                "> /tmp/image.svg"
+            )
+        },
+    )
+    with pytest.raises(ScopeGuardError, match="8.8.8.8"):
+        guard(
+            SCOPE,
+            {
+                "command": (
+                    "bash -c 'printf \"%s\" \"<svg xmlns=\\\""
+                    "http://www.w3.org/2000/svg\\\"></svg>\"; nmap 8.8.8.8'"
+                )
+            },
+        )
+
+
+def test_literal_shell_variables_resolve_without_widening_scope() -> None:
+    guard(SCOPE, {"command": "IP=10.10.0.5; curl -s https://$IP:8443"})
+    guard(SCOPE, {"command": "export IP=10.10.0.5; curl -s http://$IP/"})
+    guard(SCOPE, {"command": "IP=10.10.0.5; bash -c 'curl https://$IP:8443'"})
+    with pytest.raises(ScopeGuardError, match="outside.example.org"):
+        guard(SCOPE, {"command": "IP=outside.example.org; curl -s https://$IP:8443"})
+    with pytest.raises(ScopeGuardError):
+        guard(SCOPE, {"command": "curl -s https://$UNKNOWN:8443"})
+
+
 def test_key_value_flags_are_judged_by_the_value() -> None:
     with pytest.raises(ScopeGuardError, match="10.9.9.9"):
         guard(SCOPE, {"command": "curl --resolve=example.com:443:10.9.9.9 https://example.com/"})
