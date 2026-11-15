@@ -3421,6 +3421,43 @@ def test_parent_turn_waits_for_agent_spawn_and_continues(tmp_path: Path) -> None
     asyncio.run(exercise())
 
 
+def test_strategist_review_finishes_inside_the_parent_turn(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Strategist wait", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._turn_facts = ["new proof"]
+            app._strategist_spawned_turn = False
+
+            async def review(_facts: str) -> None:
+                app._strategist_spawned_turn = True
+                app._expect_subagent_result("agent_strategist")
+                app._hand_back(
+                    SimpleNamespace(run_id="agent_strategist", task_id="chat"),
+                    "review complete",
+                    status="completed",
+                )
+
+            app._maybe_spawn_strategist = review  # type: ignore[method-assign]
+            assert await app._continue_after_strategist()
+            assert app._strategist_spawned_turn
+            assert app._subagent_wait is None
+            assert any(
+                "review complete" in message.content
+                for message in app._chat_history
+            )
+
+    asyncio.run(exercise())
+
+
 def test_parent_turn_waits_for_background_results(tmp_path: Path) -> None:
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
@@ -9216,7 +9253,7 @@ def test_a_captured_flag_shows_in_the_loot_block(tmp_path: Path) -> None:
 
 
 def test_a_confirmed_fact_spawns_the_strategist_once_per_turn(tmp_path: Path) -> None:
-    """fact.confirmed → the strategist reviews the vector map in background."""
+    """New facts get one review before the parent turn settles."""
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
     operation = stack[0].create(
@@ -9229,18 +9266,30 @@ def test_a_confirmed_fact_spawns_the_strategist_once_per_turn(tmp_path: Path) ->
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            spawned = AsyncMock(return_value="run_strat1")
+            from types import SimpleNamespace
+
+            async def spawn(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+                async def finish() -> None:
+                    await asyncio.sleep(0)
+                    app._hand_back(
+                        SimpleNamespace(run_id="run_strat1", task_id="chat"),
+                        "reviewed",
+                        status="completed",
+                    )
+
+                asyncio.create_task(finish())
+                return "run_strat1"
+
+            spawned = AsyncMock(side_effect=spawn)
             app.spawn_subagent = spawned  # type: ignore[method-assign]
             app._turn_facts = ["notes render {{7*7}} as 49"]
-            app._schedule_strategist_review()
-            await app.workers.wait_for_complete()
-            await pilot.pause()
+            app._strategist_spawned_turn = False
+            assert await app._continue_after_strategist()
             assert spawned.call_count == 1
             kwargs = spawned.call_args.kwargs
             assert kwargs["specialization"] is AgentSpecialization.STRATEGIST
             # a second scheduling is one review, not a respawn
-            app._schedule_strategist_review()
-            await app.workers.wait_for_complete()
+            assert not await app._continue_after_strategist()
             assert spawned.call_count == 1
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")

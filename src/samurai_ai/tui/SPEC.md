@@ -62,7 +62,8 @@ run record. Провал раскрывается сам и начинается
 Explicit `agent_spawn` оставляет parent turn активным до handback и затем
 автоматически продолжает model loop с результатом child. Agent link в chat сразу
 открывает SessionDetail: steps, notes, findings и tool calls доступны без нового
-transcript store и без изменения domain state.
+transcript store и без изменения domain state. Auto-strategist по новым facts тоже
+завершается до terminal event; child после `chat.turn.end` не создаётся.
 
 ## LOOT
 

@@ -1082,14 +1082,8 @@ class ChatController:
             instruction, specialization=AgentSpecialization.STRATEGIST
         )
         if run_id is not None:
+            self._expect_subagent_result(run_id)
             self._write_dim(self.translator.t("strategist.spawned", run=run_id))
-
-    def _schedule_strategist_review(self) -> None:
-        """Between turns: one strategist run for everything the turn proved."""
-        if not self._turn_facts or self._strategist_spawned_turn:
-            return
-        facts = "; ".join(self._turn_facts[-5:])
-        self.run_worker(self._maybe_spawn_strategist(facts), exclusive=False)
 
     def _note_unstructured_shell(self) -> None:
         """Shell calls with nothing recorded are a crawler, not an operation.
@@ -1571,7 +1565,6 @@ class ChatController:
             self._shell_running = ""
             self._shell_background = False
             self._thinking_stop()
-            self._schedule_strategist_review()
             self._refresh_chrome()
             focus = getattr(self, "focus_command_input", None)
             if focus is not None:
@@ -1794,6 +1787,8 @@ class ChatController:
                 if await self._continue_after_subagent():
                     continue
                 if await self._continue_after_background():
+                    continue
+                if await self._continue_after_strategist():
                     continue
                 if promise_nudges < _MAX_PROMISE_NUDGES and _PROMISE_RE.search(response.text or ""):
                     promise_nudges += 1
@@ -2217,6 +2212,13 @@ class ChatController:
                 pass
         self._subagent_wait = None
         return True
+
+    async def _continue_after_strategist(self) -> bool:
+        """Run the fact review before the parent is allowed to settle."""
+        if not self._turn_facts or self._strategist_spawned_turn:
+            return False
+        await self._maybe_spawn_strategist("; ".join(self._turn_facts[-5:]))
+        return await self._continue_after_subagent()
 
     async def _continue_after_background(self) -> bool:
         """Drain parked tool results before the parent is allowed to conclude."""

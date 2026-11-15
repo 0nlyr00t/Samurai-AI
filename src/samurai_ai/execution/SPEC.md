@@ -77,8 +77,9 @@ web-ресурсов, координатный GUI остаётся fallback. `f
 в provider response запрещает выполнение потенциально обрезанных tool calls.
 
 Explicit `agent_spawn` не завершает parent turn до handback: родитель ждёт terminal
-result и продолжает тот же turn с фактическим status. `/subagent` и автоматический
-strategist не удерживают turn; operator stop не блокируется ожиданием. Parked
+result и продолжает тот же turn с фактическим status. Ручной `/subagent` не
+удерживает turn; auto-strategist по новым facts запускается до terminal verdict и
+использует тот же handback. Operator stop не блокируется ожиданием. Parked
 background tools аналогично дожидаются результатов и drain перед terminal verdict.
 
 Run завершается только после recovery/closing и проверки task/evidence. `repair_interrupted`
