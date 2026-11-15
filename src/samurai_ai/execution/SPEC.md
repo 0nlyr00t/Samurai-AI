@@ -54,6 +54,12 @@ Trusted write roots включают cwd, явно добавленные direct
 outside writes остаются deny/ask по permission mode. Denial содержит конкретные
 paths и filesystem-scope reason, а не неточный `denied by operator`.
 
+Static write-target parser использует shell tokens и command-specific output flags:
+quoted payloads, URL paths, `grep -o`, `/dev/null` и `/dev/tcp`/`udp` не являются
+filesystem writes. Dynamic paths не угадываются — их ограничивает bwrap. Внутренний
+`.config/samurai` state не является operation workspace; artifacts принадлежат
+domain services, а обычные shell writes идут в cwd/trusted dirs или scratch.
+
 ## Direct network
 
 Direct nmap проверяет scope до spawn, но не имеет scoped egress audit. Это явное

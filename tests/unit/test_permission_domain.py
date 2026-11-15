@@ -146,6 +146,27 @@ def test_create_verbs_outside_the_boundary_are_escapes() -> None:
     assert classify_command("mkdir work && touch out.txt", allowed_roots=roots).escape == ()
 
 
+def test_shell_payloads_and_device_sinks_are_not_file_writes() -> None:
+    roots = ("/tmp",)
+    commands = (
+        "cat </dev/tcp/10.0.0.5/445 2>/dev/null",
+        "echo ok 2>/dev/null)",
+        "curl -s https://example.com/api/[a-zA-Z0-9_/.-]*",
+        "grep -oE '/api/[a-z]+' response.txt",
+        "printf '%s\\n' 'cat </dev/tcp/10.0.0.5/445 2>/dev/null' > /tmp/w.sh",
+        "printf '%s' 'echo text > /etc/passwd' > /tmp/w.sh",
+    )
+    for command in commands:
+        assert classify_command(command, allowed_roots=roots).escape == (), command
+
+
+def test_real_write_flags_are_still_checked_by_command() -> None:
+    roots = ("/tmp",)
+    assert classify_command("curl -o /etc/x https://example.com", allowed_roots=roots).escape
+    assert classify_command("nmap -oX /etc/x 10.0.0.5", allowed_roots=roots).escape
+    assert classify_command("mkdir /opt/evil", allowed_roots=roots).escape
+
+
 def test_badges_are_bounded_and_deduplicated() -> None:
     command = "rm -rf .env ~/.ssh id_rsa x.pem credentials.txt secrets.yaml"
     risk = classify_command(command)

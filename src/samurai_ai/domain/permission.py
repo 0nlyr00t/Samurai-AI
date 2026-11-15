@@ -50,10 +50,22 @@ _DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bch(?:own|mod)\s+-R\b"), "recursive permission change"),
 )
 
-_REDIRECT = re.compile(r">>?\s*([^\s;|&]+)")
-_WRITE_FLAGS = re.compile(r"(?:^|\s)(?:-[oO]\w*|--output|--out)(?:\s+|=)([^\s;|&]+)")
-#: `dd of=/dev/sdb`, `tar -f`, etc.: a value flag that names a written file
-_OF_FLAG = re.compile(r"\bof=([^\s;|&]+)")
+_REDIRECT_OPERATORS = frozenset({">", ">>", ">|", "&>", "&>>"})
+_SHELL_CONTROL = frozenset({";", ";;", "&&", "||", "|", "&", "(", ")"})
+_SHELL_WRAPPERS = frozenset(
+    {"sudo", "env", "command", "nohup", "setsid", "nice", "stdbuf", "ionice"}
+)
+#: output flags are command-specific: `grep -o` is not a file write, while
+#: `curl -o` and `nmap -oX` are. A generic `-o` rule produced false denies.
+_OUTPUT_FLAGS: dict[str, frozenset[str]] = {
+    "curl": frozenset({"-o", "--output"}),
+    "wget": frozenset({"-O", "--output-document"}),
+    "nmap": frozenset({"-oN", "-oX", "-oG", "-oA", "--output"}),
+    "nuclei": frozenset({"-o", "-output", "--output"}),
+    "ffuf": frozenset({"-o"}),
+    "sqlmap": frozenset({"--output-dir", "--log-file"}),
+    "tar": frozenset({"-f", "--file"}),
+}
 #: commands whose non-flag arguments are files or directories they create/write
 _WRITE_COMMANDS = frozenset(
     {"mkdir", "touch", "tee", "mkfifo", "mknod", "truncate", "install"}
@@ -149,23 +161,68 @@ def _outside_all(path: str, roots: tuple[str, ...]) -> bool:
     return all(_is_outside(path, root) for root in roots if root)
 
 
-def _write_targets(command: str) -> list[str]:
-    """Paths a command creates or writes: redirects, output flags, write verbs.
+def _shell_tokens(command: str) -> list[str]:
+    """Shell words and operators, with quoted payloads left as single words."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except ValueError:
+        return command.split()
 
-    Static and best-effort by nature — a shell can still reach a path through a
-    variable or an eval — but it catches the ordinary ways a command lands a
-    file or a directory somewhere: ``> f``, ``-o f``, ``of=f``, and the create
-    verbs (mkdir, touch, tee …) applied to their arguments.
-    """
+
+def _executables(tokens: list[str]) -> list[tuple[int, str]]:
+    """Executable words, skipping assignments and common command wrappers."""
+    result: list[tuple[int, str]] = []
+    expected = True
+    skip_duration = False
+    for index, token in enumerate(tokens):
+        if token in _SHELL_CONTROL:
+            expected = True
+            continue
+        if not expected:
+            continue
+        if skip_duration:
+            skip_duration = False
+            continue
+        if token.startswith("-") or ("=" in token and not token.startswith("/")):
+            continue
+        name = token.rsplit("/", 1)[-1]
+        if name == "timeout":
+            skip_duration = True
+            continue
+        if name in _SHELL_WRAPPERS:
+            continue
+        result.append((index, name))
+        expected = False
+    return result
+
+
+def _write_targets(command: str) -> list[str]:
+    """Real filesystem writes, not arbitrary absolute-looking shell words."""
+    tokens = _shell_tokens(command)
     targets: list[str] = []
-    for regex in (_REDIRECT, _WRITE_FLAGS, _OF_FLAG):
-        targets += [match.group(1) for match in regex.finditer(command)]
-    for chunk in _SHELL_SEPARATORS.split(command):
-        tokens = chunk.split()
-        for index, token in enumerate(tokens):
-            if token.rsplit("/", 1)[-1] in _WRITE_COMMANDS:
-                targets += [arg for arg in tokens[index + 1 :] if not arg.startswith("-")]
-    return [target.strip().strip("'\"") for target in targets if target.strip()]
+    for index, token in enumerate(tokens[:-1]):
+        if token in _REDIRECT_OPERATORS:
+            targets.append(tokens[index + 1])
+
+    executables = _executables(tokens)
+    for position, (index, name) in enumerate(executables):
+        end = executables[position + 1][0] if position + 1 < len(executables) else len(tokens)
+        arguments = tokens[index + 1 : end]
+        if name in _WRITE_COMMANDS:
+            targets += [
+                argument
+                for argument in arguments
+                if argument not in _SHELL_CONTROL and not argument.startswith("-")
+            ]
+        output_flags = _OUTPUT_FLAGS.get(name, ())
+        for offset, argument in enumerate(arguments[:-1]):
+            if argument in output_flags:
+                targets.append(arguments[offset + 1])
+            if name == "dd" and argument.startswith("of="):
+                targets.append(argument[3:])
+    return [target for target in targets if target]
 
 
 #: standard character-device sinks — universal, harmless write targets. A
@@ -186,6 +243,10 @@ _DEV_SINKS = frozenset(
 )
 
 
+def _non_file_target(path: str) -> bool:
+    return path in _DEV_SINKS or path.startswith(("/dev/tcp/", "/dev/udp/"))
+
+
 def filesystem_escapes(command: str, allowed_roots: tuple[str, ...]) -> tuple[str, ...]:
     """Absolute write targets that fall outside every trusted root.
 
@@ -198,7 +259,7 @@ def filesystem_escapes(command: str, allowed_roots: tuple[str, ...]) -> tuple[st
     escapes = [
         path
         for path in _write_targets(command)
-        if path not in _DEV_SINKS and _outside_all(path, roots)
+        if not _non_file_target(path) and _outside_all(path, roots)
     ]
     return tuple(dict.fromkeys(escapes))[:MAX_BADGES]
 
