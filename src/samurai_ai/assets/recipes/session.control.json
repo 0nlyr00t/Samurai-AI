@@ -1,0 +1,49 @@
+{
+  "id": "session.control",
+  "version": 1,
+  "title": "OpenSSH stateful session client",
+  "description": "OpenSSH ControlMaster for governed SSH/PTY sessions. The session adapter stays in front; this recipe provisions the client binary only.",
+  "image": "debian:stable-slim@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "executable": "ssh",
+  "risk_class": "r3",
+  "network": "direct",
+  "read_only": false,
+  "capabilities": [
+    "ssh",
+    "pty",
+    "sessions"
+  ],
+  "execution": {
+    "native": true,
+    "native_preferred": false,
+    "container": false
+  },
+  "provision": {
+    "packages": {
+      "linux": {
+        "manager": "apt",
+        "package": "openssh-client",
+        "sudo": true
+      },
+      "macos": {
+        "manager": "brew",
+        "package": "openssh",
+        "sudo": false
+      }
+    },
+    "healthcheck": [
+      "-V"
+    ],
+    "requires_sudo": true,
+    "limitations": [
+      "After installation, verify the live lifecycle with session.control healthcheck."
+    ]
+  },
+  "argv": [
+    "-V"
+  ],
+  "limits": {
+    "timeout_seconds": 60,
+    "memory_mb": 128
+  }
+}

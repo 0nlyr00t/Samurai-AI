@@ -140,6 +140,16 @@ def test_secret_redactor_masks_common_token_patterns() -> None:
     assert "hunter2" not in result.text
 
 
+def test_secret_redactor_masks_json_sensitive_keys() -> None:
+    redactor = SecretRedactor()
+    result = redactor.redact(
+        '{"csrfTokenValue":"abc123","credentials":{"password":"hunter2"}}'
+    )
+    assert "abc123" not in result.text
+    assert "hunter2" not in result.text
+    assert result.count >= 2
+
+
 def test_secret_redactor_preserves_vault_placeholders() -> None:
     redactor = SecretRedactor()
     result = redactor.redact("text={{secret:api-token}} and password=hunter2")
