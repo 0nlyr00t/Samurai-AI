@@ -53,6 +53,13 @@ run record. Провал раскрывается сам и начинается
 работу. На узком терминале текущая фаза и счётчик сохраняются, а второстепенные
 описания отбрасываются.
 
+## SWARM
+
+Explicit `agent_spawn` оставляет parent turn активным до handback и затем
+автоматически продолжает model loop с результатом child. Agent link в chat сразу
+открывает SessionDetail: steps, notes, findings и tool calls доступны без нового
+transcript store и без изменения domain state.
+
 ## LOOT
 
 Credential и flag в основной вкладке LOOT являются entity links: клик сразу

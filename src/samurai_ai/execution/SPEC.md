@@ -75,6 +75,10 @@ web-ресурсов, координатный GUI остаётся fallback. `f
 порядка результатов; любой sequential tool возвращает batch в serial. `length`
 в provider response запрещает выполнение потенциально обрезанных tool calls.
 
+Explicit `agent_spawn` не завершает parent turn до handback: родитель ждёт terminal
+result и продолжает тот же turn с фактическим status. `/subagent` и автоматический
+strategist не удерживают turn; operator stop не блокируется ожиданием.
+
 Run завершается только после recovery/closing и проверки task/evidence. `repair_interrupted`
 не выполняет tools: он либо подтверждает уже достигнутый task, либо завершает run
 как interrupted с причиной и предлагает новый run. Subagent получает результат,
