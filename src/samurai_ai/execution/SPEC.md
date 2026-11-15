@@ -44,6 +44,9 @@ outcome не подтверждён; retry после него тоже запр
 не считается подтверждением внешнего результата — оно лишь доставляет уже
 зафиксированный terminal outcome.
 
+RPC `RunRegistry` сохраняет verdict work callback: `PARTIAL` и `FAILED` становятся
+`partial` и `failed`, а не daemon-level `done`; отсутствие verdict остаётся `done`.
+
 ## Direct network
 
 Direct nmap проверяет scope до spawn, но не имеет scoped egress audit. Это явное
