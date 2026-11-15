@@ -1793,6 +1793,8 @@ class ChatController:
                     continue
                 if await self._continue_after_subagent():
                     continue
+                if await self._continue_after_background():
+                    continue
                 if promise_nudges < _MAX_PROMISE_NUDGES and _PROMISE_RE.search(response.text or ""):
                     promise_nudges += 1
                     self._write_dim(self.translator.t("chat.promise-nudge"))
@@ -2214,6 +2216,19 @@ class ChatController:
             except TimeoutError:
                 pass
         self._subagent_wait = None
+        return True
+
+    async def _continue_after_background(self) -> bool:
+        """Drain parked tool results before the parent is allowed to conclude."""
+        if not self._background_results and self._running_tools <= 0:
+            return False
+        if not self._background_results:
+            self._write_dim(self.translator.t("chat.background-wait"), process=False)
+        while not self._background_results and self._running_tools > 0:
+            if self._stop_requested:
+                return False
+            await asyncio.sleep(0.05)
+        self._drain_background()
         return True
 
     def _task_targets(self, text: str) -> list[str]:

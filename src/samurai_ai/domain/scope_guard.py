@@ -104,7 +104,24 @@ def infra_hosts(mode: str) -> frozenset[str]:
 
 def _trim_shell_token(value: str) -> str:
     """Shell separators delimit a command; they are not target characters."""
-    return value.strip().strip("'\"").rstrip(";&|")
+    return value.strip().strip("'\"").rstrip(";&|)")
+
+
+_SHELL_PARAMETER = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+
+
+def _strip_url_shell_parameters(value: str) -> str:
+    """Remove suffix expansions only when the literal host stays unchanged."""
+    if "$" not in value:
+        return value
+    original = urlsplit(value)
+    host = original.hostname
+    if not host or "$" in host:
+        return value
+    cleaned = _SHELL_PARAMETER.sub("", value)
+    if urlsplit(cleaned).hostname != host:
+        return value
+    return cleaned
 
 
 def _scan_text(text: str) -> list[tuple[str, str]]:
@@ -118,6 +135,7 @@ def _scan_text(text: str) -> list[tuple[str, str]]:
         if "://" in part:
             # a scheme beats the path heuristic: «curl https://host» has no path,
             # so Path().suffix reads «.com» and would have called it a local file
+            part = _strip_url_shell_parameters(part)
             parts = urlsplit(part)
             if parts.hostname:
                 if parts.scheme.lower() in HTTP_SCHEMES:

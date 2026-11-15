@@ -54,8 +54,9 @@ Direct nmap проверяет scope до spawn, но не имеет scoped egr
 Linux, а отсутствие enforceable audit не выдаётся за контролируемый proxy.
 
 IP/domain include покрывает HTTP(S) URL на любом валидном порту; явный URL include
-остаётся origin-specific. ScopeGuard отделяет trailing shell `;`, `&`, `|` от target
-перед parsing, поэтому разделитель команды не становится частью номера порта.
+остаётся origin-specific. ScopeGuard отделяет trailing shell `;`, `&`, `|`, `)` от
+target перед parsing. Parameter expansion после literal host/port удаляется только
+если host не меняется; variable/unknown host остаётся fail-closed.
 
 ## RDP
 
@@ -77,7 +78,8 @@ web-ресурсов, координатный GUI остаётся fallback. `f
 
 Explicit `agent_spawn` не завершает parent turn до handback: родитель ждёт terminal
 result и продолжает тот же turn с фактическим status. `/subagent` и автоматический
-strategist не удерживают turn; operator stop не блокируется ожиданием.
+strategist не удерживают turn; operator stop не блокируется ожиданием. Parked
+background tools аналогично дожидаются результатов и drain перед terminal verdict.
 
 Run завершается только после recovery/closing и проверки task/evidence. `repair_interrupted`
 не выполняет tools: он либо подтверждает уже достигнутый task, либо завершает run

@@ -525,6 +525,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-background": "«{command}» takes a while — continuing in the background",
         "chat.cache-hit": "prefix cache {share} — prefill is cheaper this call",
         "chat.tool-background-done": "[bg] done: {command}…",
+        "chat.background-wait": "waiting for background tools; the parent continues automatically",
         "chat.expand-empty": "nothing to expand yet — no folded process or output",
         "chat.notice-none": "no findings, secrets or errors yet",
         "autonomy.on": (
@@ -1450,6 +1451,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.tool-background": "«{command}» надолго — продолжаю в фоне",
         "chat.cache-hit": "кэш префикса {share} — этот вызов дешевле",
         "chat.tool-background-done": "[фон] готово: {command}…",
+        "chat.background-wait": "ждём фоновые команды; родитель продолжит автоматически",
         "chat.thinking": "думаю · {count}",
         "chat.expand-empty": "пока нечего раскрывать — свёрнутых шагов и вывода нет",
         "chat.notice-none": "пока нет находок, кредов или ошибок",
