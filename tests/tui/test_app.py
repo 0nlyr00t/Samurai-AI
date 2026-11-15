@@ -5821,6 +5821,50 @@ def test_journal_follows_the_tail_again_at_the_bottom(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_streaming_tokens_keep_the_journal_at_the_live_tail(tmp_path: Path) -> None:
+    from samurai_ai.tui.journal import LiveAnswerBlock
+
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            for i in range(40):
+                journal.add_block(Static(Text(f"history {i}")))
+            answer = LiveAnswerBlock()
+            journal.add_block(answer)
+            await pilot.pause()
+            journal.follow_end()
+            await pilot.pause()
+
+            for i in range(60):
+                answer.append_token(f"current action {i}\n")
+                await pilot.pause()
+
+            assert journal.follow
+            assert journal.max_scroll_y > 0
+            assert journal.scroll_y >= journal.max_scroll_y - 1
+
+            journal.scroll_to(y=0, animate=False)
+            await pilot.pause()
+            assert not journal.follow
+            for i in range(10):
+                answer.append_token(f"buffered while reading {i}\n")
+                await pilot.pause()
+            assert journal.scroll_y == 0
+            assert not journal.follow
+
+            journal.scroll_end(animate=False)
+            await pilot.pause()
+            assert journal.follow
+            assert journal.scroll_y >= journal.max_scroll_y - 1
+
+    asyncio.run(exercise())
+
+
 def test_autonomy_command_toggles_the_setting_and_badge(tmp_path: Path) -> None:
     """/autonomy flips the opt-in and shows the posture in the status bar."""
     stack, operation = _chat_ready_stack(tmp_path, _TwoToolRoundsProvider())
