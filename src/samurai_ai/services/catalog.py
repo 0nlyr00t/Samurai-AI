@@ -69,7 +69,13 @@ class RecipeCatalog:
         files: list[Path] = []
         for directory in self._directories():
             if directory.is_dir():
-                files.extend(sorted(directory.glob("*.json")))
+                files.extend(
+                    sorted(
+                        path
+                        for path in directory.glob("*.json")
+                        if not path.name.startswith("._")
+                    )
+                )
         return files
 
     def load_all(self) -> dict[str, ToolManifest]:
