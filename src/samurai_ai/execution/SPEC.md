@@ -47,6 +47,13 @@ outcome не подтверждён; retry после него тоже запр
 RPC `RunRegistry` сохраняет verdict work callback: `PARTIAL` и `FAILED` становятся
 `partial` и `failed`, а не daemon-level `done`; отсутствие verdict остаётся `done`.
 
+## Shell filesystem
+
+Trusted write roots включают cwd, явно добавленные directories и стандартные
+`/tmp`/`/var/tmp` scratch. Bwrap монтирует scratch как private tmpfs; остальные
+outside writes остаются deny/ask по permission mode. Denial содержит конкретные
+paths и filesystem-scope reason, а не неточный `denied by operator`.
+
 ## Direct network
 
 Direct nmap проверяет scope до spawn, но не имеет scoped egress audit. Это явное

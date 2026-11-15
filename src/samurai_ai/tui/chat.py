@@ -3034,6 +3034,12 @@ class ChatController:
                 autonomy=self._autonomy_enabled(),
             )
             if decision.is_denied:
+                if risk.escape:
+                    note = self.translator.t(
+                        "chat.filesystem-denied", paths=", ".join(risk.escape)
+                    )
+                    self._write_dim(note, process=False)
+                    return Message(role="user", content=f"[tool {call.name}] {note}")
                 self._write_dim(
                     self.translator.t("chat.tool-denied", command=command), process=False
                 )
@@ -3054,6 +3060,12 @@ class ChatController:
                 )
             hint = True
         if not hint:
+            if risk.escape:
+                note = self.translator.t(
+                    "chat.filesystem-denied", paths=", ".join(risk.escape)
+                )
+                self._write_dim(note, process=False)
+                return Message(role="user", content=f"[tool {call.name}] {note}")
             self._write_dim(self.translator.t("chat.tool-denied", command=command), process=False)
             return Message(role="user", content=f"[tool {call.name}] denied by the operator")
         call_label = f"{call.name}: {_short_tool(tool_id, command)}"
