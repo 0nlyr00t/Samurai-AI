@@ -107,7 +107,7 @@ def _trim_shell_token(value: str) -> str:
     return value.strip().strip("'\"").rstrip(";&|)")
 
 
-_SHELL_PARAMETER = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+_SHELL_PARAMETER = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})")
 
 
 def _strip_url_shell_parameters(value: str) -> str:
@@ -124,12 +124,40 @@ def _strip_url_shell_parameters(value: str) -> str:
     return cleaned
 
 
-def _scan_text(text: str) -> list[tuple[str, str]]:
+def _expand_shell_token(value: str, environment: dict[str, str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        return environment.get(name, match.group(0))
+
+    return _SHELL_PARAMETER.sub(replace, value)
+
+
+def _variable_environment(
+    tokens: list[str], inherited: dict[str, str] | None
+) -> dict[str, str]:
+    environment = dict(inherited or {})
+    for index, token in enumerate(tokens):
+        candidate = tokens[index + 1] if token == "export" and index + 1 < len(tokens) else token
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)", candidate)
+        if match is None:
+            continue
+        name, value = match.groups()
+        if any(marker in value for marker in ("$(", "`", ";", "|", "&")):
+            continue
+        environment[name] = value
+    for name, value in list(environment.items()):
+        environment[name] = _expand_shell_token(value, environment)
+    return environment
+
+
+def _scan_text(
+    text: str, environment: dict[str, str] | None = None
+) -> list[tuple[str, str]]:
     """Host-shaped literals in a value that is (a list of) bare targets."""
     found: list[tuple[str, str]] = []
     for part in text.split(","):
         # shlex keeps shell separators attached to the preceding token.
-        part = _trim_shell_token(part)
+        part = _expand_shell_token(_trim_shell_token(part), environment or {})
         if not part:
             continue
         if "://" in part:
@@ -182,56 +210,80 @@ def _tokens(text: str) -> list[str]:
     import shlex
 
     try:
-        return shlex.split(text)
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
     except ValueError:
         return text.split()
 
 
-def _literals(value: Any) -> list[tuple[str, str]]:
-    """(kind, literal) pairs: a URL is judged as a URL so scheme rules still match.
-
-    A free-form command (shell.exec) is not a bare host, so it is judged per
-    token — `nmap -Pn 10.0.0.5` must not slip through whole-string matching.
-    """
+def _literals(
+    value: Any, environment: dict[str, str] | None = None
+) -> list[tuple[str, str]]:
+    """Targets in command context, without treating data payloads as destinations."""
     if value is None or isinstance(value, bool | int | float):
         return []
     if isinstance(value, list | tuple | set):
         out: list[tuple[str, str]] = []
         for item in value:
-            out.extend(_literals(item))
+            out.extend(_literals(item, environment))
         return out
     text = str(value).strip()
     if not text:
         return []
     if " " not in text:
-        # a lone word may be a file as much as a host: `send.sh` is a script, and
-        # «.sh» is a registered TLD, so the file check has to come first
-        return _words(text)
-    found = _scan_text(text)
-    if found:
-        return found
-    out = []
-    for token in _tokens(text):
-        out.extend(_words(token))
-    return out
+        return _words(text, environment or {})
+
+    from samurai_ai.domain.permission import _executables
+
+    tokens = _tokens(text)
+    variables = _variable_environment(tokens, environment)
+    executables = _executables(tokens)
+    nested: set[int] = set()
+    code: set[int] = set()
+    data_only: set[int] = set()
+    for position, (index, name) in enumerate(executables):
+        end = executables[position + 1][0] if position + 1 < len(executables) else len(tokens)
+        arguments = tokens[index + 1 : end]
+        if name in _DATA_ONLY_COMMANDS:
+            data_only.update(range(index + 1, end))
+        if name not in _SHELL_COMMANDS | _CODE_COMMANDS:
+            continue
+        for option in arguments:
+            combined_shell = (
+                name in _SHELL_COMMANDS and option.startswith("-") and "c" in option
+            )
+            if option not in ("-c", "-e") and not combined_shell:
+                continue
+            payload = index + 1 + arguments.index(option) + 1
+            if payload < len(tokens):
+                (nested if name in _SHELL_COMMANDS else code).add(payload)
+            break
+
+    results: list[tuple[str, str]] = []
+    for index, token in enumerate(tokens):
+        if index in nested:
+            results.extend(_literals(token, variables))
+        elif index in code:
+            results.extend(_scan_text(token, variables))
+        elif index not in data_only:
+            results.extend(_words(token, variables))
+    return results
 
 
-def _words(token: str) -> list[tuple[str, str]]:
-    """What one token contributes; a file name contributes nothing.
+_DATA_ONLY_COMMANDS = frozenset({"echo", "printf", "cat", "tee"})
+_SHELL_COMMANDS = frozenset({"sh", "bash", "dash", "zsh", "ksh"})
+_CODE_COMMANDS = frozenset({"python", "python3", "perl", "ruby", "node"})
 
-    A quoted tail is a command of its own («bash -c 'nmap 10.0.0.5'»), so it is
-    split again rather than judged as one dotted word.
-    """
+
+def _words(token: str, environment: dict[str, str]) -> list[tuple[str, str]]:
+    """One non-payload token; nested commands are handled by `_literals`."""
     _, _, kv_value = token.partition("=")
-    if " " not in token:
-        if not kv_value and _looks_like_file(_trim_shell_token(token)):
-            # a file, not a host: `cat app.js` must not be judged as the .js TLD
-            return []
-        return _scan_text(kv_value or token)
-    found: list[tuple[str, str]] = []
-    for inner in _tokens(token):
-        found.extend(_words(inner))
-    return found
+    if " " in token:
+        return []
+    if not kv_value and _looks_like_file(_trim_shell_token(token)):
+        return []
+    return _scan_text(kv_value or token, environment)
 
 
 def _is_local_path(value: str) -> bool:
