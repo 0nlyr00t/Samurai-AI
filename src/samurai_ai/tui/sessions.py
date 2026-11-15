@@ -230,6 +230,9 @@ class SessionController:
             f"status={status}]\n{text}",
         )
         self._remember(message)
+        ready = getattr(self, "_subagent_result_ready", None)
+        if callable(ready):
+            ready(spawn.run_id)
 
     # -- stop -------------------------------------------------------------
     def stop_subagent(self, run_id: str | None = None) -> bool:

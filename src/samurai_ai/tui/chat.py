@@ -339,6 +339,7 @@ class ChatController:
         _drift_nudged: bool
         _drift_marks: Any
         _strategist_spawned_turn: bool
+        _subagent_wait: tuple[str, asyncio.Event] | None
 
     def action_steer(self) -> None:
         """Ctrl-S: inject into the running turn, or send when nothing runs."""
@@ -1554,6 +1555,7 @@ class ChatController:
                 self._last_quit_request = time.monotonic()
                 self._write_dim(self.translator.t("app.stop-done"))
             self._stop_requested = False
+            self._subagent_wait = None
             self._end_turn(reason)
             self._chat_busy = False
             self._turn_started = None
@@ -1788,6 +1790,8 @@ class ChatController:
                     return TerminalReason.CANCELLED
                 if self._steer_queue:
                     # the operator steered while this answer was in flight
+                    continue
+                if await self._continue_after_subagent():
                     continue
                 if promise_nudges < _MAX_PROMISE_NUDGES and _PROMISE_RE.search(response.text or ""):
                     promise_nudges += 1
@@ -2169,6 +2173,7 @@ class ChatController:
                 role="user",
                 content="[tool agent_spawn] the subagent did not start (see the journal)",
             )
+        self._expect_subagent_result(run_id)
         self._write_entity_line(
             self.translator.t("subagent.tool-started", run=run_id),
             "agent",
@@ -2182,6 +2187,34 @@ class ChatController:
                 "background; its steps and output are in the sessions screen (Ctrl-G)"
             ),
         )
+
+    def _expect_subagent_result(self, run_id: str) -> None:
+        self._subagent_wait = (run_id, asyncio.Event())
+
+    def _subagent_result_ready(self, run_id: str) -> None:
+        tracked = getattr(self, "_subagent_wait", None)
+        if tracked is not None and tracked[0] == run_id:
+            tracked[1].set()
+
+    async def _continue_after_subagent(self) -> bool:
+        """Keep the parent turn alive until an explicit child hands back."""
+        tracked = getattr(self, "_subagent_wait", None)
+        if tracked is None:
+            return False
+        run_id, ready = tracked
+        if not ready.is_set():
+            self._write_dim(
+                self.translator.t("subagent.waiting", run=run_id), process=False
+            )
+        while not ready.is_set():
+            if self._stop_requested:
+                return False
+            try:
+                await asyncio.wait_for(ready.wait(), timeout=0.1)
+            except TimeoutError:
+                pass
+        self._subagent_wait = None
+        return True
 
     def _task_targets(self, text: str) -> list[str]:
         """Hosts and networks the task names that the scope does not cover yet."""

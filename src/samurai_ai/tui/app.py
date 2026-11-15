@@ -2804,6 +2804,9 @@ class SamuraiApp(
         if kind == "phase":
             self._open_phase_board(ref)
             return
+        if kind == "agent":
+            self._show_session_detail(ref)
+            return
         if kind in {"secret", "flag"}:
             self._inspect_full(kind, ref)
             return

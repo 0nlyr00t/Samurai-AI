@@ -3305,6 +3305,122 @@ def test_agent_spawn_tool_starts_a_child(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_agent_spawn_chat_link_opens_the_child_transcript(tmp_path: Path) -> None:
+    from samurai_ai.tui.screens import SessionDetailScreen
+
+    stack, _provider, operation = _session_stack(tmp_path)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            run_id = await app.spawn_subagent("look around")
+            assert run_id is not None
+            app.action_inspect("agent", run_id)
+            await pilot.pause()
+            assert isinstance(app.screen, SessionDetailScreen)
+            assert run_id in str(app.screen.query_one("#session-title", Static).render())
+            sections = "\n".join(
+                str(node.render()) for node in app.screen.query(Static)
+            ).lower()
+            assert "steps" in sections and "notes" in sections
+
+    asyncio.run(exercise())
+
+
+def test_parent_turn_waits_for_agent_spawn_and_continues(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from samurai_ai.agents.provider import ChatResponse, Usage
+
+    class Provider:
+        def __init__(self) -> None:
+            self.parent_requests: list[object] = []
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["test-model"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            if not request.tools:
+                return ChatResponse(
+                    text="stop", usage=Usage(prompt_tokens=1, completion_tokens=1),
+                    model_id=request.model_id, provider_id="gpt",
+                )
+            self.parent_requests.append(request)
+            count = len(self.parent_requests)
+            if count == 1:
+                return ChatResponse(
+                    text="",
+                    tool_calls=(
+                        ToolCall(
+                            id="spawn-1", name="agent_spawn",
+                            arguments={"instruction": "map the service"},
+                        ),
+                    ),
+                    usage=Usage(prompt_tokens=2, completion_tokens=1),
+                    model_id=request.model_id, provider_id="gpt",
+                )
+            return ChatResponse(
+                text="waiting" if count == 2 else "continued after swarm",
+                usage=Usage(prompt_tokens=2, completion_tokens=1),
+                model_id=request.model_id, provider_id="gpt",
+            )
+
+    provider = Provider()
+    stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
+    settings, vault, models = stack[2], stack[5], stack[-1]
+    settings.set_locale("en")
+    vault.add("gpt-key", "x")
+    models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
+    models.add_model("gpt/test-model")
+    settings.set_value("model.default", "gpt/test-model@v1")
+    operation = stack[0].create(
+        "Swarm wait", OperationMode.CTF_HTB, ScopeContract(includes=("10.0.0.5",))
+    )
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+
+        async def spawned(_instruction: str, **_kwargs):  # type: ignore[no-untyped-def]
+            async def finish() -> None:
+                await asyncio.sleep(0.05)
+                app._hand_back(
+                    SimpleNamespace(run_id="agent_child", task_id="recon"),
+                    "child found proof",
+                    status="completed",
+                )
+
+            asyncio.create_task(finish())
+            return "agent_child"
+
+        app.spawn_subagent = spawned  # type: ignore[method-assign]
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._start_chat("use swarm")
+            for _ in range(100):
+                await pilot.pause()
+                await asyncio.sleep(0.01)
+                if not app._chat_busy:
+                    break
+
+            assert not app._chat_busy
+            assert len(provider.parent_requests) == 3
+            final_request = provider.parent_requests[-1]
+            assert any(
+                "child found proof" in message.content
+                for message in final_request.messages
+            )
+            assert any(
+                message.content == "continued after swarm"
+                for message in app._chat_history
+            )
+
+    asyncio.run(exercise())
+
+
 def test_agent_spawn_accepts_the_strategist_specialization(tmp_path: Path) -> None:
     from samurai_ai.agents.provider import ToolCall
 
