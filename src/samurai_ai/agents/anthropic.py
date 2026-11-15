@@ -116,6 +116,7 @@ def parse_messages_response(
         model_id=model_id,
         provider_id=provider_id,
         latency_ms=latency_ms,
+        stop_reason=str(payload.get("stop_reason") or ""),
     )
 
 

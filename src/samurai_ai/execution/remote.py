@@ -1009,8 +1009,13 @@ class RdpExecTool(_RemoteTool):
     default_port = 3389
     force_native = True
 
-    def __init__(self, runner: DockerSandboxRunner | None = None) -> None:
+    def __init__(
+        self,
+        runner: DockerSandboxRunner | None = None,
+        session_manager: ProcessManager | None = None,
+    ) -> None:
         super().__init__(runner)
+        self.session_manager = session_manager
         self._definition = ToolDefinition(
             id="remote.rdp-exec",
             version=1,
@@ -1030,6 +1035,7 @@ class RdpExecTool(_RemoteTool):
                     "user": {"type": "string", "minLength": 1, "maxLength": 256},
                     "password": {"type": "string", "minLength": 0, "maxLength": 1024},
                     "command": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    "shell": {"type": "string", "enum": ["posix", "cmd"], "default": "posix"},
                     "files": {
                         "type": "object",
                         "description": "Small files copied into the redirected drive before exec",
@@ -1052,19 +1058,63 @@ class RdpExecTool(_RemoteTool):
         }
 
     def invoke(self, params: dict[str, Any], scope: ScopeContract) -> ToolOutput:
+        return asyncio.run(self._invoke_session(params, scope))
+
+    async def _invoke_session(
+        self, params: dict[str, Any], scope: ScopeContract
+    ) -> ToolOutput:
         import json
 
-        return self._run(
-            [
-                "-c",
-                _RDP_EXEC_DRIVER,
-                str(params["user"]),
-                str(params["command"]),
-                json.dumps(params.get("files", {}), ensure_ascii=False),
-            ],
-            params,
-            scope,
+        from samurai_ai.services.rdp_sessions import RdpBackend
+        from samurai_ai.services.sessions import CommandStatus, SessionService
+
+        tunnel = await self._open(params, scope)
+        manager = self.session_manager or ProcessManager(
+            allowed_executables=frozenset({"python3", "bwrap"})
         )
+        service = SessionService(
+            manager=manager,
+            autonomy_required=self.autonomy_required,
+            backend=RdpBackend(manager, self.autonomy_required),
+        )
+        try:
+            session = await service.open(
+                "",
+                scope,
+                str(params["host"]),
+                str(params["user"]),
+                password=str(params["password"]),
+                port=int(params.get("port") or 3389),
+                metadata={
+                    "files": json.dumps(params.get("files", {}), ensure_ascii=False),
+                    "shell": str(params.get("shell") or "posix"),
+                    "endpoint": f"127.0.0.1:{tunnel.port}",
+                },
+            )
+            command = await service.exec(
+                session.id,
+                str(params["command"]),
+                wait_seconds=280,
+            )
+            await service.close(session.id)
+            return ToolOutput(
+                stdout=command.stdout,
+                stderr=command.stderr,
+                exit_code=command.exit_code if command.exit_code is not None else 0,
+                unknown=command.status is CommandStatus.UNKNOWN,
+                egress_events=tuple(
+                    {
+                        "host": event.host,
+                        "port": event.port,
+                        "verdict": event.verdict,
+                        "bytes_sent": event.bytes_sent,
+                        "bytes_received": event.bytes_received,
+                    }
+                    for event in tunnel.events
+                ),
+            )
+        finally:
+            await tunnel.stop()
 
 
 class AdbTool(_RemoteTool):

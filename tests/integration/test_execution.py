@@ -20,6 +20,7 @@ from samurai_ai.domain.kernel import ApprovalStatus, RiskClass
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.recovery import RecoveryActionStatus
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.execution.registry import ToolOutput
 from samurai_ai.services.execution import ToolExecutionService
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
@@ -103,6 +104,47 @@ def test_a_timeout_repeat_matches_the_same_command_only(tmp_path: Path) -> None:
     assert execution.timeout_repeat(operation.id, "shell.exec", f"  {command}  ") == run
     assert execution.timeout_repeat(operation.id, "shell.exec", command + " --shares") is None
     assert execution.timeout_repeat(operation.id, "shell.exec", "echo ok") is None
+
+
+def test_an_unknown_outcome_is_terminal_and_sticky(tmp_path: Path) -> None:
+    service, _kernel, recovery, execution = make_stack(tmp_path / "unknown.db")
+    operation = make_operation(service)
+    command = "ssh user@10.0.0.5 id"
+    run = ToolRun(
+        operation_id=operation.id,
+        tool_id="shell.exec",
+        tool_version=1,
+        parameters={"command": command},
+    )
+    execution.runs.add_run(
+        run,
+        OperationEvent(
+            operation_id=operation.id, event_type="tool.run.queued", payload={}
+        ),
+    )
+    run.start()
+    execution.runs.save_run(
+        run,
+        1,
+        OperationEvent(
+            operation_id=operation.id, event_type="tool.run.started", payload={}
+        ),
+    )
+    action = recovery.begin_action(
+        operation.id,
+        action_type="tool.run",
+        description="unknown remote outcome",
+    )
+    result = execution._finish_run(
+        run,
+        action.id,
+        ToolOutput(stdout="partial", stderr="", exit_code=0, unknown=True),
+    )
+    assert result.run.status is ToolRunStatus.UNKNOWN
+    assert execution.timeout_repeat(operation.id, "shell.exec", command) == run
+    assert any(
+        event.event_type == "tool.run.unknown" for event in service.events(operation.id)
+    )
 
 
 def test_a_failed_run_does_not_trigger_the_timeout_repeat_guard(tmp_path: Path) -> None:
