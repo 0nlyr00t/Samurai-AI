@@ -102,11 +102,17 @@ def infra_hosts(mode: str) -> frozenset[str]:
     return _SHARED_INFRA | _PLATFORM_INFRA.get(mode, frozenset())
 
 
+def _trim_shell_token(value: str) -> str:
+    """Shell separators delimit a command; they are not target characters."""
+    return value.strip().strip("'\"").rstrip(";&|")
+
+
 def _scan_text(text: str) -> list[tuple[str, str]]:
     """Host-shaped literals in a value that is (a list of) bare targets."""
     found: list[tuple[str, str]] = []
     for part in text.split(","):
-        part = part.strip().strip("'\"")
+        # shlex keeps shell separators attached to the preceding token.
+        part = _trim_shell_token(part)
         if not part:
             continue
         if "://" in part:
@@ -200,7 +206,7 @@ def _words(token: str) -> list[tuple[str, str]]:
     """
     _, _, kv_value = token.partition("=")
     if " " not in token:
-        if not kv_value and _looks_like_file(token):
+        if not kv_value and _looks_like_file(_trim_shell_token(token)):
             # a file, not a host: `cat app.js` must not be judged as the .js TLD
             return []
         return _scan_text(kv_value or token)
