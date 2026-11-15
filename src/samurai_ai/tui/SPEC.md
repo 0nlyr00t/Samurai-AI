@@ -59,6 +59,11 @@ run record. Провал раскрывается сам и начинается
 
 ## SWARM
 
+Динамическая вкладка `SWARM` после LOOT появляется при первом child session и
+остаётся доступной для завершённых runs в рамках операции. Она показывает
+active/total, run status, specialization, task и последнюю note; member link ведёт
+в SessionDetail. Без children вкладка скрыта, активный view возвращается в chat.
+
 Explicit `agent_spawn` оставляет parent turn активным до handback и затем
 автоматически продолжает model loop с результатом child. Agent link в chat сразу
 открывает SessionDetail: steps, notes, findings и tool calls доступны без нового

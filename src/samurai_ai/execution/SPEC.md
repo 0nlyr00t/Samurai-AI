@@ -60,6 +60,14 @@ filesystem writes. Dynamic paths не угадываются — их огран
 `.config/samurai` state не является operation workspace; artifacts принадлежат
 domain services, а обычные shell writes идут в cwd/trusted dirs или scratch.
 
+## LOOT export
+
+`LootExportService` сохраняет `./loot/<operation_id>/findings.json`,
+`credentials.json`, `flags.json` с полными captured values. Это приватные
+snapshots, не public artifacts: directories 0700, files 0600, atomic replace,
+внутренний `.gitignore`. Provider/service keys исключены. TUI обновляет snapshot
+только при смене signature; `SAMURAI_LOOT_DIR` изолирует headless/test runs.
+
 ## Direct network
 
 Direct nmap проверяет scope до spawn, но не имеет scoped egress audit. Это явное
