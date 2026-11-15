@@ -533,6 +533,33 @@ scope. Обоснование хранится только с id доказат
 8. **Regression и live CI.** RDP exec, GUI/file transfer, CUPS, scope expansion
    и production isolation проверяются не только unit, но и на реальном Linux.
 
+## 9s. Этап 21 — production readiness реализация (код и live lab готовы)
+
+Выполнено:
+
+- Scope rationale UI: `operation.scope.auto` содержит author/reason/finding/artifact;
+  exclude запрещает повторный auto-add, явный restore получает author=operator.
+- Universal sessions: `session.control` с OpenSSH ControlMaster, interactive
+  read/write/cancel/reconnect/close, `UNKNOWN + UNOBSERVED`, sticky retry guard,
+  background completion и typed `tool.run.unknown`.
+- ThinkRail patterns без ThinkRail UI: executionMode для read-only plan batches,
+  sequential stateful tools, guard truncated tool calls, settlement/restart repair
+  и privileged execution только от родителя.
+- RDP: один desktop master, POSIX xterm и Windows cmd.exe, scoped tunnel,
+  `GUI:fetch=<http(s)>`, 30s readiness, bwrap production с `/tmp` как единственным
+  writable root и Xvfb внутри namespace.
+- Bootstrap: `session.control healthcheck` (open + exec true), reviewed OpenSSH
+  recipe, lifecycle outcomes и secret redaction JSON `csrf/credential/private-key`.
+- Lab: writeup и 44 legacy artifacts очищены с отдельным backup;
+  `eval readiness op_lab → evidence_success=true`.
+- Regression: **2043 passed, 12 skipped**, Ruff и mypy чистые.
+- Linux live lab: RDP один master/два exec, CUPS active/config, scope allow/deny,
+  bwrap production exec, SSH и RDP reconnect с `OLD=unknown` и новым exec.
+
+Финальная HTB acceptance серия остаётся за пользователем: он проведёт её сам
+через Samurai. До неё не объявляется полная production-доказанность автономных
+операций. ThinkRail UI и model fallback не добавляются.
+
 ## 9p. Этап 18 (добор) — видимость Loot и дорожка важного (в работе)
 
 Мелкое, но бьёт по глазам: вкладка **Loot** не видна — `#view-tabs` ограничен
