@@ -220,15 +220,24 @@ class LiveAnswerBlock(StreamBlock):
         else:
             self._parts = [Text(token)]
         self.update(Text("").join(self._parts))
+        self._notify_content_changed()
+
+    def _notify_content_changed(self) -> None:
+        parent = getattr(self, "parent", None)
+        notify = getattr(parent, "content_changed", None)
+        if callable(notify):
+            notify()
 
     def reset_tokens(self) -> None:
         """Throw the streamed text away — a retry re-sends it from the start."""
         self._parts = []
         self.update(Text(""))
+        self._notify_content_changed()
 
     def flush_tokens(self) -> None:
         """Show whatever was buffered while follow was off."""
         self.update(Text("").join(self._parts))
+        self._notify_content_changed()
 
     def plain_text(self) -> str:
         """The streamed text so far (for the final message and /copy)."""
@@ -281,6 +290,7 @@ class ToolBlock(Vertical):
         if not self.is_mounted:
             return
         self.query_one(ToolHeader).update(self._render_title())
+        self._notify_content_changed()
 
     def set_body(self, body: list[str], style: str = "") -> None:
         """Replace the body in place — the thinking block grows during a turn."""
@@ -338,6 +348,13 @@ class ToolBlock(Vertical):
         header.update(self._render_title())
         body.update(self._render_body())
         body.display = self.expanded
+        self._notify_content_changed()
+
+    def _notify_content_changed(self) -> None:
+        parent = getattr(self, "parent", None)
+        notify = getattr(parent, "content_changed", None)
+        if callable(notify):
+            notify()
 
     def _render_title(self) -> Text:
         marker = "▾" if self.expanded else "▸"
@@ -421,12 +438,14 @@ class BlockJournal(VerticalScroll, can_focus=False):
         #: it was lost whenever a mount had not landed yet, and the lines
         #: written in that window started a second, orphaned block
         self._last_stream: StreamBlock | None = None
+        self._follow_scheduled = False
 
     # -- RichLog-compatible surface -------------------------------------
 
     def write(self, renderable: Any) -> None:
         if isinstance(renderable, Text):
             self._stream().append(renderable)
+            self.content_changed()
         elif isinstance(renderable, RichMarkdown):
             self._mount(Markdown(renderable.markup))
         else:
@@ -493,6 +512,7 @@ class BlockJournal(VerticalScroll, can_focus=False):
         """
         if len(self.children) == 1 and isinstance(self.children[0], StreamBlock):
             self.children[0].replace_lines(lines)
+            self.content_changed()
             return
         self.remove_children()
         block = StreamBlock()
@@ -548,8 +568,19 @@ class BlockJournal(VerticalScroll, can_focus=False):
         if not isinstance(widget, StreamBlock):
             self._last_stream = None
         self.mount(widget)
+        self.content_changed()
+
+    def content_changed(self) -> None:
+        """Coalesce live updates into one tail scroll after layout."""
+        if not self.follow or self._follow_scheduled:
+            return
+        self._follow_scheduled = True
+        self.call_after_refresh(self._scroll_to_live_tail)
+
+    def _scroll_to_live_tail(self) -> None:
+        self._follow_scheduled = False
         if self.follow:
-            self.call_after_refresh(self.scroll_end, animate=False)
+            self.scroll_end(animate=False)
 
     @property
     def follow(self) -> bool:
@@ -560,13 +591,13 @@ class BlockJournal(VerticalScroll, can_focus=False):
         """Flip follow mode; returns the new state."""
         self._follow = not self.follow
         if self._follow:
-            self.call_after_refresh(self.scroll_end, animate=False)
+            self.content_changed()
         return self._follow
 
     def follow_end(self) -> None:
         """Jump to the tail and turn follow back on."""
         self._follow = True
-        self.call_after_refresh(self.scroll_end, animate=False)
+        self.content_changed()
 
     def watch_scroll_y(self, old: float, new: float) -> None:
         """Follow the tail again once scrolled to the bottom; stop while reading up.
