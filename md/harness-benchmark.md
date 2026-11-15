@@ -1,88 +1,25 @@
-# Живой бенчмарк харнесса: как мерить и как читать
+# Evaluation harness
 
-Бенчмарк гоняет **чат-петлю харнесса** на живой модели и живой цели: тот же путь,
-которым работает оператор (доктрина, судья цели, scope-гард, параллель, фон), только
-без человека — аппрувы в YOLO, локаль берётся из настроек.
+## Run privately
 
-Это не то же самое, что `samurai eval run`: тот путь оркестраторный и на скриптовых
-ответах, он ловит поломки схемы и стоимости, но правки чат-слоя в нём не видны.
-
-## Запуск
+Use an authorized target supplied through local environment variables. Keep all
+results, logs and evidence outside public git.
 
 ```bash
-samurai eval bench evals/bench/local-smoke.json --host 127.0.0.1
-samurai eval bench evals/bench/takeoff.json --host 192.0.2.1 --relay "ssh -F ~/.ssh/htb.conf vm"
-samurai eval bench evals/bench/takeoff.json --host 192.0.2.1 --only user-txt
-samurai eval history --limit 10
+TARGET_IP=<authorized-target>
+samurai eval bench evals/bench/takeoff.json \
+  --host "$TARGET_IP" \
+  --relay "ssh -F ~/.ssh/lab.conf vm"
 ```
 
-- `--host` обязателен и повторяем: хосты попадают в скоуп операции.
-- `--relay` — префикс, через который идёт каждая команда (транспорт, не цель).
-- `--model` — id модели; по умолчанию модель приложения (и она же запоминается).
-- `--quiet` убирает строки прогресса из stderr.
+The suite finishes only after all hypotheses are closed and a final conclusion is
+recorded. Capture local evidence success, terminal correctness, blocked reasons,
+wall time, cost and safety violations. Do not publish those artifacts.
 
-Сценарии в сьюте описывают задачу (`objective`), критерий финиша для судьи, порт
-канарейки и потолки. Хосты в сьюте не зашиты — сьют не завязан на платформу.
+## Local acceptance
 
-## Класс бокса
-
-Сценарий несёт класс (`easy`, `medium`, `hard`, по умолчанию `medium`), и он
-идёт в таблицу и строку истории. Сравнивать прогоны можно только внутри класса:
-«стало лучше» на easy и hard значит разное.
-
-## Перед стартом: канарейка
-
-Раннер обязан доказать, что цель отвечает: `nc -z` (или сокет через python) по порту
-сценария, через релей если он задан. Не ответила — сценарий получает `error`, а не
-нулевой счёт. Бенчмарк, который не достаёт бокс, меряет VPN.
-
-## Что считается успехом
-
-Сценарий проходит, когда **цель достигнута** И **все гипотезы закрыты** (подтверждены,
-опровергнуты или оставлены) И шум в потолках: провалы транспорта ≤ лимита, доля
-неуспешных команд ≤ лимита, стены ≤ лимита. Отдельно фиксируется, до какой стадии
-килчейна дошёл прогон.
-
-## Метрики
-
-В отчёте и в истории: стена, шаги бюджета, вызовы модели, токены промпта и ответа,
-стоимость, число запусков, число неуспешных, число провалов транспорта, стадия
-килчейна, достигнута ли цель, открытые и закрытые гипотезы, флаги, артефакты.
-Открытыми считаются и graph intents (`open/running/paused`), и CTF hypotheses
-(`open/testing`), а не только реестр CTF. Отдельная точная проверка операции:
-`samurai eval readiness <operation-id> [--json]` — она возвращает 1, пока цель
-или coverage не достигнуты.
-
-Публичная таблица — это строки истории: регрессия видна как рост неуспешных/стены или
-как падение стадии при том же сьюте.
-
-## Расписание
-
-Отдельного планировщика нет и в этой волне не появилось: прогон запускается
-руками или внешним cron/launchd, например
-
-```cron
-0 4 * * * cd ~/Samurai-AI && .venv/bin/samurai eval bench evals/bench/takeoff.json --host <TARGET_IP> --relay "ssh -F ~/.ssh/htb.conf vm" --quiet
-```
-
-Отчёты и история копятся сами, `samurai eval history` показывает их подряд.
-
-## Сравнение с DSH-трейсами
-
-Прямого импорта чужих трейсов нет: нужны их логи, приведённые к тем же
-метрикам (стена, стадия, доля провалов, токены, цена). Пока сравнение идёт
-глазами по двум таблицам — своя история и чужие отчёты.
-
-## Где живёт история
-
-`~/.config/samurai/benchmarks/`: сырые отчёты в `runs/<время>-<сьют>.json` и одна
-строка на прогон в `history.jsonl`. В репозитории остаются только сьюты — цифры
-зависят от машины, модели и сети, поэтому не коммитятся как «эталон».
-
-## Чего бенчмарк не делает
-
-- Не поднимает и не гасит цель (её даёт оператор).
-- Не заменяет ручной прогон: он мерит то, что делает харнесс, а не то, что задумал
-  оператор.
-- Не годится для сравнения моделей «в вакууме»: модель фиксируется в строке истории,
-  чтобы сравнение было честным.
+- Use real HTB and Linux services, not mocked tool output.
+- Include RDP, CUPS, scope expansion, isolation and reconnect scenarios.
+- Repeat with unstable networking and require safe `UNKNOWN` outcomes instead of
+  replaying an unobserved remote action.
+- Keep the resulting evidence local and redact secrets before sharing any report.
