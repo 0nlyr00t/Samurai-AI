@@ -113,6 +113,23 @@ Run завершается только после recovery/closing и пров�
 как interrupted с причиной и предлагает новый run. Subagent получает результат,
 но не privileged `admin/sessions/c2` execution; эти вызовы принадлежат родителю.
 
+## Finalization
+
+Перед terminal verdict goal переходит в `FINALIZING`: разрешены только импорт
+artifact, атомарное оформление результата/finding и итоговый вывод, но не новые
+attack tools или исследования. Разрешена одна write-only попытка и один итоговый
+ответ; незакрытая работа или неясный verdict переводит goal в
+`BLOCKED/finalization_required` и ждёт оператора без model calls. Продолжение
+возможно только после действий оператора. Общий budget не расширяется
+автоматически: новый research budget задаётся явно оператором.
+
+`FinalizationService.snapshot` перечисляет eligible artifact-backed facts,
+unresolved hypotheses и pending execution/approvals. Finding создаётся только из
+eligible fact; record result → finding/evidence → close intent выполняется в одном
+UnitOfWork с rollback. Завершение plan task запрещено с открытыми intents, а
+`no_finding` не может перечеркнуть positive artifact-backed facts. Для оформления
+существующих узлов новый план и `/applyplan` не требуются.
+
 ## Граница
 
 Adapters не принимают scope/ROE решений и не меняют evidence вручную: они вызываются

@@ -62,6 +62,12 @@ def register_goal_commands(
     step.add_argument("operation_id")
     step.add_argument(_JSON, dest="json_output", action="store_true", default=argparse.SUPPRESS)
 
+    extend = commands.add_parser("extend", help="Explicitly extend a goal budget")
+    extend.add_argument("operation_id")
+    extend.add_argument("steps", type=int)
+    extend.add_argument("seconds", type=int)
+    extend.add_argument(_JSON, dest="json_output", action="store_true", default=argparse.SUPPRESS)
+
 
 def _emit(goal: Goal, json_output: bool) -> None:
     if json_output:
@@ -140,6 +146,16 @@ def handle_goal_command(args: argparse.Namespace, goals: GoalService) -> int | N
             return 0
         case "step":
             _emit(goals.record_step(_current_id(goals, operation_id)), json_output)
+            return 0
+        case "extend":
+            _emit(
+                goals.extend(
+                    _current_id(goals, operation_id),
+                    steps=args.steps,
+                    seconds=args.seconds,
+                ),
+                json_output,
+            )
             return 0
     return None
 

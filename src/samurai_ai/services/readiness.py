@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from samurai_ai.domain.execution import ToolRunStatus
 from samurai_ai.domain.hypotheses import hypothesis_coverage
+from samurai_ai.services.finalization import FinalizationService
 
 
 class OperationReadiness(BaseModel):
@@ -19,6 +20,15 @@ class OperationReadiness(BaseModel):
     open_ids: tuple[str, ...]
     testing_ids: tuple[str, ...]
     goal_reached: bool
+    goal_state: str
+    finalization_required: bool
+    finalization_ready: bool
+    eligible_fact_ids: tuple[str, ...]
+    pending_execution_ids: tuple[str, ...]
+    pending_approval_ids: tuple[str, ...]
+    budget_steps_left: int
+    budget_seconds_left: int
+    domain_findings: int
     terminal_reason: str
     model_calls: int
     tool_runs: int
@@ -60,6 +70,18 @@ class ReadinessService:
         coverage = hypothesis_coverage(
             self.graph.for_operation(operation_id), self.ctf.list_hypotheses(operation_id)
         )
+        snapshot = FinalizationService(
+            self.operations,
+            self.kernel,
+            self.graph,
+            self.goals,
+            ctf=self.ctf,
+            execution=self.execution,
+        ).snapshot(operation_id)
+        goal = self.goals.current(operation_id)
+        if goal is None:
+            history = self.goals.list(operation_id)
+            goal = history[-1] if history else None
         calls = [event for event in events if event.event_type == "model.call"]
         runs = self.execution.list_runs(operation_id)
         terminal = next(
@@ -88,6 +110,17 @@ class ReadinessService:
             open_ids=coverage.open_ids,
             testing_ids=coverage.testing_ids,
             goal_reached=self.goals.reached(operation_id),
+            goal_state=goal.state.value if goal is not None else "",
+            finalization_required=(
+                goal is not None and goal.block_reason == "finalization_required"
+            ),
+            finalization_ready=snapshot.ready_to_complete,
+            eligible_fact_ids=snapshot.eligible_fact_ids,
+            pending_execution_ids=snapshot.pending_execution,
+            pending_approval_ids=snapshot.pending_approvals,
+            budget_steps_left=snapshot.budget_steps_left,
+            budget_seconds_left=snapshot.budget_seconds_left,
+            domain_findings=len(self.kernel.kernel.list_findings(operation_id)),
             terminal_reason=terminal,
             model_calls=len(calls),
             tool_runs=len(runs),

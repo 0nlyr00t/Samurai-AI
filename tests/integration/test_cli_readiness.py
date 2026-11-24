@@ -35,6 +35,12 @@ def test_readiness_covers_both_hypothesis_registries(
     assert readiness.open_ids == (intent.id, hypothesis.id)
     assert not readiness.hypotheses_complete
     assert not readiness.evidence_success
+    assert readiness.goal_state == "complete"
+    assert not readiness.finalization_ready
+    assert not readiness.finalization_required
+    assert readiness.domain_findings == 0
+    assert readiness.pending_execution_ids == ()
+    assert readiness.pending_approval_ids == ()
     assert main(["eval", "readiness", operation.id, "--json"]) == 1
     payload = json.loads(capsys.readouterr().out)
     assert set(payload["open_ids"]) == {intent.id, hypothesis.id}
@@ -47,3 +53,5 @@ def test_readiness_covers_both_hypothesis_registries(
     assert payload["hypotheses_complete"] is True
     assert payload["hypotheses_closed"] == 2
     assert payload["evidence_success"] is True
+    assert payload["finalization_ready"] is True
+    assert payload["budget_steps_left"] >= 0

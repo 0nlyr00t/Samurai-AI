@@ -91,11 +91,12 @@ def test_goal_cap_enters_finalization_until_operator_extends(tmp_path, capsys) -
     assert exhausted["spent_steps"] == 1
 
     assert main(["--db", database, "goal", "extend", operation_id, "5", "60"]) == 0
+    capsys.readouterr()
     assert main(["--db", database, "--json", "goal", "status", operation_id]) == 0
     resumed = json.loads(capsys.readouterr().out)
     assert resumed["state"] == "active"
     assert resumed["budget_steps"] == 6
-    assert resumed["budget_seconds"] == 60
+    assert resumed["budget_seconds"] == 1860
 
 
 def test_goal_next_queues_and_complete_promotes(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]

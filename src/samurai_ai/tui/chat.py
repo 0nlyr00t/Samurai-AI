@@ -1739,6 +1739,21 @@ class ChatController:
         self._write_dim(self.translator.t("chat.finalization-required"), process=False)
         return TerminalReason.BLOCKED
 
+    def _write_domain_summary(self, operation_id: str) -> None:
+        coverage = self._hypothesis_coverage(operation_id)
+        findings = len(self.kernel.kernel.list_findings(operation_id))
+        artifacts = len(self.kernel.kernel.list_artifacts(operation_id))
+        self._write_dim(
+            self.translator.t(
+                "chat.domain-summary",
+                findings=findings,
+                closed=coverage.closed,
+                total=coverage.total,
+                artifacts=artifacts,
+            ),
+            process=False,
+        )
+
     async def _finish_finalization(
         self,
         operation_id: str,
@@ -1781,6 +1796,7 @@ class ChatController:
             if response.tool_calls:
                 return self._block_finalization(operation_id, response)
         self._present_final_response(response)
+        self._write_domain_summary(operation_id)
         if self._goal_requires_judgment(operation_id, 1):
             verdict = await self._judge_goal(operation_id, model_id)
             if verdict != goal_judge.STOP:

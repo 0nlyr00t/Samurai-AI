@@ -169,6 +169,7 @@ class GoalService:
         self._accrue(goal)
         goal.record_step()
         if goal.exhausted:
+            self._save(goal, expected, "goal.step", {"spent_steps": goal.spent_steps})
             return self.begin_finalization(goal.id)
         return self._save(goal, expected, "goal.step", {"spent_steps": goal.spent_steps})
 

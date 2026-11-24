@@ -11514,7 +11514,10 @@ def test_unresolved_finalization_waits_for_the_operator_without_more_calls(
 
             assert provider.calls == 4
             assert app.goals.reached(operation.id)
-            assert "Main conclusion" in app.query_one("#journal", BlockJournal).text()
+            journal = app.query_one("#journal", BlockJournal).text()
+            assert "Main conclusion" in journal
+            assert "findings=0" in journal
+            assert "hypotheses=1/1" in journal
             reasons = [
                 event.payload["reason"]
                 for event in stack[0].repository.events(operation.id)

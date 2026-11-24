@@ -808,6 +808,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.goal-judge-failed": "[goal] judge unavailable, falling back to the counter",
         "chat.finalization-required": "[goal] operator finalization required: /finalize",
+        "chat.domain-summary": (
+            "[summary] findings={findings} · hypotheses={closed}/{total} · artifacts={artifacts}"
+        ),
         "finalize.prompt": (
             "Finalize the operation using existing evidence only. Do not start new research."
         ),
@@ -1763,6 +1766,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.goal-judge-failed": "[цель] оценщик недоступен, работает счётчик",
         "chat.finalization-required": "[цель] нужна финализация оператором: /finalize",
+        "chat.domain-summary": (
+            "[итог] findings={findings} · hypotheses={closed}/{total} · artifacts={artifacts}"
+        ),
         "finalize.prompt": (
             "Заверши операцию по уже имеющимся доказательствам. Новое исследование не начинай."
         ),

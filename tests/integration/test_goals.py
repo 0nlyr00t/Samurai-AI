@@ -85,27 +85,39 @@ def test_clock_only_advances_while_active(tmp_path) -> None:  # type: ignore[no-
     assert service.get(goal.id).spent_seconds == 15
 
 
-def test_step_budget_extends_instead_of_blocking(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_step_budget_enters_finalizing_until_operator_extends(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, _repo, _operations, operation = make_service(tmp_path)
     goal = service.create(operation.id, "short", budget_steps=2)
 
     service.record_step(goal.id)
     assert service.get(goal.id).state is GoalState.ACTIVE
-    extended = service.record_step(goal.id)
+    exhausted = service.record_step(goal.id)
 
+    assert exhausted.state is GoalState.FINALIZING
+    assert exhausted.budget_steps == 2
+    assert exhausted.spent_steps == 2
+    assert service.record_step(goal.id).state is GoalState.FINALIZING
+
+    extended = service.extend(
+        goal.id, steps=DEFAULT_BUDGET_STEPS, seconds=DEFAULT_BUDGET_SECONDS
+    )
     assert extended.state is GoalState.ACTIVE
     assert extended.budget_steps == 2 + DEFAULT_BUDGET_STEPS
-    # and the run simply goes on under the raised budget
     assert service.record_step(goal.id).state is GoalState.ACTIVE
 
 
-def test_time_budget_extends_instead_of_blocking(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_time_budget_enters_finalizing_until_operator_extends(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, _repo, _operations, operation = make_service(tmp_path)
     goal = service.create(operation.id, "slow", budget_seconds=30)
 
     service.clock.advance(30)  # type: ignore[attr-defined]
-    extended = service.record_step(goal.id)
+    exhausted = service.record_step(goal.id)
 
+    assert exhausted.state is GoalState.FINALIZING
+    assert exhausted.budget_seconds == 30
+    assert exhausted.spent_seconds == 30
+
+    extended = service.extend(goal.id, steps=1, seconds=DEFAULT_BUDGET_SECONDS)
     assert extended.state is GoalState.ACTIVE
     assert extended.budget_seconds == 30 + DEFAULT_BUDGET_SECONDS
 
