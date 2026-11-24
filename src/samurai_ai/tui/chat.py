@@ -1828,11 +1828,14 @@ class ChatController:
             # one against the committed evidence instead.
             response = None
         if response is None:
-            response = await self._request_finalization_answer(
+            final_response = await self._request_finalization_answer(
                 operation_id, model_id, reasoning
             )
-            if isinstance(response, TerminalReason):
-                return response
+            if isinstance(final_response, TerminalReason):
+                return final_response
+            if final_response is None:  # defensive: helper currently never returns None
+                return TerminalReason.MODEL_ERROR
+            response = final_response
         return await self._conclude_finalization(
             operation_id, model_id, response, runs_at_start, findings_at_start
         )
