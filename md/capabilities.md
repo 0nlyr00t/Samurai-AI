@@ -87,7 +87,7 @@ extension seams/плагины (инструменты уже добавляют
 web-поверхность операции (сокет-демон уже есть), distributed runners и air-gapped модели, полный
 egress enforcement на Docker Desktop for Mac и OS-пакеты installers (есть
 bare standalone binary). ADB и VBoxManage проверены только mock-прогонами,
-гены пока не мерялись полевой серией — см. `local operations report`.
+гены пока не мерялись полевой серией; результаты живых проверок хранятся локально.
 
 ## Живая сессия: демон и второй терминал
 
