@@ -277,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     host_commands = host.add_subparsers(dest="scope_host_command", required=True)
     host_add = host_commands.add_parser("add", help="Add or replace a name mapping")
     host_add.add_argument("operation_id")
-    host_add.add_argument("name", help="the name a target answers to, e.g. target.example")
+    host_add.add_argument("name", help="the name a target answers to, e.g. target.internal")
     host_add.add_argument("target", help="address it means, in scope")
     host_rm = host_commands.add_parser("rm", help="Drop a name mapping")
     host_rm.add_argument("operation_id")

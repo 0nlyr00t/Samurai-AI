@@ -159,10 +159,10 @@ def test_localhost_and_loopback_are_the_same_host() -> None:
 def test_a_host_alias_is_judged_as_its_address() -> None:
     """An HTB vhost stands for the box's IP: same verdict, and it resolves."""
     contract = ScopeContract(
-        includes=("192.0.2.1",), hosts={"target.example": "192.0.2.1"}
+        includes=("192.0.2.1",), hosts={"target.internal": "192.0.2.1"}
     )
-    assert contract.evaluate("http://target.example/").allowed
-    assert contract.resolve_host("target.example") == "192.0.2.1"
+    assert contract.evaluate("http://target.internal/").allowed
+    assert contract.resolve_host("target.internal") == "192.0.2.1"
     assert contract.resolve_host("other.htb") == "other.htb"
 
 

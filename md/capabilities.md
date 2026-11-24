@@ -114,12 +114,12 @@ samurai send <op> --answer <call> --pick target=app    # ответить аге
 
 ```bash
 samurai run "Lab" --mode ctf-htb --include 192.0.2.1 \
-  --include target.example --task "Скан портов" --task "Разобрать веб"   --model kimi/kimi-k3@v1
+  --include target.internal --task "Скан портов" --task "Разобрать веб"   --model kimi/kimi-k3@v1
 ```
 
 Команда создаёт операцию, план-цепочку, одобряет план и ведёт работу до конца
 плана. `--detach` оставляет её демону. Vhost без DNS описывается алиасом —
-`samurai scope host add <op> target.example 192.0.2.1` (имя резолвится внутри
+`samurai scope host add <op> target.internal 192.0.2.1` (имя резолвится внутри
 песочницы, scope судит его по адресу). Если что-то не отвечает вообще,
 `samurai sandbox check <op>` покажет, с какой стороны обрыв; для подсетей,
 которые не роутит бридж, есть `SAMURAI_SANDBOX_NETWORK=host` (мимо прокси, но

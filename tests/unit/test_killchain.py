@@ -136,7 +136,7 @@ def test_scope_rows_mark_touched_targets_and_hide_exclusions() -> None:
     scope = ScopeContract(
         includes=("10.0.0.0/24", "*.example.com"),
         excludes=("10.0.0.1",),
-        hosts={"target.example": "10.0.0.7"},
+        hosts={"target.internal": "10.0.0.7"},
     )
     rows = scope_rows(scope, {"10.0.0.7", "other.htb"})
     by_rule = {row.rule: row for row in rows}
@@ -144,8 +144,8 @@ def test_scope_rows_mark_touched_targets_and_hide_exclusions() -> None:
     assert by_rule["10.0.0.0/24"].hit is True
     assert by_rule["*.example.com"].hit is False
     # the alias is hit through the address it stands for, with the note
-    assert by_rule["target.example"].hit is True
-    assert by_rule["target.example"].note == "→ 10.0.0.7"
+    assert by_rule["target.internal"].hit is True
+    assert by_rule["target.internal"].note == "→ 10.0.0.7"
     # excluded targets disappear from TARGETS instead of looking active
     assert "10.0.0.1" not in by_rule
 
@@ -164,10 +164,10 @@ def test_scope_rows_resolve_a_touched_alias_into_its_rule() -> None:
     from samurai_ai.domain.scope import ScopeContract
     from samurai_ai.tui.killchain import scope_rows
 
-    scope = ScopeContract(includes=("10.0.0.9",), hosts={"target.example": "10.0.0.9"})
-    rows = scope_rows(scope, {"target.example"})
+    scope = ScopeContract(includes=("10.0.0.9",), hosts={"target.internal": "10.0.0.9"})
+    rows = scope_rows(scope, {"target.internal"})
     by_rule = {row.rule: row for row in rows}
-    assert by_rule["target.example"].hit is True
+    assert by_rule["target.internal"].hit is True
     # the alias name touched in a command also marks the rule its address means
     assert by_rule["10.0.0.9"].hit is True
 

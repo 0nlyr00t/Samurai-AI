@@ -10,7 +10,7 @@ from samurai_ai.services.reachability import probe_host as _probe_host
 def test_only_real_addresses_are_probed() -> None:
     assert _is_address("192.0.2.1")
     assert _is_address("127.0.0.1")
-    assert not _is_address("target.example")
+    assert not _is_address("target.internal")
     assert not _is_address("http://localhost:3000")
 
 

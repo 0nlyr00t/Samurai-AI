@@ -8816,16 +8816,16 @@ def test_task_targets_land_in_the_scope_without_a_popup(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
-            await app._maybe_offer_scope("HTB Lab на 192.0.2.1 и demo-target.example")
+            await app._maybe_offer_scope("HTB Lab на 192.0.2.1 и demo-target.internal")
             await pilot.pause()
             assert not isinstance(app.screen, PickerScreen)
             scope = app.service.get(operation.id).scope
             assert "192.0.2.1" in scope.includes
-            assert "demo-target.example" in scope.includes
+            assert "demo-target.internal" in scope.includes
             text = app.query_one("#journal", BlockJournal).text()
             assert "added" in text
             # once per operation, and covered targets never repeat
-            await app._maybe_offer_scope("снова про 192.0.2.1 и demo-target.example")
+            await app._maybe_offer_scope("снова про 192.0.2.1 и demo-target.internal")
             scope = app.service.get(operation.id).scope
             assert list(scope.includes).count("192.0.2.1") == 1
             await pilot.press("ctrl+c")

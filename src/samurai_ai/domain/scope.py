@@ -81,7 +81,7 @@ class ScopeContract(BaseModel):
     excludes: tuple[str, ...] = ()
     #: name → IP (or domain) for targets that only resolve on the target's own
     #: network: an HTB vhost, a box's internal DNS name. Both scope matching and
-    #: the sandbox consult this, so `target.example` behaves like the address it names.
+    #: the sandbox consult this, so `target.internal` behaves like the address it names.
     hosts: dict[str, str] = Field(default_factory=dict)
     #: plumbing that is never a target: resolvers, the platform API of the mode.
     #: Not operator data — execution injects it per mode so both the adapter's own

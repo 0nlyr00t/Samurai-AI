@@ -21,12 +21,12 @@ def make_operation(tmp_path: Path, capsys) -> tuple[str, str]:
 def test_a_mapping_is_listed_and_checks_as_its_address(tmp_path: Path, capsys) -> None:
     database, operation_id = make_operation(tmp_path, capsys)
     assert main(["--db", database, "scope", "host", "add", operation_id,
-                 "target.example", "192.0.2.1"]) == 0
+                 "target.internal", "192.0.2.1"]) == 0
     capsys.readouterr()
     assert main(["--db", database, "scope", "host", "list", operation_id]) == 0
-    assert "target.example\t192.0.2.1" in capsys.readouterr().out
+    assert "target.internal\t192.0.2.1" in capsys.readouterr().out
     assert main(["--db", database, "scope", "check", operation_id,
-                 "http://target.example/"]) == 0
+                 "http://target.internal/"]) == 0
     assert "ALLOW" in capsys.readouterr().out
 
 
