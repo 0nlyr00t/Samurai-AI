@@ -66,7 +66,7 @@ def test_goal_create_status_and_pause(tmp_path, capsys) -> None:  # type: ignore
     assert json.loads(capsys.readouterr().out)["state"] == "active"
 
 
-def test_goal_step_extends_the_budget(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+def test_goal_cap_enters_finalization_until_operator_extends(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
     database = str(tmp_path / "goal.db")
     operation_id = make_operation(database)
     main(
@@ -85,9 +85,17 @@ def test_goal_step_extends_the_budget(tmp_path, capsys) -> None:  # type: ignore
     capsys.readouterr()
 
     assert main(["--db", database, "--json", "goal", "step", operation_id]) == 0
-    extended = json.loads(capsys.readouterr().out)
-    assert extended["state"] == "active"
-    assert extended["budget_steps"] == 41
+    exhausted = json.loads(capsys.readouterr().out)
+    assert exhausted["state"] == "finalizing"
+    assert exhausted["budget_steps"] == 1
+    assert exhausted["spent_steps"] == 1
+
+    assert main(["--db", database, "goal", "extend", operation_id, "5", "60"]) == 0
+    assert main(["--db", database, "--json", "goal", "status", operation_id]) == 0
+    resumed = json.loads(capsys.readouterr().out)
+    assert resumed["state"] == "active"
+    assert resumed["budget_steps"] == 6
+    assert resumed["budget_seconds"] == 60
 
 
 def test_goal_next_queues_and_complete_promotes(tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]

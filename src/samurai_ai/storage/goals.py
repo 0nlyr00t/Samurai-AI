@@ -85,7 +85,12 @@ class GoalRepository:
 
     def current(self, operation_id: str) -> Goal | None:
         """The single active, paused or blocked goal, if any."""
-        for state in (GoalState.ACTIVE, GoalState.PAUSED, GoalState.BLOCKED):
+        for state in (
+            GoalState.ACTIVE,
+            GoalState.FINALIZING,
+            GoalState.PAUSED,
+            GoalState.BLOCKED,
+        ):
             goals = self.list(operation_id, state)
             if goals:
                 return goals[0]

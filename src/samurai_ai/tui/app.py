@@ -2313,6 +2313,16 @@ class SamuraiApp(
                 case "complete":
                     self.goals.complete(self._current_goal_id())
                     self._show_goal()
+                case "extend":
+                    parts = rest.split()
+                    try:
+                        steps = int(parts[0]) if parts else 40
+                        seconds = int(parts[1]) if len(parts) > 1 else 1800
+                    except ValueError:
+                        self._write_line("[goal] usage: /goal extend [steps] [seconds]")
+                        return
+                    self.goals.extend(self._current_goal_id(), steps=steps, seconds=seconds)
+                    self._show_goal()
                 case "next":
                     if not rest:
                         self._write_line("[goal] " + self.translator.t("goal.need-text"))
@@ -2325,6 +2335,42 @@ class SamuraiApp(
         except (GoalError, LookupError) as exc:
             self._write_line(f"[goal] {exc}")
         self._refresh_chrome()
+
+    def _finalize_command(self, argument: str) -> None:
+        """Show or resume the process-free operator finalization boundary."""
+        if self.operation is None:
+            self._write_line("[goal] " + self.translator.t("status.no-operation"))
+            return
+        if argument.strip() == "resume":
+            goal = self._current_goal()
+            if goal is None or goal.block_reason != "finalization_required":
+                self._write_dim(self.translator.t("finalize.not-waiting"))
+                return
+            if self._chat_busy:
+                self._write_dim(self.translator.t("finalize.busy"))
+                return
+            self.goals.resume_finalization(goal.id)
+            self._start_chat(self.translator.t("finalize.prompt"))
+            return
+        snapshot = self._finalization_service().snapshot(self.operation.id)
+        eligible = ", ".join(snapshot.eligible_fact_ids) or "-"
+        unresolved = ", ".join(snapshot.unresolved_ids) or "-"
+        self._write_dim(self.translator.t("finalize.facts", ids=eligible), process=False)
+        self._write_dim(
+            self.translator.t(
+                "finalize.blockers",
+                ids=unresolved,
+                runs=len(snapshot.pending_execution),
+                approvals=len(snapshot.pending_approvals),
+            ),
+            process=False,
+        )
+        self._write_dim(
+            self.translator.t(
+                "finalize.ready" if snapshot.ready_to_complete else "finalize.waiting"
+            ),
+            process=False,
+        )
 
     def _current_goal_id(self) -> str:
         goal = self._current_goal()
@@ -2456,21 +2502,13 @@ class SamuraiApp(
         self._refresh_queue_bar()
 
     def _count_goal_step(self) -> None:
-        """One model request against the active goal; a spent budget is raised."""
+        """One model request against the active goal; the cap enters finalization."""
         goal = self._current_goal()
         if goal is None or goal.state.value != "active":
             return
-        steps_before, seconds_before = goal.budget_steps, goal.budget_seconds
         updated = self.goals.record_step(goal.id)
-        if updated.budget_steps > steps_before or updated.budget_seconds > seconds_before:
-            self._write_line(
-                "[goal] "
-                + self.translator.t(
-                    "goal.budget-extended",
-                    steps=updated.budget_steps,
-                    seconds=updated.budget_seconds,
-                )
-            )
+        if updated.state.value == "finalizing":
+            self._write_line("[goal] " + self.translator.t("chat.finalization-required"))
             self._refresh_chrome()
 
     def _tool_is_read_only(self, tool_id: str) -> bool:

@@ -37,6 +37,7 @@ from samurai_ai.domain.execution import (
     SecretRedactor,
     ToolScopeError,
 )
+from samurai_ai.domain.goal import GoalState
 from samurai_ai.domain.graph import (
     GraphError,
     GraphInvariantError,
@@ -527,6 +528,37 @@ class ChatController:
             },
         ),
         ToolSpec(
+            name="finalize_result",
+            description=(
+                "Atomically record one result and close its existing intent. Use this "
+                "during finalization instead of separate record_fact/close_intent calls. "
+                "Optionally attach a finding to the new artifact-backed fact."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string", "minLength": 1},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "artifact_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 8,
+                    },
+                    "outcome": {"type": "string", "enum": ["done", "blocked", "exhausted"]},
+                    "reason": {"type": "string", "maxLength": 500},
+                    "result": {"type": "string", "enum": ["success", "negative"]},
+                    "finding_title": {"type": "string", "maxLength": 200},
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "low", "medium", "high", "critical"],
+                    },
+                    "finding_summary": {"type": "string", "maxLength": 2000},
+                },
+                "required": ["intent", "summary", "outcome"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
             name="record_fact",
             description=(
                 "Record what an intent produced. Pass the artifact ids that prove it — "
@@ -809,6 +841,7 @@ class ChatController:
         "read_image": "_run_image_tool",
         "open_intent": "_run_open_intent_tool",
         "import_artifact": "_run_import_artifact_tool",
+        "finalize_result": "_run_finalize_result_tool",
         "record_fact": "_run_record_fact_tool",
         "close_intent": "_run_close_intent_tool",
         "propose_finding": "_run_propose_finding_tool",
@@ -1023,6 +1056,7 @@ class ChatController:
         }
     )
     _SHORT_DESCRIPTIONS = {
+        "import_artifact": "Import a trusted evidence file and return its artifact id.",
         "propose_finding": "Record a finding for the operation (title, summary, severity).",
         "record_traffic": "Attach a request/response pair to a finding as evidence.",
         "remember_secret": "Store a secret in the operation vault.",
@@ -1675,6 +1709,89 @@ class ChatController:
                 )
                 return None
 
+    def _enter_finalization(self, operation_id: str) -> bool:
+        goal = self.goals.current(operation_id)
+        if goal is None:
+            return False
+        if goal.state is GoalState.ACTIVE:
+            goal = self.goals.begin_finalization(goal.id)
+        return goal.state is GoalState.FINALIZING or (
+            goal.state is GoalState.BLOCKED and goal.block_reason == "finalization_required"
+        )
+
+    def _present_final_response(self, response: ChatResponse) -> None:
+        self._remember(Message(role="assistant", content=response.text))
+        self._trim_chat_history()
+        if response.text.strip():
+            self._end_live_answer()
+            self._write_ai_message(response)
+        else:
+            self._write_dim(self.translator.t("chat.empty-reply"))
+
+    def _block_finalization(
+        self, operation_id: str, response: ChatResponse | None = None
+    ) -> TerminalReason:
+        if response is not None:
+            self._present_final_response(response)
+        goal = self.goals.current(operation_id)
+        if goal is not None and goal.state is not GoalState.BLOCKED:
+            self.goals.block(goal.id, "finalization_required")
+        self._write_dim(self.translator.t("chat.finalization-required"), process=False)
+        return TerminalReason.BLOCKED
+
+    async def _finish_finalization(
+        self,
+        operation_id: str,
+        model_id: str,
+        reasoning: str | None,
+        response: ChatResponse | None,
+        runs_at_start: dict[str, int],
+        findings_at_start: int,
+    ) -> TerminalReason:
+        """One write-only attempt, one conclusion, then a truthful verdict."""
+        if response is not None and response.tool_calls:
+            return self._block_finalization(operation_id, response)
+        snapshot = self._finalization_service().snapshot(operation_id)
+        if not snapshot.ready_to_complete:
+            await self._settle(operation_id, model_id, reasoning)
+            snapshot = self._finalization_service().snapshot(operation_id)
+            if snapshot.ready_to_complete:
+                # The premature conclusion predates the closing writes; get a
+                # fresh one against the committed evidence instead.
+                response = None
+        if not snapshot.ready_to_complete:
+            return self._block_finalization(operation_id, response)
+        if response is None:
+            try:
+                response = await self._request_chat_completion(
+                    operation_id, model_id, reasoning, ()
+                )
+            except Exception as exc:  # noqa: BLE001 - finalization reports, not retries
+                self._write_line(f"[error] {exc}")
+                return TerminalReason.MODEL_ERROR
+            if response is None:
+                return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
+            self._count_usage(response.usage)
+            self._add_cost(
+                model_id,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+                response.usage.cached_tokens,
+            )
+            if response.tool_calls:
+                return self._block_finalization(operation_id, response)
+        self._present_final_response(response)
+        if self._goal_requires_judgment(operation_id, 1):
+            verdict = await self._judge_goal(operation_id, model_id)
+            if verdict != goal_judge.STOP:
+                return self._block_finalization(operation_id)
+        reason = self._completion_reason(operation_id, runs_at_start, findings_at_start)
+        if reason is TerminalReason.COMPLETED:
+            self._mark_goal_reached(operation_id)
+            self._write_dim(self.translator.t("chat.goal-met"))
+            return reason
+        return self._block_finalization(operation_id)
+
     async def _chat_loop(self, text: str, model_id: str, approval_id: str | None) -> TerminalReason:
         del approval_id  # approvals are handled per call inside the loop
         self._progress.reset()
@@ -1709,7 +1826,11 @@ class ChatController:
         if recall:
             self._remember(Message(role="system", content=recall))
         rounds_left = self._max_tool_rounds()
-        stretches_used = 0
+        current_goal = self.goals.current(operation_id)
+        finalizing = current_goal is not None and (
+            current_goal.state is GoalState.FINALIZING
+            or current_goal.block_reason == "finalization_required"
+        )
         promise_nudges = 0
         completion_judges = 0
         hypothesis_nudges = 0
@@ -1718,49 +1839,29 @@ class ChatController:
         self._begin_live_answer()
         while True:
             if rounds_left <= 0:
-                # The budget for this stretch is spent. Kimi/OpenCode keep a step
-                # cap as a safety net, not the normal exit: a run ends when the
-                # model stops calling tools. So settle what is known, then refill.
                 self._write_dim(self.translator.t("chat.tool-limit"))
-                await self._settle(operation_id, model_id, reasoning)
-                if self._stop_requested:
-                    return TerminalReason.CANCELLED
-                if self._continue_hypothesis_review(operation_id, hypothesis_nudges):
-                    hypothesis_nudges += 1
-                    rounds_left = self._max_tool_rounds()
-                    continue
-                if stretches_used >= self._AUTO_CONTINUES:
-                    break
-                if self._operation_goal(operation_id):
-                    verdict = await self._judge_goal(operation_id, model_id)
-                    if verdict == goal_judge.STOP:
-                        reason = self._completion_reason(
-                            operation_id, runs_at_start, findings_at_start
-                        )
-                        if reason is TerminalReason.COMPLETED:
-                            self._mark_goal_reached(operation_id)
-                            self._write_dim(self.translator.t("chat.goal-met"))
-                        return reason
-                stretches_used += 1
-                self._write_dim(
-                    self.translator.t(
-                        "chat.auto-continue",
-                        index=stretches_used,
-                        total=self._AUTO_CONTINUES,
-                    )
+                self._enter_finalization(operation_id)
+                finalizing = True
+                return await self._finish_finalization(
+                    operation_id,
+                    model_id,
+                    reasoning,
+                    None,
+                    runs_at_start,
+                    findings_at_start,
                 )
-                self._remember(
-                    Message(role="user", content=self.translator.t("chat.continue-note"))
-                )
-                rounds_left = self._max_tool_rounds()
-                continue
+            if current_goal is not None and current_goal.block_reason == "finalization_required":
+                # Waiting for the operator is process-free: even a new prompt
+                # must not silently buy another model round.
+                return self._block_finalization(operation_id)
             rounds_left -= 1
             self._drain_steering()
             self._drain_background()
             self._count_goal_step()
+            tools = self._finalization_tool_specs() if finalizing else self._tool_specs()
             try:
                 response = await self._request_chat_completion(
-                    operation_id, model_id, reasoning, self._tool_specs()
+                    operation_id, model_id, reasoning, tools
                 )
             except ProviderUnavailableError as exc:
                 # a slow or sick gateway is the common case; the operator sees
@@ -1779,7 +1880,7 @@ class ChatController:
                     await asyncio.sleep(self._MODEL_RETRY_DELAY)
                     try:
                         response = await self._request_chat_completion(
-                            operation_id, model_id, reasoning, self._tool_specs()
+                            operation_id, model_id, reasoning, tools
                         )
                         break
                     except ProviderUnavailableError as retry_exc:
@@ -1804,18 +1905,11 @@ class ChatController:
                 response.usage.cached_tokens,
             )
             if not response.tool_calls:
-                self._remember(Message(role="assistant", content=response.text))
-                self._trim_chat_history()
-                if response.text.strip():
-                    self._end_live_answer()
-                    self._write_ai_message(response)
-                else:
-                    self._write_dim(self.translator.t("chat.empty-reply"))
                 if self._stop_requested:
-                    # an answer without tools is the conclusion the stop waited for
+                    self._present_final_response(response)
                     return TerminalReason.CANCELLED
                 if self._steer_queue:
-                    # the operator steered while this answer was in flight
+                    self._present_final_response(response)
                     continue
                 if await self._continue_after_subagent():
                     continue
@@ -1823,6 +1917,22 @@ class ChatController:
                     continue
                 if await self._continue_after_strategist():
                     continue
+                if (
+                    finalizing
+                    or self._goal_requires_judgment(operation_id, tool_calls_made)
+                    or not self._hypothesis_coverage(operation_id).complete
+                ):
+                    self._enter_finalization(operation_id)
+                    finalizing = True
+                    return await self._finish_finalization(
+                        operation_id,
+                        model_id,
+                        reasoning,
+                        response,
+                        runs_at_start,
+                        findings_at_start,
+                    )
+                self._present_final_response(response)
                 if promise_nudges < _MAX_PROMISE_NUDGES and _PROMISE_RE.search(response.text or ""):
                     promise_nudges += 1
                     self._write_dim(self.translator.t("chat.promise-nudge"))
@@ -1886,7 +1996,15 @@ class ChatController:
                 self._write_dim(response.text.strip(), process=True)
             # every call of the round runs even when stopping: a stop is worth
             # nothing until the results are in and checked
-            for message in await self._run_round(list(response.tool_calls)):
+            calls = list(response.tool_calls)
+            if finalizing:
+                allowed = {spec.name for spec in self._finalization_tool_specs()}
+                for call in [item for item in calls if item.name not in allowed]:
+                    note = f"[tool {call.name}] finalization does not allow new research"
+                    self._write_dim(note, process=False)
+                    self._remember(Message(role="user", content=note))
+                calls = [item for item in calls if item.name in allowed]
+            for message in await self._run_round(calls):
                 tool_calls_made += 1
                 self._remember(message)
             self._trim_chat_history()
@@ -1938,7 +2056,10 @@ class ChatController:
         """
         if self.operation is None:
             return
-        if self._operation_goal(self.operation.id):
+        existing = self._operation_goal(self.operation.id)
+        if existing:
+            if self.goals.current(self.operation.id) is None:
+                self.goals.create(self.operation.id, existing)
             return
         objective = (self.operation.objective or "").strip()
         derived = objective or " ".join(text.split())[:300]
@@ -2010,11 +2131,7 @@ class ChatController:
         Runs even when the graph stayed empty — that is exactly the turn whose
         findings would otherwise die with the context window.
         """
-        tools = tuple(
-            spec
-            for spec in self._CHAT_TOOL_SPECS
-            if spec.name in ("record_fact", "close_intent", "propose_finding", "memory_learn")
-        )
+        tools = self._finalization_tool_specs()
         self._remember(Message(role="user", content=self.translator.t("chat.settle-prompt")))
         try:
             response = await self._request_chat_completion(operation_id, model_id, reasoning, tools)
@@ -2631,6 +2748,39 @@ class ChatController:
                 f"{artifact.summary or artifact.path}"
             ),
         )
+
+    def _finalization_tool_specs(self) -> tuple[ToolSpec, ...]:
+        allowed = {"import_artifact", "finalize_result", "propose_finding", "memory_learn"}
+        return tuple(spec for spec in self._CHAT_TOOL_SPECS if spec.name in allowed)
+
+    async def _run_finalize_result_tool(self, call: ToolCall) -> Message:
+        raw_severity = str(call.arguments.get("severity", "info") or "info")
+        try:
+            severity = FindingSeverity(raw_severity)
+        except ValueError:
+            severity = FindingSeverity.INFO
+        finding_title = str(call.arguments.get("finding_title", "") or "").strip() or None
+        try:
+            fact = self._finalization_service().record_result_and_close(
+                self.operation.id if self.operation else "",
+                str(call.arguments.get("intent", "") or ""),
+                summary=str(call.arguments.get("summary", "") or ""),
+                artifact_ids=tuple(
+                    str(item) for item in call.arguments.get("artifact_ids", [])
+                ),
+                outcome=str(call.arguments.get("outcome", "done") or "done"),
+                reason=str(call.arguments.get("reason", "") or ""),
+                negative=str(call.arguments.get("result", "") or "") == "negative",
+                finding_title=finding_title,
+                severity=severity,
+                finding_summary=str(call.arguments.get("finding_summary", "") or ""),
+            )
+        except (GraphError, KernelError) as exc:
+            return Message(role="user", content=f"[tool finalize_result] {exc}")
+        self._note_structure_written()
+        if finding_title:
+            self._progress.finding_seen()
+        return Message(role="user", content=f"[tool finalize_result] {fact.id} recorded and closed")
 
     async def _run_record_fact_tool(self, call: ToolCall) -> Message:
         intent_id = str(call.arguments.get("intent", "") or "").strip()

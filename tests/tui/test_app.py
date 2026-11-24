@@ -1631,10 +1631,9 @@ def test_chat_tool_loop_limit_forces_final_answer(tmp_path: Path) -> None:
                 await pilot.press("enter")
                 await app.workers.wait_for_complete()
                 await pilot.pause()
-                # 4 tool rounds × 6 stretches + 6 settles (settle now runs even
-                # with an empty graph) + 5 judges + 1 closing: the operator
-                # always gets a final answer instead of silence
-                assert provider.calls == 4 * 6 + 6 + 5 + 1
+                # 4 tool rounds + one conclusion + one judge: with an empty
+                # graph no settle is needed and no continuation is bought
+                assert provider.calls == 4 + 1 + 1
                 text = "\n".join(_message_text(m) for m in messages)
                 assert "final summary after the loop" in text
             await pilot.press("ctrl+c")
@@ -2276,8 +2275,8 @@ def test_goal_next_queues_without_replacing(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_goal_step_budget_extends_instead_of_blocking(tmp_path: Path) -> None:
-    """A spent step budget raises itself — the strip must not claim a stop mid-run."""
+def test_goal_step_budget_enters_finalizing_at_the_cap(tmp_path: Path) -> None:
+    """A spent step budget enters finalization instead of extending itself."""
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")
 
@@ -2293,9 +2292,9 @@ def test_goal_step_budget_extends_instead_of_blocking(tmp_path: Path) -> None:
                 app.goals.create(operation.id, "short", budget_steps=1)
                 app._count_goal_step()
                 goal = app._current_goal()
-                assert goal.state.value == "active"
-                assert goal.budget_steps == 41
-                assert any("raised to 41 steps" in str(m) for m in messages)
+                assert goal.state.value == "finalizing"
+                assert goal.budget_steps == 1
+                assert any("finalization" in str(m) for m in messages)
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -4022,7 +4021,9 @@ def test_exhausted_rounds_settle_the_graph_before_the_summary(tmp_path: Path) ->
             await app._settle(operation.id, "gpt/test-model@v1", None)
             app._request_chat_completion = original  # type: ignore[method-assign]
 
-            assert seen == [("record_fact", "close_intent", "propose_finding", "memory_learn")]
+            assert seen == [
+                ("import_artifact", "finalize_result", "propose_finding", "memory_learn")
+            ]
             assert app.graph.get(intent.id).state.value == "open"
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
@@ -4051,7 +4052,9 @@ def test_settle_persists_state_even_when_the_graph_stayed_empty(tmp_path: Path) 
             await app._settle(operation.id, "gpt/test-model@v1", None)
             app._request_chat_completion = original  # type: ignore[method-assign]
 
-            assert seen == [("record_fact", "close_intent", "propose_finding", "memory_learn")]
+            assert seen == [
+                ("import_artifact", "finalize_result", "propose_finding", "memory_learn")
+            ]
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -8629,8 +8632,8 @@ def test_a_turn_recalls_matching_memory_into_the_context(tmp_path: Path) -> None
     asyncio.run(exercise())
 
 
-def test_a_spent_round_budget_continues_instead_of_stopping(tmp_path: Path) -> None:
-    """The cap is a checkpoint: the turn settles, then keeps working."""
+def test_a_spent_round_budget_enters_finalization(tmp_path: Path) -> None:
+    """The cap enters finalization instead of buying another research stretch."""
     from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
 
     class _Restless:
@@ -8680,8 +8683,9 @@ def test_a_spent_round_budget_continues_instead_of_stopping(tmp_path: Path) -> N
             await pilot.pause()
             journal = app.query_one("#journal", BlockJournal).text()
             assert "round budget spent" in journal
-            assert "continue 1/5" in journal
-            assert "done" in journal
+            assert "finalization" in journal
+            assert "continue 1/5" not in journal
+            assert "done" not in journal
 
     asyncio.run(exercise())
 
@@ -9047,12 +9051,15 @@ def test_a_worked_turn_is_judged_before_it_may_complete(tmp_path: Path) -> None:
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            # two tool bursts: the first «done» was refused by the judge
-            assert len(stack[4].list_runs(operation.id)) == 2
-            assert provider.judge_calls == 2
+            # an unclear judge cannot buy another tool burst: the turn
+            # waits for the operator with an explicit finalization reason
+            assert len(stack[4].list_runs(operation.id)) == 1
+            assert provider.judge_calls == 1
+            goal = app.goals.current(operation.id)
+            assert goal is not None and goal.block_reason == "finalization_required"
             journal = app.query_one("#journal", BlockJournal).text()
-            assert "not met" in journal
-            assert "condition holds" in journal
+            assert "finalization" in journal
+            assert "condition holds" not in journal
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -9748,8 +9755,8 @@ def test_goal_is_set_shown_and_cleared(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_the_judge_stops_the_run_when_the_condition_holds(tmp_path: Path) -> None:
-    """A goal plus a STOP verdict ends the turn instead of stretching on."""
+def test_a_model_without_a_conclusion_cannot_complete(tmp_path: Path) -> None:
+    """Even a judge cannot complete a run whose model never stops calling tools."""
     from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
 
     class _Worker:
@@ -9795,13 +9802,14 @@ def test_the_judge_stops_the_run_when_the_condition_holds(tmp_path: Path) -> Non
             await app.workers.wait_for_complete()
             await pilot.pause()
             journal = app.query_one("#journal", BlockJournal).text()
-            assert "judge says the condition holds" in journal
+            assert "judge says the condition holds" not in journal
+            assert "finalization" in journal
 
     asyncio.run(exercise())
 
 
-def test_a_broken_judge_falls_back_to_the_counter(tmp_path: Path) -> None:
-    """The judge must never stall a run: unclear answers keep it going."""
+def test_a_broken_judge_waits_for_the_operator(tmp_path: Path) -> None:
+    """An unclear verdict cannot complete or auto-continue a run."""
     from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
 
     class _Mute:
@@ -9846,8 +9854,8 @@ def test_a_broken_judge_falls_back_to_the_counter(tmp_path: Path) -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
             journal = app.query_one("#journal", BlockJournal).text()
-            assert "continue 5/5" in journal  # it still stretched to the end
-            assert "turn ended" in journal  # and closed honestly
+            assert "continue 5/5" not in journal  # no automatic continuation
+            assert "finalization" in journal  # operator review is explicit
 
     asyncio.run(exercise())
 
@@ -11420,6 +11428,165 @@ def test_tool_headers_show_outcome_duration_and_group_failures(tmp_path: Path) -
     asyncio.run(exercise())
 
 
+def test_unresolved_finalization_waits_for_the_operator_without_more_calls(
+    tmp_path: Path,
+) -> None:
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+    from samurai_ai.domain.goal import GoalState
+    from samurai_ai.domain.graph import NodeKind, NodeState
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            usage = Usage(prompt_tokens=3, completion_tokens=2)
+            if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+                return ChatResponse(
+                    text="stop", usage=usage, model_id=request.model_id, provider_id="gpt"
+                )
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    text="",
+                    tool_calls=[
+                        ToolCall(id="open", name="open_intent", arguments={"title": "SSH"})
+                    ],
+                    usage=usage,
+                    model_id="gpt/test-model@v1",
+                    provider_id="gpt",
+                )
+            if self.calls == 2:
+                return ChatResponse(
+                    text="Investigation is complete.",
+                    usage=usage,
+                    model_id="gpt/test-model@v1",
+                    provider_id="gpt",
+                )
+            if self.calls == 3:
+                return ChatResponse(
+                    text="The remaining hypothesis is unresolved.",
+                    usage=usage,
+                    model_id="gpt/test-model@v1",
+                    provider_id="gpt",
+                )
+            return ChatResponse(
+                text="Main conclusion based on committed evidence.",
+                usage=usage,
+                model_id="gpt/test-model@v1",
+                provider_id="gpt",
+            )
+
+    provider = _Provider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "check SSH and conclude"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert provider.calls == 3
+            goal = app.goals.current(operation.id)
+            assert goal is not None and goal.state is GoalState.BLOCKED
+            assert goal.block_reason == "finalization_required"
+            intent = next(
+                node for node in app.graph.for_operation(operation.id)
+                if node.kind is NodeKind.INTENT
+            )
+            assert intent.state is NodeState.OPEN
+
+            app._finalize_command("")
+            assert provider.calls == 3  # the snapshot itself never calls a model
+            app.graph.close_intent(intent.id, "exhausted", "SSH was checked")
+            app._finalize_command("resume")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert provider.calls == 4
+            assert app.goals.reached(operation.id)
+            assert "Main conclusion" in app.query_one("#journal", BlockJournal).text()
+            reasons = [
+                event.payload["reason"]
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["blocked", "completed"]
+
+    asyncio.run(exercise())
+
+
+def test_finalization_does_not_execute_shell_calls(tmp_path: Path) -> None:
+    from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
+
+    class _Provider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            usage = Usage(prompt_tokens=3, completion_tokens=2)
+            if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+                return ChatResponse(
+                    text="stop", usage=usage, model_id=request.model_id, provider_id="gpt"
+                )
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    text="",
+                    tool_calls=[
+                        ToolCall(
+                            id="shell",
+                            name="shell_exec",
+                            arguments={"command": "echo should-not-run"},
+                        )
+                    ],
+                    usage=usage,
+                    model_id="gpt/test-model@v1",
+                    provider_id="gpt",
+                )
+            return ChatResponse(
+                text="Final conclusion.",
+                usage=usage,
+                model_id="gpt/test-model@v1",
+                provider_id="gpt",
+            )
+
+    provider = _Provider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+    goal = stack[14].create(operation.id, "finish safely")
+    stack[14].begin_finalization(goal.id)
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "finish"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert stack[4].list_runs(operation.id) == []
+            assert app.goals.reached(operation.id)
+            assert "does not allow new research" in app.query_one("#journal", BlockJournal).text()
+
+    asyncio.run(exercise())
+
+
 def test_open_hypotheses_are_checked_before_the_main_conclusion(tmp_path: Path) -> None:
     from samurai_ai.agents.provider import ChatResponse, ToolCall, Usage
     from samurai_ai.domain.graph import NodeKind, NodeState
@@ -11578,13 +11745,16 @@ def test_unclosed_hypotheses_end_blocked_with_a_conclusion(tmp_path: Path) -> No
             ]
             assert reasons == ["blocked"]
             assert "Main conclusion" in app.query_one("#journal", BlockJournal).text()
-            # two real continuation prompts, not an immediate sign-off
+            # one write-only attempt, then operator-wait without auto-continuation
+            assert provider.calls == 3
+            goal = app.goals.current(operation.id)
+            assert goal is not None and goal.block_reason == "finalization_required"
             notes = [
                 str(message.content)
                 for message in app._chat_history
                 if message.role == "user" and "Do not conclude yet" in str(message.content)
             ]
-            assert len(notes) == 2
+            assert notes == []
 
     asyncio.run(exercise())
 

@@ -29,6 +29,7 @@ class GoalStateError(GoalError):
 class GoalState(StrEnum):
     QUEUED = "queued"
     ACTIVE = "active"
+    FINALIZING = "finalizing"
     PAUSED = "paused"
     BLOCKED = "blocked"
     COMPLETE = "complete"
@@ -43,15 +44,19 @@ _TRANSITIONS: dict[GoalState, frozenset[GoalState]] = {
     GoalState.QUEUED: frozenset({GoalState.ACTIVE, GoalState.CANCELLED}),
     GoalState.ACTIVE: frozenset(
         {
+            GoalState.FINALIZING,
             GoalState.PAUSED,
             GoalState.BLOCKED,
             GoalState.COMPLETE,
             GoalState.CANCELLED,
         }
     ),
+    GoalState.FINALIZING: frozenset(
+        {GoalState.ACTIVE, GoalState.BLOCKED, GoalState.COMPLETE, GoalState.CANCELLED}
+    ),
     GoalState.PAUSED: frozenset({GoalState.ACTIVE, GoalState.CANCELLED}),
     GoalState.BLOCKED: frozenset(
-        {GoalState.ACTIVE, GoalState.COMPLETE, GoalState.CANCELLED}
+        {GoalState.ACTIVE, GoalState.FINALIZING, GoalState.COMPLETE, GoalState.CANCELLED}
     ),
     GoalState.COMPLETE: frozenset(),
     GoalState.CANCELLED: frozenset(),
@@ -129,6 +134,10 @@ class Goal(BaseModel):
             # and assignments validate, so clear it before changing the state
             self.block_reason = ""
         self.state = target
+
+    def begin_finalization(self) -> None:
+        self._move(GoalState.FINALIZING)
+        self.touch()
 
     def pause(self) -> None:
         self._move(GoalState.PAUSED)

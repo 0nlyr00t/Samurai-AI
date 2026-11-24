@@ -110,6 +110,27 @@ class GoalService:
         self.restart_clock()
         return saved
 
+    def begin_finalization(self, goal_id: str) -> Goal:
+        """Stop research and allow only the bounded write-only closing path."""
+        goal = self.get(goal_id)
+        if goal.state is GoalState.FINALIZING:
+            return goal
+        expected = goal.version
+        self._accrue(goal)
+        goal.begin_finalization()
+        self._stop_clock()
+        return self._save(
+            goal,
+            expected,
+            "goal.finalizing",
+            {
+                "budget_steps": goal.budget_steps,
+                "budget_seconds": goal.budget_seconds,
+                "spent_steps": goal.spent_steps,
+                "spent_seconds": goal.spent_seconds,
+            },
+        )
+
     def block(self, goal_id: str, reason: str) -> Goal:
         goal = self.get(goal_id)
         expected = goal.version
@@ -140,11 +161,7 @@ class GoalService:
     # --- budget -----------------------------------------------------------
 
     def record_step(self, goal_id: str) -> Goal:
-        """Count one agent step against the active goal.
-
-        A spent budget is raised, not blocked: the strip must not claim the
-        goal stopped while the run it measures is still going.
-        """
+        """Count one step; an exhausted cap enters finalization, never extends."""
         goal = self.get(goal_id)
         if goal.state is not GoalState.ACTIVE:
             return goal
@@ -152,14 +169,37 @@ class GoalService:
         self._accrue(goal)
         goal.record_step()
         if goal.exhausted:
-            goal.extend_budget()
-            return self._save(
-                goal,
-                expected,
-                "goal.budget-extended",
-                {"budget_steps": goal.budget_steps, "budget_seconds": goal.budget_seconds},
-            )
+            return self.begin_finalization(goal.id)
         return self._save(goal, expected, "goal.step", {"spent_steps": goal.spent_steps})
+
+    def extend(self, goal_id: str, *, steps: int, seconds: int) -> Goal:
+        """Let the operator explicitly buy a fresh research budget."""
+        if steps < 1 or seconds < 1:
+            raise GoalError("an explicit goal extension needs positive steps and seconds")
+        goal = self.get(goal_id)
+        expected = goal.version
+        goal.budget_steps += steps
+        goal.budget_seconds += seconds
+        goal.resume()
+        self.restart_clock()
+        return self._save(
+            goal,
+            expected,
+            "goal.extended",
+            {
+                "added_steps": steps,
+                "added_seconds": seconds,
+                "budget_steps": goal.budget_steps,
+                "budget_seconds": goal.budget_seconds,
+            },
+        )
+
+    def resume_finalization(self, goal_id: str) -> Goal:
+        """Re-enter only the closing path after the operator resolved blockers."""
+        goal = self.get(goal_id)
+        if goal.state is not GoalState.BLOCKED:
+            raise GoalError(f"cannot resume finalization from {goal.state.value}")
+        return self.begin_finalization(goal_id)
 
     def restart_clock(self) -> None:
         self._last_tick = self.clock()

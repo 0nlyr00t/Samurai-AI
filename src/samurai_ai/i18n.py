@@ -807,6 +807,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "working: make the next tool call instead of summarizing."
         ),
         "chat.goal-judge-failed": "[goal] judge unavailable, falling back to the counter",
+        "chat.finalization-required": "[goal] operator finalization required: /finalize",
+        "finalize.prompt": (
+            "Finalize the operation using existing evidence only. Do not start new research."
+        ),
+        "finalize.not-waiting": "There is no finalization waiting for the operator.",
+        "finalize.facts": "[finalize] eligible facts: {ids}",
+        "finalize.blockers": "[finalize] unresolved: {ids} | runs: {runs} | approvals: {approvals}",
+        "finalize.ready": "Ready to complete: /finalize resume",
+        "finalize.waiting": (
+            "WAITING_OPERATOR: resolve results with /graph and /finalize, then /finalize resume"
+        ),
+        "finalize.busy": "A turn is already running; finish it before resuming finalization.",
         "chat.open-hypotheses": "[goal] {count} hypotheses still need a result — continuing",
         "chat.open-hypotheses-note": (
             "Do not conclude yet. Test or close these hypotheses with evidence or "
@@ -1750,6 +1762,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "работу: делай следующий вызов инструмента, а не сводку."
         ),
         "chat.goal-judge-failed": "[цель] оценщик недоступен, работает счётчик",
+        "chat.finalization-required": "[цель] нужна финализация оператором: /finalize",
+        "finalize.prompt": (
+            "Заверши операцию по уже имеющимся доказательствам. Новое исследование не начинай."
+        ),
+        "finalize.not-waiting": "Сейчас нет финализации, ожидающей оператора.",
+        "finalize.facts": "[finalize] eligible facts: {ids}",
+        "finalize.blockers": "[finalize] unresolved: {ids} | runs: {runs} | approvals: {approvals}",
+        "finalize.ready": "Готово к завершению: /finalize resume",
+        "finalize.waiting": (
+            "WAITING_OPERATOR: оформи результаты через /graph и /finalize, затем /finalize resume"
+        ),
+        "finalize.busy": "Ход уже идёт; дождись завершения перед возобновлением финализации.",
         "chat.open-hypotheses": "[цель] гипотез без результата: {count} — продолжаю",
         "chat.open-hypotheses-note": (
             "Ещё рано завершать. Проверь или закрой эти гипотезы доказательством "
