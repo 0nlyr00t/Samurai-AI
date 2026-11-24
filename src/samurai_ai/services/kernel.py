@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
+from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import (
     Approval,
     ApprovalStateError,
@@ -31,6 +32,7 @@ from samurai_ai.domain.kernel import (
 )
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationStatus
 from samurai_ai.services.operations import OperationService
+from samurai_ai.storage.graph import GraphRepository
 from samurai_ai.storage.kernel import KernelConflictError, KernelRepository
 
 _PLAN_CONFLICT_RETRIES = 3
@@ -69,6 +71,9 @@ class KernelService:
     def __init__(self, operations: OperationService, kernel: KernelRepository) -> None:
         self.operations = operations
         self.kernel = kernel
+        # Read-only graph port shared by every task completion path. Keeping it
+        # here prevents CLI/swarm/subagents from bypassing the graph invariants.
+        self.graph = GraphRepository(operations.repository.database)
 
     def create_plan(
         self,
@@ -177,6 +182,21 @@ class KernelService:
                 raise TaskStateError(
                     f"task {task_id} cannot complete from {task.status.value}"
                 )
+            if not force:
+                open_intents = [
+                    node.id
+                    for node in self.graph.for_task(task_id)
+                    if node.kind is NodeKind.INTENT and node.open
+                ]
+                if open_intents:
+                    raise TaskEvidenceError(
+                        f"task {task_id} has open intents: {', '.join(open_intents)}"
+                    )
+                if no_finding.strip() and self._task_has_positive_facts(task_id):
+                    raise TaskEvidenceError(
+                        f"task {task_id} has positive artifact-backed facts; "
+                        "no_finding cannot override evidence"
+                    )
             for requirement in task.required_artifacts:
                 if not self.kernel.artifact_exists(operation_id, requirement, task_id=task_id):
                     raise ArtifactError(
@@ -203,6 +223,16 @@ class KernelService:
             }
 
         return self._apply_plan_mutation(operation_id, mutate)
+
+    def _task_has_positive_facts(self, task_id: str) -> bool:
+        """Positive, artifact-backed facts contradict a no-finding verdict."""
+        return any(
+            node.kind is NodeKind.FACT
+            and node.state is NodeState.CONFIRMED
+            and node.payload.get("result", "success") != "negative"
+            and bool(node.payload.get("artifact_ids"))
+            for node in self.graph.for_task(task_id)
+        )
 
     def _task_has_finding(self, operation_id: str, task_id: str) -> bool:
         """A finding proven by one of this task's own artifacts."""

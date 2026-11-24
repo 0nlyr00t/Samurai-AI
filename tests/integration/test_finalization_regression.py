@@ -20,6 +20,7 @@ from samurai_ai.domain.kernel import (
     FindingSeverity,
     PlanTask,
     TaskEvidenceError,
+    TaskStatus,
 )
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
@@ -215,7 +216,8 @@ def test_open_intent_blocks_fresh_task_completion(
     with pytest.raises(TaskEvidenceError, match="intent"):
         kernel.complete_task(operation.id, "recon", no_finding="not checked")
 
-    assert kernel.get_current_plan(operation.id).task_by_id("recon").status.value == "in_progress"
+    task = kernel.get_current_plan(operation.id).task_by_id("recon")
+    assert task.status is TaskStatus.IN_PROGRESS
     assert intent.open
 
 
@@ -243,6 +245,35 @@ def test_no_finding_cannot_override_positive_evidence(
 
     with pytest.raises(TaskEvidenceError, match="finding|evidence"):
         kernel.complete_task(operation.id, "recon", no_finding="nothing found")
+
+
+def test_no_finding_is_allowed_after_an_exhausted_direction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    services = cli._make_services(None)
+    operations, kernel = services[0], services[1]
+    operation = operations.create(
+        "Negative result lab",
+        OperationMode.BUG_BOUNTY,
+        ScopeContract(includes=("target.internal",)),
+    )
+    kernel.create_plan(operation.id, "Investigation", [PlanTask(id="recon", title="Recon")], [])
+    kernel.start_task(operation.id, "recon")
+    graph = GraphService(operations, kernel, GraphRepository(operations.repository.database))
+    root = graph.origin(operation.id, "recon", "Origin")
+    intent = graph.open_intent(operation.id, "recon", "Unavailable vector", root.id)
+    artifact = kernel.register_artifact(
+        operation.id, ArtifactKind.COMMAND_OUTPUT, "checked and denied", task_id="recon"
+    )
+    graph.start_intent(intent.id)
+    graph.record_fact(intent.id, "vector denied", (artifact.id,), negative=True)
+    graph.close_intent(intent.id, "exhausted", "all checks were negative")
+
+    plan = kernel.complete_task(operation.id, "recon", no_finding="no exploitable vector")
+
+    assert plan.task_by_id("recon").status is TaskStatus.DONE
 
 
 def test_budget_cap_does_not_extend_automatically(
