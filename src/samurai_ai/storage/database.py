@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -1000,6 +1001,9 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
 class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        # Nested service calls join the active transaction only on the same
+        # thread. Other threads still get independent SQLite connections.
+        self._transaction_state = threading.local()
 
     def backup(self, destination: str | Path) -> Path:
         target = Path(destination)
@@ -1076,6 +1080,12 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
+        shared = getattr(self._transaction_state, "connection", None)
+        if shared is not None:
+            # A repository called inside FinalizationService shares the outer
+            # unit of work instead of opening an independent autocommit channel.
+            yield shared
+            return
         connection = sqlite3.connect(self.path, timeout=5.0, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
@@ -1087,12 +1097,35 @@ class Database:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
-        with self.connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        shared = getattr(self._transaction_state, "connection", None)
+        if shared is not None:
+            depth = getattr(self._transaction_state, "depth", 1)
+            savepoint = f"samurai_sp_{depth}"
+            self._transaction_state.depth = depth + 1
             try:
+                shared.execute(f"SAVEPOINT {savepoint}")
+                yield shared
+            except BaseException:
+                shared.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                shared.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            else:
+                shared.execute(f"RELEASE SAVEPOINT {savepoint}")
+            finally:
+                self._transaction_state.depth = depth
+            return
+
+        with self.connect() as connection:
+            self._transaction_state.connection = connection
+            self._transaction_state.depth = 1
+            try:
+                connection.execute("BEGIN IMMEDIATE")
                 yield connection
             except BaseException:
                 connection.rollback()
                 raise
             else:
                 connection.commit()
+            finally:
+                self._transaction_state.connection = None
+                self._transaction_state.depth = 0

@@ -10,12 +10,19 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from samurai_ai.domain.execution import SecretRedactor, ToolRunStatus
 from samurai_ai.domain.graph import GraphNode, NodeKind, NodeState
 from samurai_ai.domain.hypotheses import hypothesis_coverage
-from samurai_ai.domain.kernel import ApprovalStatus, Artifact, ArtifactKind, KernelError
+from samurai_ai.domain.kernel import (
+    ApprovalStatus,
+    Artifact,
+    ArtifactKind,
+    Finding,
+    FindingSeverity,
+    KernelError,
+)
 from samurai_ai.services.goals import GoalService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.kernel import KernelService
@@ -74,6 +81,7 @@ class FinalizationService:
         if max_artifact_bytes < 1:
             raise ValueError("max_artifact_bytes must be positive")
         self.operations = operations
+        self.database = operations.repository.database
         self.kernel = kernel
         self.graph = graph
         self.goals = goals
@@ -117,6 +125,75 @@ class FinalizationService:
             budget_seconds_left=goal.seconds_left if goal is not None else 0,
             allowed_actions=tuple(allowed),
         )
+
+    def register_finding(
+        self,
+        operation_id: str,
+        fact_id: str,
+        *,
+        title: str,
+        severity: FindingSeverity = FindingSeverity.INFO,
+        summary: str = "",
+    ) -> Finding:
+        """Create and attach a finding atomically from an existing proven fact."""
+        fact = self.graph.get(fact_id)
+        if not self._eligible_fact(fact):
+            raise FinalizationError(
+                f"fact {fact_id} has no artifact or is not confirmed — evidence first"
+            )
+        with self.database.transaction():
+            finding = self.kernel.create_finding(
+                operation_id,
+                title,
+                severity=severity,
+                summary=summary,
+            )
+            for artifact_id in cast("list[str]", fact.payload.get("artifact_ids") or []):
+                finding = self.kernel.attach_evidence(finding.id, str(artifact_id))
+            self.graph.attach_finding(fact.id, finding.id)
+        return finding
+
+    def record_result_and_close(
+        self,
+        operation_id: str,
+        intent_id: str,
+        *,
+        summary: str,
+        artifact_ids: Iterable[str] = (),
+        outcome: str = "done",
+        reason: str = "",
+        negative: bool = False,
+        finding_title: str | None = None,
+        severity: FindingSeverity = FindingSeverity.INFO,
+        finding_summary: str = "",
+    ) -> GraphNode:
+        """Record a fact, optionally prove a finding, then close its intent.
+
+        Every repository joins one outer transaction. A close or attachment
+        failure therefore cannot leave a new fact without its intended result.
+        """
+        if finding_title is not None and outcome != "done":
+            raise FinalizationError("a finding requires outcome=done")
+        with self.database.transaction():
+            intent = self.graph.get(intent_id)
+            if intent.state is NodeState.OPEN:
+                intent = self.graph.start_intent(intent.id)
+            fact = self.graph.record_fact(
+                intent.id,
+                summary,
+                tuple(artifact_ids),
+                negative=negative,
+            )
+            if finding_title is not None:
+                self.register_finding(
+                    operation_id,
+                    fact.id,
+                    title=finding_title,
+                    severity=severity,
+                    summary=finding_summary,
+                )
+            self.graph.close_intent(intent.id, outcome, reason)
+        return fact
 
     def import_artifact(
         self,

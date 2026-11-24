@@ -149,7 +149,7 @@ def test_legacy_finding_uses_existing_fact_without_a_new_plan(
 
     assert finding.evidence_ids == (state.artifacts["proof"],)
     assert kernel.get_current_plan(state.operation_id) == before_plan
-    assert len(state.graph.targets(state.facts["proof"], EdgeRel.PROVES.value)) == 1
+    assert len(state.graph.graph.targets(state.facts["proof"], EdgeRel.PROVES.value)) == 1
 
 
 def test_legacy_intent_can_close_without_a_new_plan(

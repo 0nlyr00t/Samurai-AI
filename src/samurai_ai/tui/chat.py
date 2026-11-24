@@ -2847,18 +2847,14 @@ class ChatController:
         except ValueError:
             severity = FindingSeverity.INFO
         try:
-            fact = self.graph.get(fact_id)
-            # Refuse before creating anything: a rejected proposal must not leave
-            # a stray finding behind in the kernel.
-            if fact.kind is not NodeKind.FACT:
-                raise GraphInvariantError(f"{fact.id} is a {fact.kind.value}, not a fact")
-            if not fact.payload.get("artifact_ids"):
-                raise GraphInvariantError(f"fact {fact.id} has no artifact — evidence first")
             assert self.operation is not None
-            finding = self.kernel.create_finding(self.operation.id, title, severity, summary)
-            for artifact_id in cast("list[str]", fact.payload.get("artifact_ids") or []):
-                self.kernel.attach_evidence(finding.id, str(artifact_id))
-            self.graph.attach_finding(fact.id, finding.id)
+            finding = self._finalization_service().register_finding(
+                self.operation.id,
+                fact_id,
+                title=title,
+                severity=severity,
+                summary=summary,
+            )
         except (GraphError, KernelError) as exc:
             return Message(role="user", content=f"[tool propose_finding] {exc}")
         self._progress.finding_seen()
@@ -2874,7 +2870,7 @@ class ChatController:
         return Message(
             role="user",
             content=(
-                f"[tool propose_finding] {finding.id} registered on {fact.id} ({severity.value})"
+                f"[tool propose_finding] {finding.id} registered on {fact_id} ({severity.value})"
             ),
         )
 
