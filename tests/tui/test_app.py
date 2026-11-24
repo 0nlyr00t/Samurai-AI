@@ -3640,6 +3640,38 @@ async def _open(app, pilot, title: str) -> str:  # type: ignore[no-untyped-def]
     return message.content.split()[2]
 
 
+def test_import_artifact_returns_a_typed_artifact_id(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+    evidence = tmp_path / "proof.txt"
+    evidence.write_text("token=private-value\nstable oracle", encoding="utf-8")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app._session_trusted.add(str(tmp_path))
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="import_artifact",
+                    arguments={"path": str(evidence), "kind": "log", "summary": "proof"},
+                )
+            )
+            assert "art_" in message.content
+            artifact_id = message.content.split()[2]
+            artifact = stack[1].kernel.get_artifact(artifact_id)
+            assert artifact is not None
+            stored = stack[1].kernel.artifact_root / operation.id / f"{artifact.id}.txt"
+            text = stored.read_text(encoding="utf-8")
+            assert "private-value" not in text
+            assert "stable oracle" in text
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_open_intent_bootstraps_a_task_and_origin(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")

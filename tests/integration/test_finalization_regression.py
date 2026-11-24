@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 from samurai_ai import cli
-from samurai_ai.domain.graph import EdgeRel, NodeState
 from samurai_ai.domain.goal import GoalState
+from samurai_ai.domain.graph import EdgeRel, NodeState
 from samurai_ai.domain.kernel import (
     ArtifactKind,
     FindingSeverity,
@@ -23,8 +23,8 @@ from samurai_ai.domain.kernel import (
 )
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
-from samurai_ai.services.graph import GraphService
 from samurai_ai.services.goals import GoalService
+from samurai_ai.services.graph import GraphService
 from samurai_ai.storage.graph import GraphRepository
 
 
@@ -118,7 +118,6 @@ def test_fixture_has_the_sanitized_legacy_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state = _legacy_state(tmp_path, monkeypatch)
-    nodes = state.graph.for_operation(state.operation_id)
     unresolved = {
         state.intents["schema"],
         state.intents["context"],

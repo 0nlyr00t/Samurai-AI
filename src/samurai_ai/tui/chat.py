@@ -71,6 +71,7 @@ from samurai_ai.execution.native import MissingBinaryError
 from samurai_ai.i18n import Translator
 from samurai_ai.services import goal_judge, title_smith
 from samurai_ai.services.chat import ChatHistoryService, marker
+from samurai_ai.services.finalization import ArtifactImportError, FinalizationService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.memory import CampaignMemoryService
 from samurai_ai.services.tool_digest import summarize_for_model
@@ -86,6 +87,7 @@ from samurai_ai.tui.progress import Stagnation, TerminalReason
 from samurai_ai.tui.screens import AccessPromptScreen
 
 if TYPE_CHECKING:
+    from samurai_ai.services.ctf import CtfService
     from samurai_ai.services.execution import ToolExecutionService
     from samurai_ai.services.goals import GoalService
     from samurai_ai.services.kernel import KernelService
@@ -240,6 +242,7 @@ class ChatController:
         kernel: KernelService
         settings: SettingsService
         execution: ToolExecutionService
+        ctf: CtfService
         goals: GoalService
         models: ModelService
         memory: CampaignMemoryService
@@ -498,6 +501,28 @@ class ChatController:
                     },
                 },
                 "required": ["title"],
+                "additionalProperties": False,
+            },
+        ),
+        ToolSpec(
+            name="import_artifact",
+            description=(
+                "Import an existing evidence file from the trusted workspace or scratch. "
+                "The file is size-checked, text is redacted, and the returned artifact_id "
+                "can be passed to record_fact or propose_finding."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["note", "command-output", "file", "screenshot", "log", "other"],
+                    },
+                    "summary": {"type": "string", "maxLength": 500},
+                    "task_id": {"type": "string"},
+                },
+                "required": ["path"],
                 "additionalProperties": False,
             },
         ),
@@ -783,6 +808,7 @@ class ChatController:
         "memory_learn": "_run_learn_tool",
         "read_image": "_run_image_tool",
         "open_intent": "_run_open_intent_tool",
+        "import_artifact": "_run_import_artifact_tool",
         "record_fact": "_run_record_fact_tool",
         "close_intent": "_run_close_intent_tool",
         "propose_finding": "_run_propose_finding_tool",
@@ -987,7 +1013,14 @@ class ChatController:
     #: tools whose job starts after the foothold: their long prose is wasted on
     #: recon, and the whole block rides in every request
     _LATER_TOOLS = frozenset(
-        {"propose_finding", "record_traffic", "remember_secret", "propose_plan", "read_image"}
+        {
+            "import_artifact",
+            "propose_finding",
+            "record_traffic",
+            "remember_secret",
+            "propose_plan",
+            "read_image",
+        }
     )
     _SHORT_DESCRIPTIONS = {
         "propose_finding": "Record a finding for the operation (title, summary, severity).",
@@ -2559,6 +2592,44 @@ class ChatController:
         return Message(
             role="user",
             content=f"[tool open_intent] {intent.id} open: {intent.text()} (parent {parent})",
+        )
+
+    def _finalization_service(self) -> FinalizationService:
+        """Build the service against the current workspace and trust boundary."""
+        return FinalizationService(
+            self.service,
+            self.kernel,
+            self.graph,
+            self.goals,
+            ctf=self.ctf,
+            execution=self.execution,
+            workspace=self._cwd,
+            trusted_roots=tuple(Path(root) for root in self._allowed_roots()),
+        )
+
+    async def _run_import_artifact_tool(self, call: ToolCall) -> Message:
+        raw_kind = str(call.arguments.get("kind", "other") or "other")
+        try:
+            kind = ArtifactKind(raw_kind)
+        except ValueError:
+            kind = ArtifactKind.OTHER
+        try:
+            artifact = self._finalization_service().import_artifact(
+                self.operation.id if self.operation else "",
+                str(call.arguments.get("path", "") or ""),
+                kind=kind,
+                summary=str(call.arguments.get("summary", "") or ""),
+                task_id=str(call.arguments.get("task_id", "") or "") or None,
+            )
+        except (ArtifactImportError, KernelError, OSError, ValueError) as exc:
+            return Message(role="user", content=f"[tool import_artifact] {exc}")
+        self._write_entity_line("◆", "artifact", artifact.id, artifact.id)
+        return Message(
+            role="user",
+            content=(
+                f"[tool import_artifact] {artifact.id} {artifact.kind.value} "
+                f"{artifact.summary or artifact.path}"
+            ),
         )
 
     async def _run_record_fact_tool(self, call: ToolCall) -> Message:
