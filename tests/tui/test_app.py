@@ -3671,6 +3671,43 @@ def test_import_artifact_returns_a_typed_artifact_id(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_finalize_result_records_and_closes_atomically(tmp_path: Path) -> None:
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            intent_id = await _open(app, pilot, "check /api/v1")
+            artifact = stack[1].register_artifact(
+                operation.id, ArtifactKind.COMMAND_OUTPUT, "stable oracle"
+            )
+            message = await app._run_chat_tool(
+                ToolCall(
+                    id="1",
+                    name="finalize_result",
+                    arguments={
+                        "intent": intent_id,
+                        "summary": "SQLi confirmed",
+                        "artifact_ids": [artifact.id],
+                        "outcome": "done",
+                        "finding_title": "Blind injection",
+                        "severity": "high",
+                    },
+                )
+            )
+            assert "recorded and closed" in message.content
+            assert app.graph.get(intent_id).state.value == "done"
+            findings = stack[1].kernel.list_findings(operation.id)
+            assert len(findings) == 1
+            assert findings[0].evidence_ids == (artifact.id,)
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_open_intent_bootstraps_a_task_and_origin(tmp_path: Path) -> None:
     stack, _provider, operation = _sequence_stack(tmp_path, [])
     stack[2].set_locale("en")

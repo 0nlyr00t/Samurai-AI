@@ -78,10 +78,7 @@ class ReadinessService:
             ctf=self.ctf,
             execution=self.execution,
         ).snapshot(operation_id)
-        goal = self.goals.current(operation_id)
-        if goal is None:
-            history = self.goals.list(operation_id)
-            goal = history[-1] if history else None
+        goal = self._goal_for_report(operation_id)
         calls = [event for event in events if event.event_type == "model.call"]
         runs = self.execution.list_runs(operation_id)
         terminal = next(
@@ -139,6 +136,14 @@ class ReadinessService:
                 6,
             ),
         )
+
+
+    def _goal_for_report(self, operation_id: str) -> Any:
+        current = self.goals.current(operation_id)
+        if current is not None:
+            return current
+        history = self.goals.list(operation_id)
+        return history[-1] if history else None
 
 
 __all__ = ["OperationReadiness", "ReadinessService"]

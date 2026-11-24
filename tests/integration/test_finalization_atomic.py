@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 
 from samurai_ai import cli
+from samurai_ai.domain.execution import ToolRunStatus
 from samurai_ai.domain.graph import NodeState
 from samurai_ai.domain.kernel import ArtifactKind, FindingSeverity, PlanTask
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
-from samurai_ai.services.finalization import FinalizationService
+from samurai_ai.services.finalization import FinalizationError, FinalizationService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.storage.graph import GraphRepository
 
@@ -82,6 +83,67 @@ def test_register_finding_rolls_back_all_writes_when_attachment_fails(
 
     assert kernel.kernel.list_findings(operation_id) == []
     assert len(kernel.operations.events(operation_id)) == before_events
+
+
+def test_finding_cannot_be_created_with_a_negative_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operation_id, intent_id, artifact_id, _graph, _kernel, service = _state(tmp_path, monkeypatch)
+
+    with pytest.raises(FinalizationError, match="outcome=done"):
+        service.record_result_and_close(
+            operation_id,
+            intent_id,
+            summary="negative result",
+            artifact_ids=(artifact_id,),
+            outcome="exhausted",
+            finding_title="Not a finding",
+        )
+
+
+def test_negative_result_can_close_without_a_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operation_id, intent_id, artifact_id, graph, _kernel, service = _state(tmp_path, monkeypatch)
+
+    fact = service.record_result_and_close(
+        operation_id,
+        intent_id,
+        summary="checked and denied",
+        artifact_ids=(artifact_id,),
+        outcome="exhausted",
+        reason="all checks were negative",
+        negative=True,
+    )
+
+    assert fact.payload["result"] == "negative"
+    assert graph.get(intent_id).state is NodeState.EXHAUSTED
+
+
+def test_snapshot_reports_pending_execution_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operation_id, _intent_id, _artifact_id, _graph, _kernel, service = _state(tmp_path, monkeypatch)
+
+    class _Run:
+        def __init__(self, run_id: str, status: ToolRunStatus) -> None:
+            self.id = run_id
+            self.status = status
+
+    class _Execution:
+        def list_runs(self, _operation_id: str):
+            return [
+                _Run("queued", ToolRunStatus.QUEUED),
+                _Run("running", ToolRunStatus.RUNNING),
+                _Run("done", ToolRunStatus.COMPLETED),
+            ]
+
+    service.execution = _Execution()
+
+    snapshot = service.snapshot(operation_id)
+
+    assert snapshot.pending_execution == ("queued", "running")
+    assert not snapshot.ready_to_complete
 
 
 def test_a_failed_nested_operation_does_not_erase_an_independent_artifact(

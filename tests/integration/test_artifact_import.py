@@ -26,7 +26,7 @@ def _services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, max_bytes: int
     )
     kernel.create_plan(operation.id, "Investigation", [PlanTask(id="recon", title="Recon")], [])
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace.mkdir(exist_ok=True)
     graph = GraphService(operations, kernel, GraphRepository(operations.repository.database))
     service = FinalizationService(
         operations,
@@ -112,6 +112,33 @@ def test_import_enforces_the_binary_size_limit(
 
     with pytest.raises(ArtifactImportError, match="too large"):
         service.import_artifact(operation_id, "large.bin")
+
+
+def test_import_preserves_binary_evidence_without_decoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operation_id, workspace, kernel, service = _services(tmp_path, monkeypatch)
+    payload = b"\x00\xff\x01\x02"
+    (workspace / "proof.png").write_bytes(payload)
+
+    artifact = service.import_artifact(operation_id, "proof.png")
+
+    stored = kernel.kernel.artifact_root / operation_id / f"{artifact.id}.png"
+    assert stored.read_bytes() == payload
+
+
+def test_import_rejects_a_nonpositive_size_limit_and_invalid_utf8_is_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operation_id, workspace, kernel, service = _services(tmp_path, monkeypatch, max_bytes=4)
+    with pytest.raises(ValueError, match="positive"):
+        _services(tmp_path, monkeypatch, max_bytes=0)
+
+    payload = b"\xff\xfe"
+    (workspace / "binary.txt").write_bytes(payload)
+    artifact = service.import_artifact(operation_id, "binary.txt")
+    stored = kernel.kernel.artifact_root / operation_id / f"{artifact.id}.txt"
+    assert stored.read_bytes() == payload
 
 
 def test_import_validates_the_task_id(

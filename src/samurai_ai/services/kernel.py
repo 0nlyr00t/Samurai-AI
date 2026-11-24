@@ -182,39 +182,7 @@ class KernelService:
                 raise TaskStateError(
                     f"task {task_id} cannot complete from {task.status.value}"
                 )
-            if not force:
-                open_intents = [
-                    node.id
-                    for node in self.graph.for_task(task_id)
-                    if node.kind is NodeKind.INTENT and node.open
-                ]
-                if open_intents:
-                    raise TaskEvidenceError(
-                        f"task {task_id} has open intents: {', '.join(open_intents)}"
-                    )
-                if no_finding.strip() and self._task_has_positive_facts(task_id):
-                    raise TaskEvidenceError(
-                        f"task {task_id} has positive artifact-backed facts; "
-                        "no_finding cannot override evidence"
-                    )
-            for requirement in task.required_artifacts:
-                if not self.kernel.artifact_exists(operation_id, requirement, task_id=task_id):
-                    raise ArtifactError(
-                        f"task {task_id} is missing required artifact {requirement!r}"
-                    )
-            if not force and not self._task_has_evidence(operation_id, task_id):
-                raise TaskEvidenceError(
-                    f"task {task_id} has no evidence: run a tool, record a fact with an "
-                    "artifact id, or propose a finding — or close it with force"
-                )
-            if not force and not no_finding.strip() and not self._task_has_finding(
-                operation_id, task_id
-            ):
-                raise TaskEvidenceError(
-                    f"task {task_id} produced no finding: propose_finding with an artifact "
-                    "id, or close it with the reason explicitly — "
-                    '{"type":"complete_task","no_finding":"<why>"}'  # noqa: E501
-                )
+            self._validate_task_completion(operation_id, task, force, no_finding)
             task.status = TaskStatus.DONE
             return "task.completed", {
                 "plan_id": plan.id,
@@ -223,6 +191,50 @@ class KernelService:
             }
 
         return self._apply_plan_mutation(operation_id, mutate)
+
+    def _validate_task_completion(
+        self,
+        operation_id: str,
+        task: PlanTask,
+        force: bool,
+        no_finding: str,
+    ) -> None:
+        task_id = str(task.id)
+        self._validate_required_artifacts(operation_id, task)
+        if force:
+            return
+        open_intents = [
+            node.id
+            for node in self.graph.for_task(task_id)
+            if node.kind is NodeKind.INTENT and node.open
+        ]
+        if open_intents:
+            raise TaskEvidenceError(
+                f"task {task_id} has open intents: {', '.join(open_intents)}"
+            )
+        if no_finding.strip() and self._task_has_positive_facts(task_id):
+            raise TaskEvidenceError(
+                f"task {task_id} has positive artifact-backed facts; "
+                "no_finding cannot override evidence"
+            )
+        if not self._task_has_evidence(operation_id, task_id):
+            raise TaskEvidenceError(
+                f"task {task_id} has no evidence: run a tool, record a fact with an "
+                "artifact id, or propose a finding — or close it with force"
+            )
+        if not no_finding.strip() and not self._task_has_finding(operation_id, task_id):
+            raise TaskEvidenceError(
+                f"task {task_id} produced no finding: propose_finding with an artifact "
+                "id, or close it with the reason explicitly — "
+                '{"type":"complete_task","no_finding":"<why>"}'  # noqa: E501
+            )
+
+    def _validate_required_artifacts(self, operation_id: str, task: PlanTask) -> None:
+        for requirement in task.required_artifacts:
+            if not self.kernel.artifact_exists(operation_id, requirement, task_id=task.id):
+                raise ArtifactError(
+                    f"task {task.id} is missing required artifact {requirement!r}"
+                )
 
     def _task_has_positive_facts(self, task_id: str) -> bool:
         """Positive, artifact-backed facts contradict a no-finding verdict."""
@@ -603,44 +615,50 @@ class KernelService:
     def transition_operation(self, operation_id: str, target: OperationStatus) -> Operation:
         operation = self.operations.get(operation_id)
         stage = (operation.status, target)
-        if stage == (OperationStatus.PLANNING, OperationStatus.APPROVAL):
-            self._get_plan(operation_id)
-        elif stage == (OperationStatus.APPROVAL, OperationStatus.EXECUTION):
-            plan = self._get_plan(operation_id)
-            if not plan.approved:
-                raise KernelPreconditionError(f"current plan {plan.id} is not approved")
-            pending = self.kernel.list_approvals(operation_id, status=ApprovalStatus.PENDING)
-            if pending:
-                raise KernelPreconditionError(
-                    f"operation {operation_id} has {len(pending)} pending approvals"
-                )
-        elif stage == (OperationStatus.VERIFICATION, OperationStatus.REPORTING):
-            plan = self._get_plan(operation_id)
-            open_gates = [gate.id for gate in plan.gates if gate.status != GateStatus.PASSED]
-            if open_gates:
-                raise KernelPreconditionError(f"gates not passed: {', '.join(open_gates)}")
-        elif stage == (OperationStatus.REPORTING, OperationStatus.COMPLETE):
-            current_plan = self.kernel.get_current_plan(operation_id)
-            if current_plan is not None:
-                unfinished = [
-                    task.id
-                    for task in current_plan.tasks
-                    if task.status not in (TaskStatus.DONE, TaskStatus.SKIPPED)
-                ]
-                if unfinished:
-                    raise KernelPreconditionError(
-                        f"tasks not finished: {', '.join(unfinished)}"
-                    )
-            open_findings = [
-                finding.id
-                for finding in self.kernel.list_findings(operation_id)
-                if finding.status in (FindingStatus.CANDIDATE, FindingStatus.VALIDATING)
-            ]
-            if open_findings:
-                raise KernelPreconditionError(
-                    f"findings not resolved: {', '.join(open_findings)}"
-                )
+        validators = {
+            (OperationStatus.PLANNING, OperationStatus.APPROVAL): self._get_plan,
+            (OperationStatus.APPROVAL, OperationStatus.EXECUTION): self._validate_execution,
+            (OperationStatus.VERIFICATION, OperationStatus.REPORTING): self._validate_reporting,
+            (OperationStatus.REPORTING, OperationStatus.COMPLETE): self._validate_complete,
+        }
+        validator = validators.get(stage)
+        if validator is not None:
+            validator(operation_id)
         return self.operations.transition(operation_id, target)
+
+    def _validate_execution(self, operation_id: str) -> None:
+        plan = self._get_plan(operation_id)
+        if not plan.approved:
+            raise KernelPreconditionError(f"current plan {plan.id} is not approved")
+        pending = self.kernel.list_approvals(operation_id, status=ApprovalStatus.PENDING)
+        if pending:
+            raise KernelPreconditionError(
+                f"operation {operation_id} has {len(pending)} pending approvals"
+            )
+
+    def _validate_reporting(self, operation_id: str) -> None:
+        plan = self._get_plan(operation_id)
+        open_gates = [gate.id for gate in plan.gates if gate.status != GateStatus.PASSED]
+        if open_gates:
+            raise KernelPreconditionError(f"gates not passed: {', '.join(open_gates)}")
+
+    def _validate_complete(self, operation_id: str) -> None:
+        current_plan = self.kernel.get_current_plan(operation_id)
+        if current_plan is not None:
+            unfinished = [
+                task.id
+                for task in current_plan.tasks
+                if task.status not in (TaskStatus.DONE, TaskStatus.SKIPPED)
+            ]
+            if unfinished:
+                raise KernelPreconditionError(f"tasks not finished: {', '.join(unfinished)}")
+        open_findings = [
+            finding.id
+            for finding in self.kernel.list_findings(operation_id)
+            if finding.status in (FindingStatus.CANDIDATE, FindingStatus.VALIDATING)
+        ]
+        if open_findings:
+            raise KernelPreconditionError(f"findings not resolved: {', '.join(open_findings)}")
 
     def summary(self, operation_id: str) -> KernelSummary:
         self.operations.get(operation_id)

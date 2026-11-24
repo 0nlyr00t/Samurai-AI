@@ -139,21 +139,22 @@ class GoalService:
         return self._save(goal, expected, "goal.blocked", {"reason": goal.block_reason})
 
     def complete(self, goal_id: str) -> Goal:
-        goal = self.get(goal_id)
-        expected = goal.version
-        self._accrue(goal)
-        goal.complete()
-        saved = self._save(goal, expected, "goal.complete", {})
-        self._stop_clock()
-        self._promote_next(goal.operation_id)
-        return saved
+        return self._finish(goal_id, complete=True)
 
     def cancel(self, goal_id: str) -> Goal:
+        return self._finish(goal_id, complete=False)
+
+    def _finish(self, goal_id: str, *, complete: bool) -> Goal:
         goal = self.get(goal_id)
         expected = goal.version
         self._accrue(goal)
-        goal.cancel()
-        saved = self._save(goal, expected, "goal.cancelled", {})
+        if complete:
+            goal.complete()
+            event_type = "goal.complete"
+        else:
+            goal.cancel()
+            event_type = "goal.cancelled"
+        saved = self._save(goal, expected, event_type, {})
         self._stop_clock()
         self._promote_next(goal.operation_id)
         return saved

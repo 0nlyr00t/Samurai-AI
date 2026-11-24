@@ -215,24 +215,28 @@ class FinalizationService:
         extension = source.suffix.lower().lstrip(".") or "txt"
         if not extension.isalnum() or len(extension) > 10:
             extension = "bin"
-        text: str | None = None
-        if extension in _TEXT_SUFFIXES:
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                text = None
-        if text is not None:
-            data = self.redactor.redact(text).text.encode("utf-8")
+        data, text = self._redacted_payload(data, extension)
         return self.kernel.register_artifact(
             operation_id,
             kind,
-            "" if text is None else data.decode("utf-8"),
+            text or "",
             summary=summary[:500],
             task_id=task_id,
             created_by="agent",
             data=None if text is not None else data,
             extension=extension,
         )
+
+    def _redacted_payload(self, data: bytes, extension: str) -> tuple[bytes, str | None]:
+        """Return immutable bytes and the text channel when it is decodable."""
+        if extension not in _TEXT_SUFFIXES:
+            return data, None
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data, None
+        redacted = self.redactor.redact(text).text
+        return redacted.encode("utf-8"), redacted
 
     def _resolve_evidence_path(self, raw: str | Path) -> Path:
         candidate = Path(raw)

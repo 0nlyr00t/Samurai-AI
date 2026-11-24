@@ -1754,47 +1754,37 @@ class ChatController:
             process=False,
         )
 
-    async def _finish_finalization(
+    async def _request_finalization_answer(
+        self, operation_id: str, model_id: str, reasoning: str | None
+    ) -> ChatResponse | TerminalReason | None:
+        try:
+            response = await self._request_chat_completion(
+                operation_id, model_id, reasoning, ()
+            )
+        except Exception as exc:  # noqa: BLE001 - finalization reports, not retries
+            self._write_line(f"[error] {exc}")
+            return TerminalReason.MODEL_ERROR
+        if response is None:
+            return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
+        self._count_usage(response.usage)
+        self._add_cost(
+            model_id,
+            response.usage.prompt_tokens,
+            response.usage.completion_tokens,
+            response.usage.cached_tokens,
+        )
+        return response
+
+    async def _conclude_finalization(
         self,
         operation_id: str,
         model_id: str,
-        reasoning: str | None,
-        response: ChatResponse | None,
+        response: ChatResponse,
         runs_at_start: dict[str, int],
         findings_at_start: int,
     ) -> TerminalReason:
-        """One write-only attempt, one conclusion, then a truthful verdict."""
-        if response is not None and response.tool_calls:
+        if response.tool_calls:
             return self._block_finalization(operation_id, response)
-        snapshot = self._finalization_service().snapshot(operation_id)
-        if not snapshot.ready_to_complete:
-            await self._settle(operation_id, model_id, reasoning)
-            snapshot = self._finalization_service().snapshot(operation_id)
-            if snapshot.ready_to_complete:
-                # The premature conclusion predates the closing writes; get a
-                # fresh one against the committed evidence instead.
-                response = None
-        if not snapshot.ready_to_complete:
-            return self._block_finalization(operation_id, response)
-        if response is None:
-            try:
-                response = await self._request_chat_completion(
-                    operation_id, model_id, reasoning, ()
-                )
-            except Exception as exc:  # noqa: BLE001 - finalization reports, not retries
-                self._write_line(f"[error] {exc}")
-                return TerminalReason.MODEL_ERROR
-            if response is None:
-                return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
-            self._count_usage(response.usage)
-            self._add_cost(
-                model_id,
-                response.usage.prompt_tokens,
-                response.usage.completion_tokens,
-                response.usage.cached_tokens,
-            )
-            if response.tool_calls:
-                return self._block_finalization(operation_id, response)
         self._present_final_response(response)
         self._write_domain_summary(operation_id)
         if self._goal_requires_judgment(operation_id, 1):
@@ -1807,6 +1797,45 @@ class ChatController:
             self._write_dim(self.translator.t("chat.goal-met"))
             return reason
         return self._block_finalization(operation_id)
+
+    async def _settle_finalization(
+        self, operation_id: str, model_id: str, reasoning: str | None
+    ) -> tuple[bool, bool]:
+        """Return (ready, settled) after at most one write-only attempt."""
+        if self._finalization_service().snapshot(operation_id).ready_to_complete:
+            return True, False
+        await self._settle(operation_id, model_id, reasoning)
+        ready = self._finalization_service().snapshot(operation_id).ready_to_complete
+        return ready, True
+
+    async def _finish_finalization(
+        self,
+        operation_id: str,
+        model_id: str,
+        reasoning: str | None,
+        response: ChatResponse | None,
+        runs_at_start: dict[str, int],
+        findings_at_start: int,
+    ) -> TerminalReason:
+        """One write-only attempt, one conclusion, then a truthful verdict."""
+        ready, settled = await self._settle_finalization(
+            operation_id, model_id, reasoning
+        )
+        if not ready:
+            return self._block_finalization(operation_id, response)
+        if settled:
+            # The premature conclusion predates the closing writes; get a fresh
+            # one against the committed evidence instead.
+            response = None
+        if response is None:
+            response = await self._request_finalization_answer(
+                operation_id, model_id, reasoning
+            )
+            if isinstance(response, TerminalReason):
+                return response
+        return await self._conclude_finalization(
+            operation_id, model_id, response, runs_at_start, findings_at_start
+        )
 
     async def _chat_loop(self, text: str, model_id: str, approval_id: str | None) -> TerminalReason:
         del approval_id  # approvals are handled per call inside the loop
@@ -2769,34 +2798,44 @@ class ChatController:
         allowed = {"import_artifact", "finalize_result", "propose_finding", "memory_learn"}
         return tuple(spec for spec in self._CHAT_TOOL_SPECS if spec.name in allowed)
 
-    async def _run_finalize_result_tool(self, call: ToolCall) -> Message:
-        raw_severity = str(call.arguments.get("severity", "info") or "info")
+    @staticmethod
+    def _finding_severity(raw: object) -> FindingSeverity:
         try:
-            severity = FindingSeverity(raw_severity)
+            return FindingSeverity(str(raw or "info"))
         except ValueError:
-            severity = FindingSeverity.INFO
-        finding_title = str(call.arguments.get("finding_title", "") or "").strip() or None
+            return FindingSeverity.INFO
+
+    def _finalize_result_kwargs(self, call: ToolCall) -> dict[str, Any]:
+        severity = self._finding_severity(call.arguments.get("severity"))
+        return {
+            "summary": str(call.arguments.get("summary", "") or ""),
+            "artifact_ids": tuple(
+                str(item) for item in call.arguments.get("artifact_ids", [])
+            ),
+            "outcome": str(call.arguments.get("outcome", "done") or "done"),
+            "reason": str(call.arguments.get("reason", "") or ""),
+            "negative": str(call.arguments.get("result", "") or "") == "negative",
+            "finding_title": str(call.arguments.get("finding_title", "") or "").strip()
+            or None,
+            "severity": severity,
+            "finding_summary": str(call.arguments.get("finding_summary", "") or ""),
+        }
+
+    async def _run_finalize_result_tool(self, call: ToolCall) -> Message:
         try:
             fact = self._finalization_service().record_result_and_close(
                 self.operation.id if self.operation else "",
                 str(call.arguments.get("intent", "") or ""),
-                summary=str(call.arguments.get("summary", "") or ""),
-                artifact_ids=tuple(
-                    str(item) for item in call.arguments.get("artifact_ids", [])
-                ),
-                outcome=str(call.arguments.get("outcome", "done") or "done"),
-                reason=str(call.arguments.get("reason", "") or ""),
-                negative=str(call.arguments.get("result", "") or "") == "negative",
-                finding_title=finding_title,
-                severity=severity,
-                finding_summary=str(call.arguments.get("finding_summary", "") or ""),
+                **self._finalize_result_kwargs(call),
             )
         except (GraphError, KernelError) as exc:
             return Message(role="user", content=f"[tool finalize_result] {exc}")
         self._note_structure_written()
-        if finding_title:
+        if call.arguments.get("finding_title"):
             self._progress.finding_seen()
-        return Message(role="user", content=f"[tool finalize_result] {fact.id} recorded and closed")
+        return Message(
+            role="user", content=f"[tool finalize_result] {fact.id} recorded and closed"
+        )
 
     async def _run_record_fact_tool(self, call: ToolCall) -> Message:
         intent_id = str(call.arguments.get("intent", "") or "").strip()
@@ -3007,11 +3046,7 @@ class ChatController:
         fact_id = str(call.arguments.get("fact", "") or "").strip()
         title = str(call.arguments.get("title", "") or "").strip()
         summary = str(call.arguments.get("summary", "") or "")
-        raw_severity = str(call.arguments.get("severity", "") or "info")
-        try:
-            severity = FindingSeverity(raw_severity)
-        except ValueError:
-            severity = FindingSeverity.INFO
+        severity = self._finding_severity(call.arguments.get("severity"))
         try:
             assert self.operation is not None
             finding = self._finalization_service().register_finding(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 
 from samurai_ai.domain.goal import Goal, GoalState
 from samurai_ai.services.goals import GoalNotFoundError, GoalService
@@ -84,84 +85,116 @@ def _emit(goal: Goal, json_output: bool) -> None:
         print(f"  blocked: {goal.block_reason}")
 
 
-def handle_goal_command(args: argparse.Namespace, goals: GoalService) -> int | None:
-    if args.command != "goal":
-        return None
-    operation_id = args.operation_id
-    json_output = bool(getattr(args, "json_output", False))
-    budgets: dict[str, int] = {}
-    if getattr(args, "budget_steps", None) is not None:
-        budgets["budget_steps"] = args.budget_steps
-    if getattr(args, "budget_seconds", None) is not None:
-        budgets["budget_seconds"] = args.budget_seconds
-
-    match args.goal_command:
-        case "create":
-            _emit(
-                goals.create(
-                    operation_id,
-                    args.objective,
-                    finish_line=args.finish_line,
-                    queue=args.queue,
-                    **budgets,
-                ),
-                json_output,
-            )
-            return 0
-        case "status":
-            current = goals.current(operation_id)
-            if current is None:
-                print("no current goal")
-            else:
-                _emit(current, json_output)
-            for queued in goals.list(operation_id):
-                if queued.state is GoalState.QUEUED:
-                    print(f"queued {queued.id}\t{queued.objective}")
-            return 0
-        case "pause":
-            _emit(goals.pause(_current_id(goals, operation_id)), json_output)
-            return 0
-        case "resume":
-            _emit(goals.resume(_current_id(goals, operation_id)), json_output)
-            return 0
-        case "block":
-            _emit(goals.block(_current_id(goals, operation_id), args.reason), json_output)
-            return 0
-        case "complete":
-            _emit(goals.complete(_current_id(goals, operation_id)), json_output)
-            return 0
-        case "cancel":
-            _emit(goals.cancel(_current_id(goals, operation_id)), json_output)
-            return 0
-        case "replace":
-            _emit(
-                goals.replace(
-                    operation_id,
-                    args.objective,
-                    finish_line=args.finish_line,
-                    **budgets,
-                ),
-                json_output,
-            )
-            return 0
-        case "step":
-            _emit(goals.record_step(_current_id(goals, operation_id)), json_output)
-            return 0
-        case "extend":
-            _emit(
-                goals.extend(
-                    _current_id(goals, operation_id),
-                    steps=args.steps,
-                    seconds=args.seconds,
-                ),
-                json_output,
-            )
-            return 0
-    return None
-
-
 def _current_id(goals: GoalService, operation_id: str) -> str:
     current = goals.current(operation_id)
     if current is None:
         raise GoalNotFoundError(f"operation {operation_id} has no current goal")
     return current.id
+
+
+def _budgets(args: argparse.Namespace) -> dict[str, int]:
+    budgets: dict[str, int] = {}
+    if getattr(args, "budget_steps", None) is not None:
+        budgets["budget_steps"] = args.budget_steps
+    if getattr(args, "budget_seconds", None) is not None:
+        budgets["budget_seconds"] = args.budget_seconds
+    return budgets
+
+
+def _create(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    goal = goals.create(
+        args.operation_id,
+        args.objective,
+        finish_line=args.finish_line,
+        queue=args.queue,
+        **_budgets(args),
+    )
+    _emit(goal, json_output)
+    return 0
+
+
+def _status(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    current = goals.current(args.operation_id)
+    if current is None:
+        print("no current goal")
+    else:
+        _emit(current, json_output)
+    for queued in goals.list(args.operation_id):
+        if queued.state is GoalState.QUEUED:
+            print(f"queued {queued.id}\t{queued.objective}")
+    return 0
+
+
+def _pause(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    _emit(goals.pause(_current_id(goals, args.operation_id)), json_output)
+    return 0
+
+
+def _resume(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    _emit(goals.resume(_current_id(goals, args.operation_id)), json_output)
+    return 0
+
+
+def _block(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    _emit(goals.block(_current_id(goals, args.operation_id), args.reason), json_output)
+    return 0
+
+
+def _complete(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    _emit(goals.complete(_current_id(goals, args.operation_id)), json_output)
+    return 0
+
+
+def _cancel(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    _emit(goals.cancel(_current_id(goals, args.operation_id)), json_output)
+    return 0
+
+
+def _replace(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    goal = goals.replace(
+        args.operation_id,
+        args.objective,
+        finish_line=args.finish_line,
+        **_budgets(args),
+    )
+    _emit(goal, json_output)
+    return 0
+
+
+def _step(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    _emit(goals.record_step(_current_id(goals, args.operation_id)), json_output)
+    return 0
+
+
+def _extend(args: argparse.Namespace, goals: GoalService, json_output: bool) -> int:
+    goal = goals.extend(
+        _current_id(goals, args.operation_id),
+        steps=args.steps,
+        seconds=args.seconds,
+    )
+    _emit(goal, json_output)
+    return 0
+
+
+_Handler = Callable[[argparse.Namespace, GoalService, bool], int]
+_HANDLERS: dict[str, _Handler] = {
+    "create": _create,
+    "status": _status,
+    "pause": _pause,
+    "resume": _resume,
+    "block": _block,
+    "complete": _complete,
+    "cancel": _cancel,
+    "replace": _replace,
+    "step": _step,
+    "extend": _extend,
+}
+
+
+def handle_goal_command(args: argparse.Namespace, goals: GoalService) -> int | None:
+    if args.command != "goal":
+        return None
+    handler = _HANDLERS.get(args.goal_command)
+    if handler is None:
+        return None
+    return handler(args, goals, bool(getattr(args, "json_output", False)))
