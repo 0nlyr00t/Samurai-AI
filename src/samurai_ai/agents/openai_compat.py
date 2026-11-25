@@ -24,6 +24,7 @@ from samurai_ai.agents.provider import (
     ChatResponse,
     ImagePart,
     ToolCall,
+    ToolCallDelta,
     Usage,
 )
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
@@ -221,6 +222,7 @@ class OpenAICompatProvider:
         request: ChatRequest,
         on_token: Callable[[str], None],
         should_stop: Callable[[], bool] | None = None,
+        on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
     ) -> ChatResponse:
         """The same call with SSE streaming; text arrives through on_token.
 
@@ -239,7 +241,7 @@ class OpenAICompatProvider:
 
         try:
             text_parts, reasoning_parts, tool_map, usage = await asyncio.to_thread(
-                self._read_stream, payload, emit, should_stop
+                self._read_stream, payload, emit, should_stop, on_tool_delta
             )
         except ProviderStreamError:
             raise
@@ -281,6 +283,7 @@ class OpenAICompatProvider:
         payload: dict[str, Any],
         on_token: Callable[[str], None],
         should_stop: Callable[[], bool] | None = None,
+        on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
     ) -> tuple[list[str], list[str], dict[int, dict[str, Any]], Usage]:
         """Drain the SSE stream into text parts, reasoning and tool calls.
 
@@ -346,6 +349,15 @@ class OpenAICompatProvider:
                         entry["function"]["name"] = function["name"]
                     if function.get("arguments"):
                         entry["function"]["arguments"] += function["arguments"]
+                    if on_tool_delta is not None:
+                        on_tool_delta(
+                            ToolCallDelta(
+                                index=index,
+                                id=str(entry.get("id") or ""),
+                                name=str(entry["function"].get("name") or ""),
+                                arguments=str(entry["function"].get("arguments") or ""),
+                            )
+                        )
         return text_parts, reasoning_parts, tool_map, _usage(
             prompt_tokens, completion_tokens, cached_tokens
         )

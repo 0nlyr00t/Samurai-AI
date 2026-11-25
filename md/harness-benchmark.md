@@ -16,6 +16,14 @@ The suite finishes only after all hypotheses are closed and a final conclusion i
 recorded. Capture local evidence success, terminal correctness, blocked reasons,
 wall time, cost and safety violations. Do not publish those artifacts.
 
+## Measured shadow-gene experiments
+
+Inside an operation, `/experiment start <metric> <lower|higher> <1-20> | <command>`
+asks approval for the complete immutable command. The custom harness must print
+`METRIC <name>=<finite-number>`. The limit includes the baseline. Candidates stay
+in `shadow`; keep requires a strict measured improvement and discard retires only
+the candidate. Promotion still uses the existing operator gene gate.
+
 ## Local acceptance
 
 - Use real HTB and Linux services, not mocked tool output.

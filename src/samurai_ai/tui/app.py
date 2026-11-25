@@ -33,11 +33,16 @@ from textual.widgets.option_list import Option
 from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message
-from samurai_ai.config import serve_socket_path
+from samurai_ai.config import genes_path, serve_socket_path
 from samurai_ai.domain.access import AccessError, Role
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
 from samurai_ai.domain.constraints import ConstraintKind
 from samurai_ai.domain.execution import SecretRedactor, ToolDefinition, ToolRun
+from samurai_ai.domain.experiments import (
+    ExperimentError,
+    ExperimentState,
+    MetricDirection,
+)
 from samurai_ai.domain.goal import Goal, GoalError
 from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import (
@@ -45,11 +50,13 @@ from samurai_ai.domain.kernel import (
     Artifact,
     ArtifactKind,
     GateStatus,
+    KernelError,
+    RiskClass,
     TaskStatus,
 )
 from samurai_ai.domain.learned_skills import LearnedSkillMode
 from samurai_ai.domain.lessons import LessonMode
-from samurai_ai.domain.models import parse_model_id
+from samurai_ai.domain.models import ModelError, ModelNotFoundError, parse_model_id
 from samurai_ai.domain.operations import Operation, OperationEvent, OperationMode
 from samurai_ai.domain.permission import (
     PermissionMode,
@@ -58,7 +65,9 @@ from samurai_ai.domain.permission import (
     parse_mode,
 )
 from samurai_ai.domain.retest import RetestVerdict
+from samurai_ai.domain.reviewer import ReviewerConfig
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.stream_rules import RuleMode, RuleScope, StreamRule, StreamRuleError
 from samurai_ai.domain.teamwork import NoteTarget, OperationLevel, TeamworkError
 from samurai_ai.domain.traffic import TrafficRole
 from samurai_ai.i18n import Translator
@@ -67,6 +76,8 @@ from samurai_ai.services.chat import ChatHistoryService
 from samurai_ai.services.constraints import ConstraintService
 from samurai_ai.services.ctf import CtfService
 from samurai_ai.services.execution import ToolExecutionService
+from samurai_ai.services.experiments import ExperimentService
+from samurai_ai.services.genes import GeneService, GeneStore
 from samurai_ai.services.goals import GoalService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.services.kernel import KernelService
@@ -75,6 +86,7 @@ from samurai_ai.services.learned_skills import LearnedSkillService
 from samurai_ai.services.lessons import LessonService
 from samurai_ai.services.loot import LootExportService, default_loot_root
 from samurai_ai.services.memory import CampaignMemoryService
+from samurai_ai.services.model_routing import ModelRoutingService
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationNotFoundError, OperationService
 from samurai_ai.services.planning import PlanningService
@@ -83,8 +95,10 @@ from samurai_ai.services.recovery import RecoveryService
 from samurai_ai.services.redteam import RedTeamService
 from samurai_ai.services.reports import ReportService
 from samurai_ai.services.retests import RetestService
+from samurai_ai.services.reviewer import ReviewerService
 from samurai_ai.services.settings import InvalidLocaleError, SettingsService
 from samurai_ai.services.skills import SkillService
+from samurai_ai.services.stream_rules import StreamRuleService
 from samurai_ai.services.teamwork import TeamworkService
 from samurai_ai.services.tool_keys import CATALOGUE
 from samurai_ai.services.traffic import TrafficService
@@ -429,6 +443,7 @@ class SamuraiApp(
         skills: SkillService,
         models: ModelService,
         operation_id: str | None = None,
+        experiments: ExperimentService | None = None,
     ) -> None:
         super().__init__()
         self._theme_files: list[str] = []
@@ -451,6 +466,16 @@ class SamuraiApp(
         self.memory = memory
         self.skills = skills
         self.models = models
+        self.model_routing = ModelRoutingService(settings, service, models)
+        self.stream_rules = StreamRuleService(service)
+        self.reviewers = ReviewerService(service, models)
+        self._reviewer_runtimes = {}
+        self.experiments = experiments or ExperimentService(
+            service,
+            execution,
+            vault,
+            GeneService(GeneStore(genes_path())),
+        )
         self.requested_operation_id = operation_id
         self.operation: Operation | None = None
         self.translator = Translator(settings.get_locale() or "en")
@@ -542,6 +567,12 @@ class SamuraiApp(
         self._live_answer = None
         self._turn_todo: list[tuple[str, str]] = []
         self._chat_history: list[Message] = []
+        self._route_model: str | None = None
+        self._handoff_shell_seen = False
+        self._handoff_failed = False
+        self._guard_matcher = None
+        self._guard_tool_reminders = {}
+        self._guard_text_reminders = ()
         self._progress = Stagnation()
         self._graph_used = False
         self._last_turn_reason: TerminalReason | None = None
@@ -828,6 +859,8 @@ class SamuraiApp(
             # Fresh install or empty base: the first chat message will spawn
             # its own operation tab, so there is nothing to load yet.
             self.operation = None
+        if self.operation is not None:
+            self._route_model = self.model_routing.active_model(self.operation.id)
 
         self._refresh_chrome()
         self._show_project_picker()
@@ -1374,6 +1407,7 @@ class SamuraiApp(
             "turn_todo": list(self._turn_todo),
             "proposed_plan": self._proposed_plan,
             "killchain_phase": self._killchain_phase,
+            "route_model": self._route_model,
         }
 
     def _restore_tab_state(self) -> None:
@@ -1391,6 +1425,7 @@ class SamuraiApp(
         self._proposed_plan = state["proposed_plan"]
         self._killchain_phase = state["killchain_phase"]
         self._restore_chat()
+        self._route_model = state.get("route_model")
 
     def _switch_view(self, pane: str) -> None:
         tab = self._TAB_BY_VIEW.get(pane)
@@ -1553,6 +1588,7 @@ class SamuraiApp(
             return
         self._store_tab_state()
         self.operation = operation
+        self._route_model = None
         self._auto_title = None
         self._graph_used = False
         self._last_ai_text = None
@@ -1670,11 +1706,10 @@ class SamuraiApp(
             self.restore_focus()
             return
         name, mode, scope = choice
-        includes = tuple(rule.strip() for rule in scope.split(",") if rule.strip()) or (
-            "127.0.0.1/32",
-        )
+        includes = tuple(rule.strip() for rule in scope.split(",") if rule.strip())
         operation = self.service.create(name, OperationMode(mode), ScopeContract(includes=includes))
         self.operation = operation
+        self._route_model = None
         self._auto_title = None
         self._graph_used = False
         self._chat_history.clear()
@@ -5083,7 +5118,7 @@ class SamuraiApp(
         self.query_one("#side-workspace", Static).update(workspace)
         self._refresh_swarm_panel()
         self._refresh_side_blocks()
-        model = self.models.default_model()
+        model = self._active_chat_model()
         directory = self._short_cwd()
         if not self._directory_trusted():
             directory += self.translator.t("trust.untrusted-marker")
@@ -5534,11 +5569,272 @@ class SamuraiApp(
             self._on_model_chosen,
         )
 
+    def _active_chat_model(self) -> str | None:
+        return self._route_model or self.models.default_model()
+
+    def _reset_model_route(self, reason: str) -> None:
+        if self.operation is not None:
+            self.model_routing.reset(self.operation.id, reason=reason)
+        self._route_model = None
+
+    def _handle_experiment_command(self, argument: str) -> None:
+        action = argument.strip()
+        if self.operation is None:
+            self._write_dim(self.translator.t("experiment.no-operation"), process=False)
+            return
+        operation_id = self.operation.id
+        if not action:
+            state = self.experiments.state(operation_id)
+            if state is None:
+                self._write_dim(self.translator.t("experiment.none"), process=False)
+                return
+            self._write_dim(self._experiment_status_text(state), process=False)
+            return
+        if action == "off":
+            try:
+                self.experiments.pause(operation_id)
+            except ExperimentError as exc:
+                self._write_line(f"[error] {exc}")
+                return
+            self._write_dim(self.translator.t("experiment.paused"), process=False)
+            return
+        if self._chat_busy:
+            self._write_dim(self.translator.t("experiment.busy"), process=False)
+            return
+        if action == "resume":
+            try:
+                self.experiments.resume(operation_id)
+            except ExperimentError as exc:
+                self._write_line(f"[error] {exc}")
+                return
+            self._start_chat(self.translator.t("experiment.resume-prompt"))
+            return
+        if not action.startswith("start "):
+            self._write_dim(self.translator.t("experiment.usage"), process=False)
+            return
+        head, separator, command = action[6:].partition(" | ")
+        parts = head.strip().split()
+        if not separator or len(parts) != 3 or not command.strip():
+            self._write_dim(self.translator.t("experiment.usage"), process=False)
+            return
+        metric, raw_direction, raw_limit = parts
+        try:
+            direction = MetricDirection(raw_direction)
+            limit = int(raw_limit)
+            if not 1 <= limit <= 20:
+                raise ValueError("limit must be 1-20")
+        except ValueError as exc:
+            self._write_line(f"[error] {exc}")
+            return
+        self.run_worker(
+            self._start_experiment(metric, direction, limit, command), exclusive=False
+        )
+
+    async def _start_experiment(
+        self, metric: str, direction: MetricDirection, limit: int, command: str
+    ) -> None:
+        if self.operation is None:
+            return
+        operation_id = self.operation.id
+        allowed = await self.push_screen_wait(
+            AccessPromptScreen(self.translator, f"shell.exec: {command}", "r3")
+        )
+        if not allowed:
+            return
+        try:
+            approval = self.kernel.request_approval(
+                operation_id, "tool.run shell.exec", RiskClass.R3
+            )
+            self.kernel.approve(approval.id, decided_by=self._actor())
+            config = self.experiments.start(
+                operation_id,
+                metric=metric,
+                direction=direction,
+                limit=limit,
+                command=command,
+            )
+        except (ExperimentError, KernelError) as exc:
+            self._write_line(f"[error] {exc}")
+            return
+        self._write_dim(
+            self.translator.t(
+                "experiment.started",
+                metric=config.metric,
+                direction=config.direction.value,
+                limit=config.limit,
+            ),
+            process=False,
+        )
+        self._start_chat(self.translator.t("experiment.begin-prompt"))
+
+    def _experiment_status_text(self, state: ExperimentState) -> str:
+        pending = state.pending_run.id if state.pending_run else "—"
+        best = str(state.best_metric) if state.best_metric is not None else "—"
+        return str(
+            self.translator.t(
+                "experiment.status",
+                status=state.status.value,
+                metric=state.config.metric,
+                best=best,
+                runs=state.logged_count,
+                limit=state.config.limit,
+                pending=pending,
+                gene=state.best_gene_id or "—",
+            )
+        )
+
+    def _handle_reviewer_command(self, argument: str) -> None:
+        action = argument.strip()
+        if self.operation is None:
+            self._write_dim(self.translator.t("reviewer.no-operation"), process=False)
+            return
+        operation_id = self.operation.id
+        if not action:
+            config = self.reviewers.config(operation_id)
+            if config is None:
+                self._write_dim(self.translator.t("reviewer.off"), process=False)
+            else:
+                self._write_dim(
+                    self.translator.t(
+                        "reviewer.status",
+                        model=config.model,
+                        fallback=config.fallback or "—",
+                    ),
+                    process=False,
+                )
+            return
+        if self._chat_busy:
+            self._write_dim(self.translator.t("reviewer.busy"), process=False)
+            return
+        if action == "off":
+            disabled = self.reviewers.disable(operation_id)
+            runtime = self._reviewer_runtimes.pop(operation_id, None)
+            if runtime is not None and runtime.task is not None:
+                runtime.task.cancel()
+            self._write_dim(
+                self.translator.t("reviewer.off" if disabled else "reviewer.already-off"),
+                process=False,
+            )
+            return
+        parts = action.split()
+        if len(parts) not in (2, 3) or parts[0] != "on":
+            self._write_dim(self.translator.t("reviewer.usage"), process=False)
+            return
+        try:
+            config = self.reviewers.enable(
+                operation_id,
+                ReviewerConfig(parts[1], parts[2] if len(parts) == 3 else None),
+            )
+        except (ModelError, ModelNotFoundError) as exc:
+            self._write_line(f"[error] {exc}")
+            return
+        runtime = self._reviewer_runtimes.pop(operation_id, None)
+        if runtime is not None and runtime.task is not None:
+            runtime.task.cancel()
+        self._write_dim(
+            self.translator.t(
+                "reviewer.on", model=config.model, fallback=config.fallback or "—"
+            ),
+            process=False,
+        )
+
+    def _handle_guard_command(self, argument: str) -> None:
+        action = argument.strip()
+        if self.operation is None:
+            self._write_dim(self.translator.t("guard.no-operation"), process=False)
+            return
+        if not action:
+            rules = self.stream_rules.rules(self.operation.id)
+            if not rules:
+                self._write_dim(self.translator.t("guard.empty"), process=False)
+                return
+            for rule in rules:
+                self._write_dim(
+                    self.translator.t(
+                        "guard.item",
+                        name=rule.name,
+                        scope=rule.scope.value,
+                        mode=rule.mode.value,
+                        pattern=rule.pattern,
+                        reminder=rule.reminder,
+                    ),
+                    process=False,
+                )
+            return
+        if self._chat_busy:
+            self._write_dim(self.translator.t("guard.busy"), process=False)
+            return
+        if action.startswith("rm "):
+            name = action[3:].strip()
+            if self.stream_rules.remove(self.operation.id, name):
+                self._write_dim(self.translator.t("guard.removed", name=name), process=False)
+            else:
+                self._write_dim(self.translator.t("guard.missing", name=name), process=False)
+            return
+        if not action.startswith("add "):
+            self._write_dim(self.translator.t("guard.usage"), process=False)
+            return
+        head, separator, reminder = action[4:].partition(" | ")
+        parts = head.strip().split(maxsplit=3)
+        if not separator or len(parts) != 4 or not reminder.strip():
+            self._write_dim(self.translator.t("guard.usage"), process=False)
+            return
+        name, raw_scope, raw_mode, pattern = parts
+        try:
+            rule = self.stream_rules.add(
+                self.operation.id,
+                StreamRule(
+                    name=name,
+                    pattern=pattern,
+                    reminder=reminder,
+                    scope=RuleScope(raw_scope),
+                    mode=RuleMode(raw_mode),
+                ),
+            )
+        except (StreamRuleError, ValueError) as exc:
+            self._write_line(f"[error] {exc}")
+            return
+        self._write_dim(self.translator.t("guard.added", name=rule.name), process=False)
+
+    def _handle_handoff_command(self, argument: str) -> None:
+        action = argument.strip()
+        if not action:
+            active = self._active_chat_model() or "—"
+            execution = self.model_routing.execution_model() or "—"
+            self._write_line(
+                "[handoff] "
+                + self.translator.t("handoff.status", active=active, execution=execution)
+            )
+            return
+        if self._chat_busy:
+            self._write_dim(self.translator.t("handoff.busy"), process=False)
+            return
+        if action == "off":
+            self.model_routing.clear_execution_model()
+            self._reset_model_route("disabled")
+            self._write_dim(self.translator.t("handoff.off"), process=False)
+        elif action == "restart":
+            if self.operation is None:
+                self._write_dim(self.translator.t("handoff.no-operation"), process=False)
+                return
+            self._reset_model_route("operator_restart")
+            self._write_dim(self.translator.t("handoff.restarted"), process=False)
+        else:
+            try:
+                model_id = self.model_routing.set_execution_model(action)
+            except (ModelError, ModelNotFoundError) as exc:
+                self._write_line(f"[error] {exc}")
+                return
+            self._reset_model_route("execution_changed")
+            self._write_dim(self.translator.t("handoff.set", model=model_id), process=False)
+        self._refresh_chrome()
+
     def _on_model_chosen(self, choice: tuple[str, str] | None) -> None:
         if choice is None:
             return
         model_id, reasoning = choice
         self.settings.set_value("model.default", model_id)
+        self._reset_model_route("model_selected")
         self.settings.set_value("model.reasoning_effort", reasoning)
         self.settings.set_value(f"model.reasoning_effort.{model_id}", reasoning)
         self._write_line(
@@ -5567,6 +5863,7 @@ class SamuraiApp(
 
     def _on_custom_endpoint_done(self, model_id: str | None) -> None:
         if model_id:
+            self._reset_model_route("model_selected")
             reasoning = self.models.default_reasoning_effort() or "off"
             self._write_line(
                 "[model] "

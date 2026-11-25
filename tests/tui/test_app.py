@@ -4049,7 +4049,9 @@ def test_exhausted_rounds_settle_the_graph_before_the_summary(tmp_path: Path) ->
 
             seen: list[tuple[str, ...]] = []
 
-            async def fake_request(operation_id, model_id, reasoning, tools):  # type: ignore[no-untyped-def]
+            async def fake_request(
+                operation_id, model_id, reasoning, tools, guard_rules=False
+            ):  # type: ignore[no-untyped-def]
                 seen.append(tuple(spec.name for spec in tools))
                 return None
 
@@ -4080,7 +4082,9 @@ def test_settle_persists_state_even_when_the_graph_stayed_empty(tmp_path: Path) 
             assert not app._graph_used
             seen: list[tuple[str, ...]] = []
 
-            async def fake_request(operation_id, model_id, reasoning, tools):  # type: ignore[no-untyped-def]
+            async def fake_request(
+                operation_id, model_id, reasoning, tools, guard_rules=False
+            ):  # type: ignore[no-untyped-def]
                 seen.append(tuple(spec.name for spec in tools))
                 return None
 
@@ -6308,11 +6312,11 @@ def test_a_failed_turn_shows_its_process_log_without_a_press(tmp_path: Path) -> 
             original = app._request_chat_completion
             calls = {"n": 0}
 
-            async def failing(*call_args):  # type: ignore[no-untyped-def]
+            async def failing(*call_args, **call_kwargs):  # type: ignore[no-untyped-def]
                 calls["n"] += 1
                 if calls["n"] > 1:
                     raise RuntimeError("boom")
-                return await original(*call_args)
+                return await original(*call_args, **call_kwargs)
 
             with patch.object(
                 journal, "write", side_effect=lambda message: messages.append(message)

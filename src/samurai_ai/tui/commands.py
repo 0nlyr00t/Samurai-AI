@@ -150,6 +150,22 @@ COMMANDS: tuple[CommandSpec, ...] = (
     # view and control
     _spec("/lang", GROUP_VIEW, "_show_lang", argument=True, prompt_key="palette.prompt.locale"),
     _spec("/model", GROUP_VIEW, "_show_model_picker"),
+    _spec("/handoff", GROUP_VIEW, "_handle_handoff_command", argument=True),
+    _spec("/guard", GROUP_CONTROL, "_handle_guard_command", argument=True, operation=True),
+    _spec(
+        "/reviewer",
+        GROUP_CONTROL,
+        "_handle_reviewer_command",
+        argument=True,
+        operation=True,
+    ),
+    _spec(
+        "/experiment",
+        GROUP_CONTROL,
+        "_handle_experiment_command",
+        argument=True,
+        operation=True,
+    ),
     _spec("/connect", GROUP_VIEW, "_show_model_picker"),
     _spec("/settings", GROUP_VIEW, "_show_settings"),
     _spec("/mouse", GROUP_VIEW, "_toggle_mouse"),

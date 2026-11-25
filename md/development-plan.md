@@ -24,6 +24,16 @@
   bounded HTTP alternative to coordinate-driven GUI actions.
 - Lifecycle healthchecks and reviewed OpenSSH recipe.
 - Secret redaction for vault values and JSON sensitive keys.
+- Persistent planning-to-execution model handoff after a checklist and observed
+  shell result, with operator-visible `/handoff` controls and no schema migration.
+- Per-operation stream rules with passive reminders, bounded interrupt/retry,
+  pre-execution checks for every provider and no matched content in audit events.
+- Empty fully denied scope when an operation has no explicit target; no implicit
+  loopback authorization from chat, shell mode or the new-operation screen.
+- Opt-in independent reviewer with redacted transcript deltas, bounded notes,
+  explicit fallback, isolated failures and no authority over execution.
+- Bounded shadow-gene experiments with immutable approved benchmarks, strict
+  measured keep/discard, auto-resume limits and no automatic promotion.
 
 ## Acceptance policy
 

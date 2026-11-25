@@ -115,6 +115,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.runbook": "/runbook          Show generated runbooks",
         "help.lang": "/lang [ru|en]     Show or change the interface language",
         "help.model": "/model           Pick the default model and reasoning effort",
+        "help.handoff": "/handoff [model|restart|off]  Configure execution model routing",
+        "help.guard": "/guard [add|rm]  Manage per-operation stream rules",
+        "help.reviewer": "/reviewer [on model [fallback]|off]  Independent operation review",
+        "help.experiment": "/experiment [start|off|resume]  Benchmark shadow-gene candidates",
         "help.copy": "/copy [code]      Copy the last reply (or its code block)",
         "help.expand": "/expand           Reveal the collapsed tool output in full",
         "inspector.title": "Run {run} · {tool} v{version}",
@@ -909,6 +913,67 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "model.picker-reasoning": "Reasoning effort",
         "model.picker-hint": "Arrows to move, Tab switches column, Enter applies, Esc cancels",
         "model.selected": "default model: {model} | reasoning: {reasoning}",
+        "handoff.status": "active model: {active} | execution model: {execution}",
+        "handoff.set": "execution model: {model}; planning cycle restarted",
+        "handoff.off": "execution handoff disabled",
+        "handoff.restarted": "planning cycle restarted",
+        "handoff.busy": "wait for the active turn before changing model routing",
+        "handoff.no-operation": "open an operation before restarting its model route",
+        "handoff.changed": "execution model continues this operation: {model}",
+        "guard.no-operation": "open an operation before managing stream rules",
+        "guard.empty": "no stream rules configured for this operation",
+        "guard.usage": (
+            "usage: /guard add <name> <text|tools|all> <remind|interrupt> "
+            "<regex> | <reminder>; /guard rm <name>"
+        ),
+        "guard.item": (
+            "[guard] {name} · {scope} · {mode} · /{pattern}/ → {reminder}"
+        ),
+        "guard.added": "stream rule saved: {name}",
+        "guard.removed": "stream rule removed: {name}",
+        "guard.missing": "stream rule not found: {name}",
+        "guard.busy": "wait for the active turn before changing stream rules",
+        "guard.matched": "stream rule {name}: {action}",
+        "guard.retry": "retrying the model round after a rule match ({attempt}/4)",
+        "guard.blocked": "turn blocked: the same stream rule kept matching after 4 retries",
+        "reviewer.no-operation": "open an operation before configuring its reviewer",
+        "reviewer.usage": "usage: /reviewer on <model> [fallback] | /reviewer off",
+        "reviewer.status": "reviewer: {model} | fallback: {fallback}",
+        "reviewer.on": "reviewer enabled: {model} | fallback: {fallback}",
+        "reviewer.off": "reviewer disabled",
+        "reviewer.already-off": "reviewer is already disabled",
+        "reviewer.busy": "wait for the active turn before changing the reviewer",
+        "reviewer.failed": "reviewer failed; the operation continues without it",
+        "reviewer.note": "reviewer {severity}: {text}",
+        "reviewer.blocker": "reviewer blocker: {text}",
+        "experiment.no-operation": "open an operation before starting an experiment",
+        "experiment.none": "no experiment configured",
+        "experiment.usage": (
+            "usage: /experiment start <metric> <lower|higher> <1-20> | <command>; "
+            "/experiment off; /experiment resume"
+        ),
+        "experiment.busy": "wait for the active turn before starting or resuming",
+        "experiment.paused": "experiment paused; no new iteration will start",
+        "experiment.started": (
+            "experiment started: {metric} ({direction}), limit {limit} runs"
+        ),
+        "experiment.status": (
+            "[experiment] {status} · metric={metric} · best={best} · "
+            "runs={runs}/{limit} · pending={pending} · gene={gene}"
+        ),
+        "experiment.candidate": "shadow experiment candidate: {gene}",
+        "experiment.run": "experiment {run}: metric={value}, exit={code}",
+        "experiment.begin-prompt": (
+            "Begin the bounded experiment. Establish the baseline, then iterate on "
+            "shadow genes with the experiment tools. Never change the benchmark command."
+        ),
+        "experiment.resume-prompt": (
+            "Resume the paused experiment from its recorded pending run or next candidate."
+        ),
+        "handoff.continue": (
+            "The operation now continues with {model}. Follow the existing checklist, "
+            "use the preserved tool results, and do not restart completed work:\n{checklist}"
+        ),
         "model.empty": "No models available; check provider health",
         "model.current-marker": " (current)",
         "model.custom-title": "Add custom OpenAI-compatible endpoint",
@@ -1062,6 +1127,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.runbook": "/runbook          Показать сгенерированные runbook",
         "help.lang": "/lang [ru|en]     Показать или сменить язык интерфейса",
         "help.model": "/model           Выбрать модель по умолчанию и уровень рассуждений",
+        "help.handoff": "/handoff [model|restart|off]  Настроить исполняющую модель",
+        "help.guard": "/guard [add|rm]  Правила генерации для текущей операции",
+        "help.reviewer": "/reviewer [on model [fallback]|off]  Независимая рецензия",
+        "help.experiment": "/experiment [start|off|resume]  Эксперименты с shadow-генами",
         "help.copy": "/copy [code]      Скопировать последний ответ (или блок кода)",
         "help.expand": "/expand           Раскрыть свёрнутый вывод команд полностью",
                 "inspector.title": "Запуск {run} · {tool} v{version}",
@@ -1840,6 +1909,68 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Enter — применить, Esc — отмена"
         ),
         "model.selected": "модель по умолчанию: {model} | рассуждения: {reasoning}",
+        "handoff.status": "активная модель: {active} | исполняющая: {execution}",
+        "handoff.set": "исполняющая модель: {model}; цикл планирования перезапущен",
+        "handoff.off": "передача исполняющей модели выключена",
+        "handoff.restarted": "цикл планирования перезапущен",
+        "handoff.busy": "дождитесь конца хода перед сменой маршрута модели",
+        "handoff.no-operation": "откройте операцию, чтобы перезапустить маршрут модели",
+        "handoff.changed": "операцию продолжает исполняющая модель: {model}",
+        "guard.no-operation": "откройте операцию, чтобы управлять правилами генерации",
+        "guard.empty": "для этой операции правила генерации не заданы",
+        "guard.usage": (
+            "использование: /guard add <имя> <text|tools|all> <remind|interrupt> "
+            "<regex> | <напоминание>; /guard rm <имя>"
+        ),
+        "guard.item": (
+            "[guard] {name} · {scope} · {mode} · /{pattern}/ → {reminder}"
+        ),
+        "guard.added": "правило генерации сохранено: {name}",
+        "guard.removed": "правило генерации удалено: {name}",
+        "guard.missing": "правило генерации не найдено: {name}",
+        "guard.busy": "дождитесь конца хода перед сменой правил генерации",
+        "guard.matched": "правило генерации {name}: {action}",
+        "guard.retry": "повтор раунда модели после срабатывания ({attempt}/4)",
+        "guard.blocked": "ход заблокирован: правило сработало снова после 4 повторов",
+        "reviewer.no-operation": "откройте операцию, чтобы настроить рецензента",
+        "reviewer.usage": "использование: /reviewer on <model> [fallback] | /reviewer off",
+        "reviewer.status": "рецензент: {model} | fallback: {fallback}",
+        "reviewer.on": "рецензент включён: {model} | fallback: {fallback}",
+        "reviewer.off": "рецензент выключен",
+        "reviewer.already-off": "рецензент уже выключен",
+        "reviewer.busy": "дождитесь конца хода перед сменой рецензента",
+        "reviewer.failed": "рецензия не удалась; операция продолжается без неё",
+        "reviewer.note": "рецензент {severity}: {text}",
+        "reviewer.blocker": "рецензент blocker: {text}",
+        "experiment.no-operation": "откройте операцию перед запуском эксперимента",
+        "experiment.none": "эксперимент не настроен",
+        "experiment.usage": (
+            "использование: /experiment start <metric> <lower|higher> <1-20> | <command>; "
+            "/experiment off; /experiment resume"
+        ),
+        "experiment.busy": "дождитесь конца хода перед запуском или возобновлением",
+        "experiment.paused": "эксперимент приостановлен; новая итерация не начнётся",
+        "experiment.started": (
+            "эксперимент запущен: {metric} ({direction}), лимит {limit} прогонов"
+        ),
+        "experiment.status": (
+            "[experiment] {status} · metric={metric} · best={best} · "
+            "runs={runs}/{limit} · pending={pending} · gene={gene}"
+        ),
+        "experiment.candidate": "shadow-кандидат эксперимента: {gene}",
+        "experiment.run": "эксперимент {run}: metric={value}, exit={code}",
+        "experiment.begin-prompt": (
+            "Начни ограниченный эксперимент: установи baseline, затем итерируй "
+            "shadow-гены через experiment-инструменты. Benchmark-команду не меняй."
+        ),
+        "experiment.resume-prompt": (
+            "Возобнови эксперимент с записанного pending run или следующего кандидата."
+        ),
+        "handoff.continue": (
+            "Операцию продолжает {model}. Следуй существующему чек-листу, используй "
+            "сохранённые результаты инструментов и не начинай завершённую работу заново:\n"
+            "{checklist}"
+        ),
         "model.key-prompt": "API-ключ для {provider} (хранится в сейфе)",
         "model.key-saved": "[model] ключ сохранён для {provider}",
         "model.empty": "Нет доступных моделей; проверьте health провайдеров",
@@ -1927,6 +2058,10 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.runbook",
     "help.lang",
     "help.model",
+    "help.handoff",
+    "help.guard",
+    "help.reviewer",
+    "help.experiment",
     "help.copy",
     "help.expand",
     "help.ask",

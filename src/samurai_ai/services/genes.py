@@ -137,6 +137,16 @@ class GeneService:
         self.store.save(genes)
         return gene
 
+    def discard(self, gene_id: str) -> Gene:
+        """Retire an unproductive shadow candidate; active genes are off-limits."""
+        genes = self.store.load()
+        gene = self._find(genes, gene_id)
+        if gene.status is not GeneStatus.SHADOW:
+            raise GeneGateError("only a shadow candidate can be discarded")
+        gene.retire()
+        self.store.save(genes)
+        return gene
+
     def promote(self, gene_id: str) -> Gene:
         """The gate: comparable fitness, and no worse than the current active."""
         genes = self.store.load()

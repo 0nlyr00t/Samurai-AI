@@ -113,6 +113,22 @@ Run завершается только после recovery/closing и пров�
 как interrupted с причиной и предлагает новый run. Subagent получает результат,
 но не privileged `admin/sessions/c2` execution; эти вызовы принадлежат родителю.
 
+## Независимая рецензия
+
+Reviewer — governed model consumer, а не execution authority: его заметки не
+меняют approvals, tool outcome или terminal verdict. Вызовы используют общий
+operation gate/budget и явный fallback. Transcript redact-ится до provider, а
+заметки — до журнала. Review failure изолирована от основной работы.
+
+## Потоковые правила
+
+Interrupting guard завершается до execution boundary: streamed tool call не
+исполняется, а для нестримингового provider finalized response проверяется до
+`_run_round`. Partial arguments не считаются безопасными только потому, что они
+не распарсились; cumulative raw delta и журнал attempt закрывают этот случай.
+Retry-бюджет ограничен, исчерпание оставляет `tool_runs` пустым для отклонённого
+вызова. Напоминания не входят в untrusted tool output и не меняют его artifact.
+
 ## Finalization
 
 Перед terminal verdict goal переходит в `FINALIZING`: разрешены только импорт

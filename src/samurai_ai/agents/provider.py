@@ -31,6 +31,17 @@ class ToolCall(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class ToolCallDelta(BaseModel):
+    """Cumulative raw arguments for one streamed tool call."""
+
+    model_config = ConfigDict(frozen=True)
+
+    index: int
+    id: str = ""
+    name: str = ""
+    arguments: str = ""
+
+
 #: sent through the token callback when the partial answer is abandoned and the
 #: provider is about to resend it from the start
 STREAM_RESET = "\x00reset\x00"
@@ -106,4 +117,5 @@ class ModelProvider(Protocol):
         request: ChatRequest,
         on_token: Callable[[str], None],
         should_stop: Callable[[], bool] | None = None,
+        on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
     ) -> ChatResponse: ...

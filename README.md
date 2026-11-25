@@ -44,9 +44,17 @@ Removes the binary, the PATH block, the state directory (`~/.config/samurai`) an
 
 ## Capabilities
 
-**Operation.** Scope only widens with a confirmation: `scope add` asks when a rule really widens the boundary and stays silent when the target is already covered. Four modes (bug bounty, CTF/HTB, red team, operation planning), an audited lifecycle, include/exclude scope for domains, wildcards, URL origins and IP/CIDR, immutable evidence with SHA-256, findings from candidate to reported, snapshots, restore, fork, recovery reconciliation.
+**Operation.** An operation without an explicit target starts with an empty, fully denied scope — loopback is never included implicitly. Scope only widens with a confirmation: `scope add` asks when a rule really widens the boundary and stays silent when the target is already covered. Four modes (bug bounty, CTF/HTB, red team, operation planning), an audited lifecycle, include/exclude scope for domains, wildcards, URL origins and IP/CIDR, immutable evidence with SHA-256, findings from candidate to reported, snapshots, restore, fork, recovery reconciliation.
 
 **Plan and approvals.** Tasks with dependencies, stages and gates, required artifacts, risks R0–R4. Execution above R0 waits for the operator; `ask`, `yolo`, `never` modes and per-argument `allow|ask|deny` rules keep policy outside the model.
+
+**Model routing.** An optional `model.execution` takes over after the planning model has produced a checklist and the first observed shell result. The handoff happens between rounds, survives restart and is controlled with `/handoff`; `model.fast` remains independent.
+
+**Stream rules.** Per-operation `/guard` rules match assistant text and tool arguments. `remind` returns a note after the tool result; `interrupt` discards the partial response and retries without executing the call, with a bounded retry budget and a truthful `BLOCKED` outcome.
+
+**Independent review.** `/reviewer on <model> [fallback]` opts one operation into background review of new, redacted transcript deltas. Bounded notes return to the main model and journal; a blocker is visible advice, never hidden execution authority. Review failures stay isolated from the operation.
+
+**Measured experiments.** `/experiment start <metric> <lower|higher> <limit> | <command>` approves and fixes one benchmark command. The agent iterates shadow genes with strict measured keep/discard and a bounded auto-resume loop; failed candidates retire, active genes and promotion remain outside the loop.
 
 **Tools.** `recon.subfinder-passive`, `recon.dnsx-resolve`, `recon.httpx-probe`, `scan.nmap`, `scan.nuclei`, `scan.wpscan`, `fuzz.ffuf`, `research.search`, `research.read`, `intel.shodan`, `intel.censys`, `loot.scan` (credentials from a body), remote administration (ssh, SMB, an RDP probe, ADB), VMs and disks, exploit building and running. A new tool is a JSON manifest; packages of tools, profiles and playbooks install as plugins with a sha256 per file.
 

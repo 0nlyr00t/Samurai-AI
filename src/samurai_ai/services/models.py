@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import threading
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from samurai_ai.agents.provider import (
     ChatResponse,
     ImagePart,
     Message,
+    ToolCallDelta,
     ToolSpec,
 )
 from samurai_ai.agents.registry import ModelRegistry
@@ -301,6 +303,7 @@ class ModelService:
         extra_payload: dict[str, Any] | None = None,
         on_token: Callable[[str], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
     ) -> ChatResponse:
         operation = self.operations.get(operation_id)
         model, provider = self._resolve_model(model_id)
@@ -338,6 +341,7 @@ class ModelService:
                 ),
                 on_token=on_token,
                 should_stop=should_stop,
+                on_tool_delta=on_tool_delta,
             )
 
         def on_fallback(from_model: str, to_model: str, reason: str) -> None:
@@ -438,11 +442,21 @@ class ModelService:
         request: ChatRequest,
         on_token: Callable[[str], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
     ) -> ChatResponse:
         impl = self._build_provider(provider)
         stream = getattr(impl, "complete_stream", None)
         if on_token is not None and stream is not None:
-            response: ChatResponse = await stream(request, on_token, should_stop)
+            supports_deltas = (
+                on_tool_delta is not None
+                and "on_tool_delta" in inspect.signature(stream).parameters
+            )
+            if supports_deltas:
+                response: ChatResponse = await stream(
+                    request, on_token, should_stop, on_tool_delta
+                )
+            else:
+                response = await stream(request, on_token, should_stop)
             return response
         return await impl.complete(request)
 
@@ -458,6 +472,13 @@ class ModelService:
 
     def resolve_model(self, model_id: str) -> tuple[ModelDefinition, ProviderDefinition]:
         return self._resolve_model(model_id)
+
+    def validate_model_reference(self, model_id: str) -> None:
+        """Validate synchronously; live local discovery belongs to the model call."""
+        provider_id, _ = parse_model_id(model_id)
+        provider = self.registry.get_provider(provider_id)
+        if provider.api_family is not ApiFamily.OLLAMA:
+            self.resolve_model(model_id)
 
     async def _resolve_model_async(
         self, model_id: str
