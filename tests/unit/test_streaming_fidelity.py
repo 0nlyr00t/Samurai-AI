@@ -159,3 +159,73 @@ def test_openai_stream_keeps_the_finish_reason() -> None:
     response = asyncio.run(provider.complete_stream(REQUEST, lambda _t: None))
     assert response.text == "par"
     assert response.stop_reason == "length"
+
+
+def _gemini_chunks() -> list[bytes]:
+    from json import dumps
+
+    chunks = [
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": "Look"}]}}]},
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": "ing"}]}}]},
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {"name": "shell_exec", "args": {"command": "id"}},
+                                "thoughtSignature": "sig",
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 500,
+                "candidatesTokenCount": 20,
+                "cachedContentTokenCount": 300,
+            },
+        },
+    ]
+    return [f"data: {dumps(chunk)}\r\n".encode() for chunk in chunks]
+
+
+def test_gemini_streams_text_and_whole_calls() -> None:
+    from samurai_ai.agents.gemini import GeminiProvider
+
+    class _GeminiBroker:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        def fetch_stream(self, url: str, **_kwargs: Any) -> Any:
+            self.urls.append(url)
+            yield from _gemini_chunks()
+
+    broker = _GeminiBroker()
+    provider = GeminiProvider(
+        ProviderDefinition(
+            id="gemini", api_family=ApiFamily.GEMINI, base_url="http://127.0.0.1:9"
+        ),
+        "k",
+        broker=broker,  # type: ignore[arg-type]
+    )
+    tokens: list[str] = []
+    deltas: list[ToolCallDelta] = []
+    request = ChatRequest(
+        model_id="gemini/gemini-3-pro@v1", messages=(Message(role="user", content="hi"),)
+    )
+    response = asyncio.run(
+        provider.complete_stream(request, tokens.append, on_tool_delta=deltas.append)
+    )
+    assert broker.urls == [
+        "http://127.0.0.1:9/v1beta/models/gemini-3-pro:streamGenerateContent?alt=sse"
+    ]
+    assert tokens == ["Look", "ing"]
+    assert response.text == "Looking"
+    call = response.tool_calls[0]
+    assert (call.name, call.arguments, call.signature) == ("shell_exec", {"command": "id"}, "sig")
+    assert deltas[0].arguments == '{"command": "id"}'
+    assert response.usage.cached_tokens == 300
+    assert response.stop_reason == "STOP"

@@ -12,16 +12,19 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
 from samurai_ai.agents.provider import (
     IMAGE_CARRIER,
+    STREAM_RESET,
     ChatRequest,
     ChatResponse,
     ImagePart,
     Message,
     ToolCall,
+    ToolCallDelta,
     Usage,
     new_call_id,
     retry_after_seconds,
@@ -35,7 +38,7 @@ from samurai_ai.domain.models import (
     ProviderUnavailableError,
     parse_model_id,
 )
-from samurai_ai.execution.http import HttpEgressBroker
+from samurai_ai.execution.http import HttpEgressBroker, ProviderStreamError
 
 DEFAULT_TIMEOUT = 180.0
 _MAX_ERROR_SNIPPET = 200
@@ -171,6 +174,78 @@ def parse_generate_content_response(
     )
 
 
+def read_generate_stream(
+    lines: Iterable[bytes],
+    on_token: Callable[[str], None],
+    should_stop: Callable[[], bool] | None = None,
+    on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
+) -> tuple[str, tuple[ToolCall, ...], Usage, str]:
+    """Fold ``streamGenerateContent?alt=sse`` chunks into one answer.
+
+    Each chunk is a partial GenerateContentResponse: text parts arrive in
+    pieces, a functionCall arrives whole (with its thoughtSignature), and
+    the last chunk carries usage and the finish reason.
+    """
+    texts: list[str] = []
+    calls: list[ToolCall] = []
+    usage = Usage()
+    finish = ""
+    for raw in lines:
+        if should_stop is not None and should_stop():
+            break
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        try:
+            chunk = json.loads(line[5:].strip())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        metadata = chunk.get("usageMetadata")
+        if isinstance(metadata, dict):
+            usage = Usage(
+                prompt_tokens=int(metadata.get("promptTokenCount") or 0),
+                completion_tokens=int(metadata.get("candidatesTokenCount") or 0),
+                cached_tokens=int(metadata.get("cachedContentTokenCount") or 0),
+            )
+        candidates = chunk.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            continue
+        candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+        reason = candidate.get("finishReason")
+        if isinstance(reason, str) and reason:
+            finish = reason
+        for part in (candidate.get("content") or {}).get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            if "text" in part:
+                piece = str(part.get("text") or "")
+                if piece:
+                    texts.append(piece)
+                    on_token(piece)
+            elif isinstance(part.get("functionCall"), dict):
+                call = part["functionCall"]
+                arguments = call.get("args")
+                tool_call = ToolCall(
+                    id=str(call.get("id") or new_call_id("gemini-")),
+                    name=str(call.get("name") or ""),
+                    arguments=arguments if isinstance(arguments, dict) else {},
+                    signature=str(part.get("thoughtSignature") or ""),
+                )
+                if on_tool_delta is not None:
+                    on_tool_delta(
+                        ToolCallDelta(
+                            index=len(calls),
+                            id=tool_call.id,
+                            name=tool_call.name,
+                            arguments=json.dumps(tool_call.arguments, ensure_ascii=False),
+                        )
+                    )
+                calls.append(tool_call)
+    return "".join(texts), tuple(calls), usage, finish
+
+
 class GeminiProvider:
     def __init__(
         self,
@@ -217,6 +292,56 @@ class GeminiProvider:
         latency_ms = int((time.monotonic() - started) * 1000)
         return parse_generate_content_response(
             request.model_id, self.provider.id, response, latency_ms
+        )
+
+    async def complete_stream(
+        self,
+        request: ChatRequest,
+        on_token: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
+        on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
+    ) -> ChatResponse:
+        """The same call over SSE; a gateway that does not stream answers plainly."""
+        _, model_name = parse_model_id(request.model_id)
+        payload = build_generate_content_payload(request)
+        started = time.monotonic()
+        sent: list[str] = []
+
+        def emit(token: str) -> None:
+            sent.append(token)
+            on_token(token)
+
+        def read() -> tuple[str, tuple[ToolCall, ...], Usage, str]:
+            return read_generate_stream(
+                self.broker.fetch_stream(
+                    f"{self.provider.base_url}/v1beta/models/{model_name}"
+                    ":streamGenerateContent?alt=sse",
+                    body=json.dumps(payload).encode("utf-8"),
+                    headers=self._headers(),
+                    timeout=self.timeout,
+                ),
+                emit,
+                should_stop,
+                on_tool_delta,
+            )
+
+        try:
+            text, calls, usage, finish = await asyncio.to_thread(read)
+        except ProviderStreamError as exc:
+            self._decode(exc.status, exc.body, exc.retry_after)
+            raise
+        except Exception:
+            if sent:
+                on_token(STREAM_RESET)
+            return await self.complete(request)
+        return ChatResponse(
+            text=text,
+            tool_calls=calls,
+            usage=usage,
+            model_id=request.model_id,
+            provider_id=self.provider.id,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            stop_reason=finish,
         )
 
     def _headers(self) -> dict[str, str]:
