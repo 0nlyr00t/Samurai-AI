@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
 from uuid import uuid4
@@ -261,3 +262,28 @@ def split_system(messages: Sequence[Message]) -> tuple[list[str], list[Message]]
         for m in messages[index:]
     ]
     return system, rest
+
+
+_RETRY_IN = re.compile(
+    r"(?:try again|retry)(?: after| in)?\s+(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|sec|seconds?)\b",
+    re.I,
+)
+
+
+def retry_after_seconds(header: str, body: str = "") -> float | None:
+    """How long the server asked us to wait: the Retry-After header, else the text.
+
+    Only the delta-seconds form of the header is read; an HTTP date is rare
+    from model APIs and the body hint ("try again in 20s") covers the rest.
+    """
+    value = header.strip()
+    if value:
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            pass
+    match = _RETRY_IN.search(body)
+    if match is None:
+        return None
+    amount = float(match.group(1))
+    return amount / 1000 if match.group(2).lower().startswith("m") else amount

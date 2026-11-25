@@ -31,9 +31,11 @@ from samurai_ai.domain.scope import ScopeContract, ScopeDecisionReason
 class ProviderStreamError(ToolExecutionError):
     """A streamed response that came back as an error status."""
 
-    def __init__(self, status: int, body: bytes) -> None:
+    def __init__(self, status: int, body: bytes, retry_after: str = "") -> None:
         self.status = status
         self.body = body
+        #: the raw Retry-After header, when the server sent one
+        self.retry_after = retry_after
         super().__init__(f"streamed request answered HTTP {status}")
 
 
@@ -64,6 +66,8 @@ class HttpResponse:
     body: bytes
     truncated: bool
     redirects: tuple[str, ...]
+    #: the raw Retry-After header (a rate limit says when to come back)
+    retry_after: str = ""
 
 
 class _PinnedHTTPConnection(http.client.HTTPConnection):
@@ -184,6 +188,7 @@ class HttpEgressBroker:
                 body=response.body,
                 truncated=response.truncated,
                 redirects=tuple(redirects),
+                retry_after=response.headers.get("Retry-After") or "",
             )
 
     def _validate_url(self, url: str) -> None:
@@ -297,7 +302,9 @@ class HttpEgressBroker:
             response = connection.getresponse()
             if response.status >= 400:
                 body_out, _truncated = self._read_bounded(response, 1 << 20)
-                raise ProviderStreamError(response.status, body_out)
+                raise ProviderStreamError(
+                    response.status, body_out, response.headers.get("Retry-After") or ""
+                )
             while True:
                 chunk = response.readline()
                 if not chunk:

@@ -23,6 +23,7 @@ from samurai_ai.agents.provider import (
     ToolCall,
     Usage,
     new_call_id,
+    retry_after_seconds,
     split_system,
     wire_messages,
 )
@@ -292,7 +293,9 @@ class AnthropicProvider:
             )
         except ToolExecutionError as exc:
             raise self._unavailable(exc) from exc
-        return self._decode(response.status, response.body)
+        return self._decode(
+            response.status, response.body, getattr(response, "retry_after", "")
+        )
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -306,18 +309,20 @@ class AnthropicProvider:
             )
         except ToolExecutionError as exc:
             raise self._unavailable(exc) from exc
-        return self._decode(response.status, response.body)
+        return self._decode(
+            response.status, response.body, getattr(response, "retry_after", "")
+        )
 
-    def _decode(self, status: int, body: bytes) -> dict[str, Any]:
+    def _decode(self, status: int, body: bytes, retry_after: str = "") -> dict[str, Any]:
         if status >= 400:
-            snippet = self.redactor.redact(
-                body.decode("utf-8", errors="replace")[:_MAX_ERROR_SNIPPET]
-            ).text
+            text = body.decode("utf-8", errors="replace")
+            snippet = self.redactor.redact(text[:_MAX_ERROR_SNIPPET]).text
             raise ProviderUnavailableError(
                 f"provider {self.provider.id} returned HTTP {status}: {snippet}",
                 status=status,
                 transient=status == 429 or status >= 500,
                 auth=status in (401, 403),
+                retry_after=retry_after_seconds(retry_after, text),
             )
         try:
             decoded = json.loads(body)
