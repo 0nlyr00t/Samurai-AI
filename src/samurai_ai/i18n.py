@@ -405,6 +405,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.compact": "/compact          Compress the conversation context",
         "help.clear": "/clear            Forget the conversation, here and in the database",
         "help.mouse": "/mouse            Toggle mouse capture (off = native selection)",
+        "help.autocopy": "/autocopy         Toggle copying a mouse selection on release",
         "help.copy-key": "Ctrl-Shift-C      Copy the selection (double click selects a word)",
         "help.trust": "/trust           Manage directory access trust",
         "help.exit": "/exit             Close Samurai AI",
@@ -806,6 +807,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "strip.checklist": "steps {done}/{total} ↯",
         "strip.todo": "todo {done}/{total}",
         "mouse.copied": "copied {chars} chars",
+        "mouse.auto-copied": "copied {chars} chars to the clipboard",
+        "mouse.autocopy-on": "copy on select on: a released mouse selection goes to the clipboard",
+        "mouse.autocopy-off": "copy on select off: select, then Ctrl+C copies",
         "mouse.nothing-selected": "nothing is selected",
         "mouse.copy-hint": (
             "Ctrl+C copies the selection — Cmd+C / Ctrl+Shift+C are taken by the terminal. "
@@ -1489,6 +1493,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.compact": "/compact          Сжать контекст разговора",
         "help.clear": "/clear            Забыть переписку — здесь и в базе",
         "help.mouse": "/mouse            Захват мыши (выкл = обычное выделение терминала)",
+        "help.autocopy": "/autocopy         Копировать выделение мышью при отпускании",
         "help.copy-key": "Ctrl-Shift-C      Копировать выделение (двойной клик — слово)",
         "help.trust": "/trust           Управление доверием к директории",
         "help.exit": "/exit             Закрыть Samurai AI",
@@ -1888,6 +1893,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "strip.checklist": "шаги {done}/{total} ↯",
         "strip.todo": "todo {done}/{total}",
         "mouse.copied": "скопировано символов: {chars}",
+        "mouse.auto-copied": "в буфер скопировано символов: {chars}",
+        "mouse.autocopy-on": (
+            "копирование при выделении включено: отпущенное выделение уходит в буфер"
+        ),
+        "mouse.autocopy-off": "копирование при выделении выключено: выделите и нажмите Ctrl+C",
         "mouse.nothing-selected": "ничего не выделено",
         "mouse.copy-hint": (
             "Ctrl+C копирует выделение — Cmd+C / Ctrl+Shift+C забирает себе терминал. "
@@ -2235,6 +2245,7 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.new",
     "help.open",
     "help.mouse",
+    "help.autocopy",
     "help.copy-key",
     "help.trust",
     "help.exit",

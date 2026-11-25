@@ -1802,8 +1802,10 @@ def test_mouse_drag_selects_and_ctrl_c_copies(tmp_path: Path) -> None:
             assert selected
             # focus stays on the command input after selecting in the journal
             assert app.focused is app.query_one("#command-input", Input)
-            # nothing is copied until Ctrl+C
-            assert not getattr(app, "_clipboard", "")
+            # releasing the drag already copied it (copy on select)
+            assert selected.split("\n")[0][:10] in getattr(app, "_clipboard", "")
+            app._clipboard = ""
+            # Ctrl+C still copies explicitly
             await pilot.press("ctrl+c")
             await pilot.pause()
             assert selected.split("\n")[0][:10] in getattr(app, "_clipboard", "")
@@ -7054,12 +7056,13 @@ def test_a_promising_answer_is_nudged_back_to_work(tmp_path: Path) -> None:
 
 
 def test_a_settled_selection_does_not_copy_itself(tmp_path: Path) -> None:
-    """Drag-select and release: the clipboard stays untouched.
+    """With /autocopy off a selection never copies itself; a hint names the key.
 
-    Auto-copy on selection is disabled; Ctrl+Shift+C copies explicitly.
+    Ctrl+C / Ctrl+Shift+C copy explicitly.
     """
     stack = _minimal_stack(tmp_path)
     stack[2].set_locale("en")
+    stack[2].set_value("tui.copy_on_select", "0")
 
     async def exercise() -> None:
         app = SamuraiApp(*stack)
@@ -12077,5 +12080,51 @@ def test_back_to_back_runs_share_a_group_before_it_mounts(tmp_path: Path) -> Non
             await pilot.pause()
             app._append_exec_group("echo third", 1)
             assert app._exec_group is not first
+
+    asyncio.run(exercise())
+
+
+def test_a_released_selection_is_copied_once(tmp_path: Path) -> None:
+    """Copy on release: Cmd+C in the terminal then has something to find."""
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            copied: list[str] = []
+            app.copy_to_clipboard = copied.append  # type: ignore[method-assign]
+            journal = app.query_one("#journal", BlockJournal)
+            app._write_line("copy-me on release")
+            from textual.selection import SELECT_ALL
+
+            # a selection still being dragged is not copied
+            app.screen._selecting = True
+            app.screen.selections = {journal: SELECT_ALL}
+            await pilot.pause(0.6)
+            assert copied == []
+            # release copies it, once
+            app.screen._selecting = False
+            await pilot.pause()
+            assert len(copied) == 1 and "copy-me on release" in copied[0]
+            assert any("to the clipboard" in str(n.message) for n in app._notifications)
+            # releasing the same selection again does not rewrite the clipboard
+            app.screen._selecting = True
+            app.screen._selecting = False
+            await pilot.pause()
+            assert len(copied) == 1
+            # no hint about Ctrl+C: the copy already happened
+            assert not app._copy_hint_shown
+
+            app._toggle_copy_on_select()
+            assert stack[2].get_value("tui.copy_on_select") == "0"
+            app.screen.clear_selection()
+            app._write_line("another line")
+            app.screen._selecting = True
+            app.screen.selections = {journal: SELECT_ALL}
+            app.screen._selecting = False
+            await pilot.pause()
+            assert len(copied) == 1
 
     asyncio.run(exercise())
