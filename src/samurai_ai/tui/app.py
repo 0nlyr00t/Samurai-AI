@@ -30,6 +30,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from samurai_ai import __version__
+from samurai_ai.agents.context import COMPACTED_MARK, build_branch_note, is_operator_turn
 from samurai_ai.agents.orchestrator import AgentOrchestrator
 from samurai_ai.agents.provider import Message, pair_safe_start
 from samurai_ai.config import genes_path, serve_socket_path
@@ -2453,6 +2454,62 @@ class SamuraiApp(
         content = str(message.content)
         return content.startswith("[tool ") or content.startswith("[shell ")
 
+    @staticmethod
+    def _is_persisted(message: Message) -> bool:
+        """Whether this in-memory message has a row in the stored transcript.
+
+        A pure call turn and a compaction brief live only in memory; counting
+        them when trimming the store would delete older, unrelated rows.
+        """
+        if message.role == "assistant" and message.tool_calls and not message.content.strip():
+            return False
+        return not message.content.startswith(COMPACTED_MARK)
+
+    def _rewind_turns(self, argument: str = "") -> None:
+        """Go back ``n`` operator turns, keeping a note of the abandoned branch.
+
+        Unlike /undo, the model is told what the dropped turns asked and which
+        calls they already made, so it does not walk the same dead end again.
+        """
+        if self._chat_busy:
+            self._write_dim(self.translator.t("chat.rewind-busy"))
+            return
+        try:
+            turns = int(argument.strip() or "1")
+        except ValueError:
+            turns = 0
+        if turns < 1:
+            self._write_dim(self.translator.t("chat.rewind-usage"))
+            return
+        starts = [
+            index
+            for index, message in enumerate(self._chat_history)
+            if index > 0 and is_operator_turn(message)
+        ]
+        if len(starts) < turns:
+            self._write_dim(self.translator.t("chat.rewind-short", available=len(starts)))
+            return
+        cut = starts[-turns]
+        abandoned = self._chat_history[cut:]
+        self._chat_history = self._chat_history[:cut]
+        self._expandable.clear()
+        if self.operation is not None:
+            self.chat_history.drop_last(
+                self.operation.id, sum(self._is_persisted(m) for m in abandoned)
+            )
+        self._remember(build_branch_note(abandoned, turns))
+        self._write_dim(
+            self.translator.t("chat.rewound", turns=turns, count=len(abandoned))
+        )
+        if self.operation is not None:
+            self.service.repository.append_event(
+                OperationEvent(
+                    operation_id=self.operation.id,
+                    event_type="chat.rewind",
+                    payload={"turns": turns, "dropped": len(abandoned)},
+                )
+            )
+
     def _undo_last_turn(self) -> None:
         """Drop the last operator turn and everything the loop appended to it."""
         if len(self._chat_history) <= 1 or self._chat_busy:
@@ -2460,11 +2517,9 @@ class SamuraiApp(
             return
         dropped = 0
         while len(self._chat_history) > 1 and self._is_turn_payload(self._chat_history[-1]):
-            self._chat_history.pop()
-            dropped += 1
+            dropped += self._is_persisted(self._chat_history.pop())
         if len(self._chat_history) > 1:
-            self._chat_history.pop()
-            dropped += 1
+            dropped += self._is_persisted(self._chat_history.pop())
         self._expandable.clear()
         self._write_dim(self.translator.t("chat.undone"))
         if self.operation is not None:
