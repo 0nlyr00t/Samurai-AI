@@ -214,3 +214,42 @@ def spec_tokens(specs: Sequence[object]) -> int:
         dump = getattr(spec, "model_dump", None)
         size += len(json.dumps(dump() if callable(dump) else str(spec), ensure_ascii=False))
     return size // CHARS_PER_TOKEN
+
+
+BRANCH_MARK = "[abandoned branch]"
+
+
+def is_operator_turn(message: Message) -> bool:
+    """An operator prompt, as opposed to the notes the harness writes as user.
+
+    Harness notes open with a bracket or a tag (``[tool …]``, ``[harness]``,
+    ``<reviewer-note …>``); an operator's own text practically never does.
+    """
+    return message.role == "user" and not message.content.lstrip().startswith(("[", "<"))
+
+
+def build_branch_note(abandoned: Sequence[Message], turns: int) -> Message:
+    """What survives of a rewound branch: what was asked and what already ran.
+
+    The conversation forgets the branch, the world does not: its calls ran and
+    their records stay in the store, so the model is told not to redo them.
+    """
+    asks = [
+        " ".join(message.content.split())[:200]
+        for message in abandoned
+        if is_operator_turn(message)
+    ]
+    parts = [
+        f"{BRANCH_MARK} The operator rewound the conversation {turns} turn(s); "
+        "those turns are no longer in your context. Their tool calls still ran: "
+        "effects on the target and records in the store remain.",
+    ]
+    if asks:
+        parts += ["Abandoned requests:", *[f"- {ask}" for ask in asks]]
+    calls = attempted_calls(abandoned)
+    if calls:
+        parts += ["Calls made there (do not repeat them unless asked):", *calls]
+    text = "\n".join(parts)
+    if len(text) > BRIEF_LIMIT:
+        text = text[: BRIEF_LIMIT - 1] + "…"
+    return Message(role="user", content=text)
