@@ -31,7 +31,7 @@ from textual.widgets.option_list import Option
 
 from samurai_ai import __version__
 from samurai_ai.agents.orchestrator import AgentOrchestrator
-from samurai_ai.agents.provider import Message
+from samurai_ai.agents.provider import Message, pair_safe_start
 from samurai_ai.config import genes_path, serve_socket_path
 from samurai_ai.domain.access import AccessError, Role
 from samurai_ai.domain.agents import AgentRun, AgentRunStatus
@@ -2480,7 +2480,10 @@ class SamuraiApp(
         if self._chat_busy:
             self._write_dim(self.translator.t("chat.compact-busy"))
             return
-        kept = self._chat_history[-self._COMPACT_KEEP :]
+        start = pair_safe_start(
+            self._chat_history, max(1, len(self._chat_history) - self._COMPACT_KEEP)
+        )
+        kept = self._chat_history[start:]
         system = self._chat_history[:1]
         older = self._chat_history[1 : len(self._chat_history) - len(kept)]
         if not older:

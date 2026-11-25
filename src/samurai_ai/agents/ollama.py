@@ -16,11 +16,15 @@ from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
 from samurai_ai.agents.provider import (
+    IMAGE_CARRIER,
     ChatRequest,
     ChatResponse,
     ImagePart,
+    Message,
     ToolCall,
     Usage,
+    new_call_id,
+    wire_messages,
 )
 from samurai_ai.domain.execution import ToolExecutionError
 from samurai_ai.domain.models import (
@@ -73,8 +77,25 @@ def model_definition_for(model_name: str) -> ModelDefinition:
     )
 
 
+def _wire_message(message: Message) -> dict[str, Any]:
+    if message.role == "assistant" and message.tool_calls:
+        return {
+            "role": "assistant",
+            "content": message.content,
+            "tool_calls": [
+                {"function": {"name": call.name, "arguments": call.arguments}}
+                for call in message.tool_calls
+            ],
+        }
+    if message.role == "tool":
+        return {"role": "tool", "content": message.content, "tool_name": message.name}
+    return {"role": message.role, "content": message.content}
+
+
 def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
     """Ollama takes raw base64 on the message itself."""
+    if messages and messages[-1]["role"] == "tool":
+        messages.append({"role": "user", "content": IMAGE_CARRIER})
     for message in reversed(messages):
         if message["role"] == "user":
             message["images"] = [image.data for image in images]
@@ -85,10 +106,7 @@ def build_chat_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model_name,
         "stream": False,
-        "messages": [
-            {"role": message.role, "content": message.content}
-            for message in request.messages
-        ],
+        "messages": [_wire_message(message) for message in wire_messages(request)],
     }
     if request.images:
         _attach_images(payload["messages"], request.images)
@@ -125,14 +143,14 @@ def parse_chat_response(
 ) -> ChatResponse:
     message = payload.get("message") or {}
     tool_calls: list[ToolCall] = []
-    for index, entry in enumerate(message.get("tool_calls") or []):
+    for entry in message.get("tool_calls") or []:
         if not isinstance(entry, dict):
             continue
         function = entry.get("function") or {}
         arguments = function.get("arguments")
         tool_calls.append(
             ToolCall(
-                id=str(entry.get("id") or f"ollama-{index}"),
+                id=str(entry.get("id") or new_call_id()),
                 name=str(function.get("name") or ""),
                 arguments=arguments if isinstance(arguments, dict) else {},
             )

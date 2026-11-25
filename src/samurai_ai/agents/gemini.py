@@ -16,11 +16,15 @@ from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
 from samurai_ai.agents.provider import (
+    IMAGE_CARRIER,
     ChatRequest,
     ChatResponse,
     ImagePart,
+    Message,
     ToolCall,
     Usage,
+    new_call_id,
+    wire_messages,
 )
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
 from samurai_ai.domain.models import (
@@ -35,8 +39,48 @@ DEFAULT_TIMEOUT = 180.0
 _MAX_ERROR_SNIPPET = 200
 
 
+def _wire_content(message: Message) -> dict[str, Any]:
+    if message.role == "assistant" and message.tool_calls:
+        parts: list[dict[str, Any]] = [{"text": message.content}] if message.content else []
+        for call in message.tool_calls:
+            part: dict[str, Any] = {"functionCall": {"name": call.name, "args": call.arguments}}
+            if call.signature:
+                part["thoughtSignature"] = call.signature
+            parts.append(part)
+        return {"role": "model", "parts": parts}
+    if message.role == "tool":
+        return {
+            "role": "user",
+            "parts": [
+                {
+                    "functionResponse": {
+                        "name": message.name,
+                        "response": {"content": message.content},
+                    }
+                }
+            ],
+        }
+    role = "model" if message.role == "assistant" else "user"
+    return {"role": role, "parts": [{"text": message.content}]}
+
+
+def _is_response(content: dict[str, Any]) -> bool:
+    return any("functionResponse" in part for part in content["parts"])
+
+
+def _append_merged(contents: list[dict[str, Any]], entry: dict[str, Any]) -> None:
+    """All responses of one round go back in one turn, matching the calls."""
+    if contents and _is_response(contents[-1]) and _is_response(entry):
+        contents[-1]["parts"] += entry["parts"]
+        return
+    contents.append(entry)
+
+
 def _attach_images(contents: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
     """Fold images into the last user turn as inline data parts."""
+    if contents and _is_response(contents[-1]):
+        # a function-response turn carries responses only
+        contents.append({"role": "user", "parts": [{"text": IMAGE_CARRIER}]})
     for content in reversed(contents):
         if content["role"] != "user":
             continue
@@ -49,12 +93,11 @@ def _attach_images(contents: list[dict[str, Any]], images: tuple[ImagePart, ...]
 def build_generate_content_payload(request: ChatRequest) -> dict[str, Any]:
     system_parts: list[str] = []
     contents: list[dict[str, Any]] = []
-    for message in request.messages:
+    for message in wire_messages(request):
         if message.role == "system":
             system_parts.append(message.content)
         else:
-            role = "model" if message.role == "assistant" else "user"
-            contents.append({"role": role, "parts": [{"text": message.content}]})
+            _append_merged(contents, _wire_content(message))
     if request.images:
         _attach_images(contents, request.images)
     payload: dict[str, Any] = {"contents": contents}
@@ -95,7 +138,7 @@ def parse_generate_content_response(
     parts = content.get("parts") or []
     texts: list[str] = []
     tool_calls: list[ToolCall] = []
-    for index, part in enumerate(parts):
+    for part in parts:
         if not isinstance(part, dict):
             continue
         if "text" in part:
@@ -105,9 +148,11 @@ def parse_generate_content_response(
             arguments = call.get("args")
             tool_calls.append(
                 ToolCall(
-                    id=f"gemini-{index}",
+                    id=str(call.get("id") or new_call_id("gemini-")),
                     name=str(call.get("name") or ""),
                     arguments=arguments if isinstance(arguments, dict) else {},
+                    # Gemini 3 rejects a replayed call that lost its signature
+                    signature=str(part.get("thoughtSignature") or ""),
                 )
             )
     metadata = payload.get("usageMetadata") or {}

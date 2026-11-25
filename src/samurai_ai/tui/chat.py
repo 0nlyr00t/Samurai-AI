@@ -33,6 +33,10 @@ from samurai_ai.agents.provider import (
     ToolCall,
     ToolCallDelta,
     ToolSpec,
+    as_text,
+    new_call_id,
+    pair_safe_start,
+    tool_result,
 )
 from samurai_ai.domain.completion import CompletionCriterion, CompletionDecision
 from samurai_ai.domain.completion import decide as decide_completion
@@ -1764,7 +1768,7 @@ class ChatController:
     ) -> None:
         redactor = self._review_redactor(operation_id)
         rendered = "\n".join(
-            f"<{message.role}>\n{redactor.redact(message.content).text}\n</{message.role}>"
+            f"<{message.role}>\n{redactor.redact(as_text(message).content).text}\n</{message.role}>"
             for message in batch
         )
         try:
@@ -1857,9 +1861,11 @@ class ChatController:
 
     def _trim_chat_history(self) -> None:
         if len(self._chat_history) > self._CHAT_HISTORY_LIMIT + 1:
-            self._chat_history = (
-                self._chat_history[:1] + self._chat_history[-self._CHAT_HISTORY_LIMIT :]
+            # never open the kept window on a result whose call was cut away
+            start = pair_safe_start(
+                self._chat_history, len(self._chat_history) - self._CHAT_HISTORY_LIMIT
             )
+            self._chat_history = self._chat_history[:1] + self._chat_history[start:]
 
     def _thinking_start(self) -> None:
         self._thinking_depth += 1
@@ -2716,21 +2722,29 @@ class ChatController:
                 return self._completion_reason(
                     operation_id, runs_at_start, findings_at_start
                 )
+            # the turn keeps its calls: the model replays them natively next round
+            calls = self._native_calls(response.tool_calls)
+            self._remember(
+                Message(
+                    role="assistant",
+                    content=response.text if response.text.strip() else "",
+                    tool_calls=tuple(calls),
+                )
+            )
             if response.text.strip():
-                self._remember(Message(role="assistant", content=response.text))
                 # reasoning between tool calls is narrative, not an answer: it
                 # folds into the turn's «thinking» block so the dialogue stays
                 self._end_live_answer()
                 self._write_dim(response.text.strip(), process=True)
             # every call of the round runs even when stopping: a stop is worth
             # nothing until the results are in and checked
-            calls = list(response.tool_calls)
             if finalizing:
                 allowed = {spec.name for spec in self._finalization_tool_specs()}
                 for call in [item for item in calls if item.name not in allowed]:
                     note = f"[tool {call.name}] finalization does not allow new research"
                     self._write_dim(note, process=False)
-                    self._remember(Message(role="user", content=note))
+                    # still answered: every call of the turn needs its result
+                    self._remember(tool_result(call, note))
                 calls = [item for item in calls if item.name in allowed]
             checklist_ready = bool(self._turn_todo)
             self._handoff_shell_seen = False
@@ -2835,9 +2849,9 @@ class ChatController:
         if not goal:
             return None
         transcript = [
-            str(message.content)[:400]
+            str(as_text(message).content)[:400]
             for message in self._chat_history[-12:]
-            if message.role in ("assistant", "user")
+            if message.role in ("assistant", "user", "tool")
         ]
         system, question = goal_judge.build_prompt(
             goal,
@@ -2880,10 +2894,17 @@ class ChatController:
         if response is None:
             return
         self._count_usage(response.usage)
-        for message in await self._run_round(list(response.tool_calls)):
+        calls = self._native_calls(response.tool_calls)
+        if calls or response.text.strip():
+            self._remember(
+                Message(
+                    role="assistant",
+                    content=response.text if response.text.strip() else "",
+                    tool_calls=tuple(calls),
+                )
+            )
+        for message in await self._run_round(calls):
             self._remember(message)
-        if response.text.strip():
-            self._remember(Message(role="assistant", content=response.text))
 
     def _add_cost(
         self,
@@ -3076,7 +3097,35 @@ class ChatController:
 
     async def _run_chat_tool(self, call: ToolCall) -> Message:
         result = await self._run_chat_tool_result(call)
-        return self._with_guard_tool_reminder(call.id, result)
+        result = self._with_guard_tool_reminder(call.id, result)
+        # handlers speak plain text; the loop owns the pairing with the call
+        return tool_result(call, result.content)
+
+    def _native_calls(self, calls: tuple[ToolCall, ...]) -> list[ToolCall]:
+        """The round's calls with ids unique across the kept history.
+
+        Some gateways leave ids empty or restart them every turn (``call_0``);
+        a replayed history with two calls under one id is rejected, so such a
+        call gets a fresh id and its pending stream-rule reminder follows it.
+        """
+        taken = {
+            call.id
+            for message in self._chat_history
+            for call in message.tool_calls
+        }
+        native: list[ToolCall] = []
+        for call in calls:
+            if call.id and call.id not in taken:
+                taken.add(call.id)
+                native.append(call)
+                continue
+            fresh = new_call_id()
+            taken.add(fresh)
+            reminders = self._guard_tool_reminders.pop(call.id, None)
+            if reminders:
+                self._guard_tool_reminders[fresh] = reminders
+            native.append(call.model_copy(update={"id": fresh}))
+        return native
 
     async def _run_chat_tool_result(self, call: ToolCall) -> Message:
         handler = self._CHAT_TOOL_HANDLERS.get(call.name)
