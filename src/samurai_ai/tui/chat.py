@@ -31,6 +31,8 @@ from samurai_ai.agents.context import (
     compaction_cut,
     elide_tool_outputs,
     estimate_tokens,
+    fit_output_tokens,
+    spec_tokens,
 )
 from samurai_ai.agents.orchestrator import is_context_overflow
 from samurai_ai.agents.provider import (
@@ -74,6 +76,7 @@ from samurai_ai.domain.kernel import (
 )
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
 from samurai_ai.domain.models import (
+    ApiFamily,
     ModelCapability,
     ModelError,
     ModelNotFoundError,
@@ -287,6 +290,15 @@ def _bounded(text: str, limit: int) -> str:
 def _one_line(text: str) -> str:
     """Collapse a lesson onto one line: memory digests are line-oriented."""
     return " ".join(text.split())
+
+
+#: provider stop reasons that mean "the output cap ended the answer"
+_CUT_SHORT = frozenset({"length", "max_tokens", "MAX_TOKENS"})
+_MAX_TRUNCATED_RETRIES = 2
+
+
+def _cut_short(stop_reason: str) -> bool:
+    return stop_reason in _CUT_SHORT
 
 
 #: the per-request operation snapshot; never stored in the history
@@ -1904,6 +1916,32 @@ class ChatController:
             limit = 0
         return ContextBudget.for_limit(limit)
 
+    def _output_budget(
+        self, model_id: str, messages: tuple[Message, ...], tools: tuple[ToolSpec, ...]
+    ) -> int | None:
+        """Output cap for an agent round: the model's maximum, never past the window.
+
+        Anthropic needs a cap and used to get a flat 4096 — a long tool call
+        (a script, a report) was cut mid-arguments.
+        """
+        try:
+            model, provider = self.models.resolve_model(model_id)
+        except Exception:  # noqa: BLE001 - an unknown model keeps the default
+            return None
+        limit = model.context_limit
+        override = self.settings.get_value(f"model.context_limit.{model_id}")
+        if override:
+            try:
+                limit = max(0, int(override))
+            except ValueError:
+                pass
+        return fit_output_tokens(
+            limit=limit,
+            prompt_tokens=estimate_tokens(messages) + spec_tokens(tools),
+            model_max=model.max_output_tokens,
+            required=provider.api_family is ApiFamily.ANTHROPIC,
+        )
+
     def _history_tokens(self) -> int:
         return estimate_tokens(self._chat_history)
 
@@ -2409,6 +2447,8 @@ class ChatController:
             if snapshot:
                 # an agent round sees the operation as it is now, last
                 outgoing = (*outgoing, Message(role="user", content=snapshot))
+            if tools and max_tokens is None:
+                max_tokens = self._output_budget(model_id, outgoing, tools)
         else:
             outgoing = messages
         while True:
@@ -2672,6 +2712,7 @@ class ChatController:
         hypothesis_nudges = 0
         tool_calls_made = 0
         overflow_folded = False
+        truncated_retries = 0
         self._remember(Message(role="user", content=text))
         self._begin_live_answer()
         while True:
@@ -2896,6 +2937,20 @@ class ChatController:
                 return self._completion_reason(
                     operation_id, runs_at_start, findings_at_start
                 )
+            if _cut_short(response.stop_reason):
+                # the output cap ended the answer inside a call: its arguments
+                # may be truncated, so nothing from this answer runs
+                if truncated_retries >= _MAX_TRUNCATED_RETRIES:
+                    self._write_line("[error] " + self.translator.t("chat.truncated-blocked"))
+                    return TerminalReason.MODEL_ERROR
+                truncated_retries += 1
+                if response.text.strip():
+                    self._remember(Message(role="assistant", content=response.text))
+                self._write_dim(self.translator.t("chat.truncated-retry"), process=False)
+                self._remember(
+                    Message(role="user", content=self.translator.t("chat.truncated-note"))
+                )
+                continue
             # the turn keeps its calls: the model replays them natively next round
             calls = self._native_calls(response.tool_calls)
             self._remember(

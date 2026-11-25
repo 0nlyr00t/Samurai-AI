@@ -91,3 +91,30 @@ def test_attempted_calls_dedupe_and_bound() -> None:
     lines = attempted_calls(messages, limit=10)
     assert len(lines) == 11
     assert lines[5].startswith("- … 20 more")
+
+
+def test_output_cap_fits_the_window() -> None:
+    from samurai_ai.agents.context import MIN_OUTPUT_TOKENS, OUTPUT_HEADWAY, fit_output_tokens
+
+    # Anthropic needs a cap: the model maximum when it fits
+    assert fit_output_tokens(
+        limit=200_000, prompt_tokens=10_000, model_max=32_000, required=True
+    ) == 32_000
+    # ... and the room left when it does not
+    assert fit_output_tokens(
+        limit=200_000, prompt_tokens=190_000, model_max=32_000, required=True
+    ) == 10_000 - OUTPUT_HEADWAY
+    # never below the floor a tool call needs
+    assert fit_output_tokens(
+        limit=200_000, prompt_tokens=199_900, model_max=32_000, required=True
+    ) == MIN_OUTPUT_TOKENS
+    # others keep their default until the window is too full for it
+    assert fit_output_tokens(
+        limit=128_000, prompt_tokens=10_000, model_max=16_384, required=False
+    ) is None
+    assert fit_output_tokens(
+        limit=128_000, prompt_tokens=120_000, model_max=16_384, required=False
+    ) == 8_000 - OUTPUT_HEADWAY
+    # an unknown window: the model maximum where required, else the default
+    assert fit_output_tokens(limit=0, prompt_tokens=5, model_max=8_192, required=True) == 8_192
+    assert fit_output_tokens(limit=0, prompt_tokens=5, model_max=8_192, required=False) is None

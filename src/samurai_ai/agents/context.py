@@ -179,3 +179,38 @@ def build_brief(
     if len(text) > BRIEF_LIMIT:
         text = text[: BRIEF_LIMIT - 1] + "…"
     return Message(role="user", content=text)
+
+
+#: smallest output cap worth asking for; below it a tool call cannot fit
+MIN_OUTPUT_TOKENS = 1024
+#: framing no message count sees (generation prompt, reasoning wrappers)
+OUTPUT_HEADWAY = 256
+
+
+def fit_output_tokens(
+    *, limit: int, prompt_tokens: int, model_max: int, required: bool
+) -> int | None:
+    """The output cap for one request, or None to leave the provider default.
+
+    ``required`` is for APIs that demand a cap (Anthropic): they get the
+    model's own maximum, trimmed to the room left in the window. Others keep
+    their default unless the window is too full for the model's maximum, when
+    an explicit cap turns a hard overflow refusal into a shorter answer.
+    """
+    if limit <= 0:
+        return model_max if required else None
+    room = limit - prompt_tokens - OUTPUT_HEADWAY
+    if required:
+        return max(MIN_OUTPUT_TOKENS, min(model_max, room))
+    if room < model_max:
+        return max(MIN_OUTPUT_TOKENS, room)
+    return None
+
+
+def spec_tokens(specs: Sequence[object]) -> int:
+    """Rough size of the tool block a request carries."""
+    size = 0
+    for spec in specs:
+        dump = getattr(spec, "model_dump", None)
+        size += len(json.dumps(dump() if callable(dump) else str(spec), ensure_ascii=False))
+    return size // CHARS_PER_TOKEN

@@ -198,3 +198,66 @@ def test_each_agent_round_ends_with_a_fresh_unstored_snapshot(tmp_path: Path) ->
             )
 
     asyncio.run(exercise())
+
+
+def test_a_call_cut_by_the_output_cap_is_not_run(tmp_path: Path) -> None:
+    stack, operation = _chat_ready_stack(tmp_path, object())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)):
+            sent: list[tuple[Message, ...]] = []
+            cut = ToolCall(id="c1", name="shell_exec", arguments={"command": "cat > x <<EOF"})
+
+            def chat(_operation, _model, messages, **_kwargs):  # type: ignore[no-untyped-def]
+                sent.append(tuple(messages))
+                if len(sent) == 1:
+                    return ChatResponse(
+                        text="writing the script",
+                        tool_calls=(cut,),
+                        usage=Usage(prompt_tokens=5, completion_tokens=2),
+                        model_id=MODEL,
+                        provider_id="gpt",
+                        stop_reason="length",
+                    )
+                return _text("done")
+
+            app.models.chat = chat  # type: ignore[method-assign]
+            await app._chat_loop("write it", MODEL, None)
+
+            assert len(sent) == 2
+            assert stack[4].list_runs(operation.id) == []
+            assert not any(message.tool_calls for message in app._chat_history)
+            assert any("output token limit" in m.content for m in sent[1])
+
+    asyncio.run(exercise())
+
+
+def test_repeated_cut_calls_stop_the_turn(tmp_path: Path) -> None:
+    stack, operation = _chat_ready_stack(tmp_path, object())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)):
+            calls = 0
+            cut = ToolCall(id="c1", name="shell_exec", arguments={"command": "x"})
+
+            def chat(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+                nonlocal calls
+                calls += 1
+                return ChatResponse(
+                    text="",
+                    tool_calls=(cut,),
+                    usage=Usage(prompt_tokens=5, completion_tokens=2),
+                    model_id=MODEL,
+                    provider_id="gpt",
+                    stop_reason="max_tokens",
+                )
+
+            app.models.chat = chat  # type: ignore[method-assign]
+            reason = await app._chat_loop("write it", MODEL, None)
+            assert reason.value == "model-error"
+            assert calls == 3
+            assert stack[4].list_runs(operation.id) == []
+
+    asyncio.run(exercise())

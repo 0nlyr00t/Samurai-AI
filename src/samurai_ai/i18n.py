@@ -428,6 +428,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.undone": "last prompt undone — external tools already ran and stay run",
         "chat.undo-empty": "nothing to undo",
         "chat.compact-busy": "wait for the running turn to finish",
+        "chat.truncated-retry": "the answer hit the output limit inside a tool call — not run",
+        "chat.truncated-blocked": (
+            "the model keeps hitting the output limit inside tool calls; stopping the turn"
+        ),
+        "chat.truncated-note": (
+            "[harness] Your previous answer hit the output token limit while writing a "
+            "tool call, so none of its calls were run (the arguments may be cut). Issue "
+            "the calls again with shorter arguments: split a large script or file into "
+            "several steps."
+        ),
         "chat.compact-skip": "nothing to compact yet",
         "chat.compacted": "compacted {count} earlier messages, kept {kept}",
         "chat.compact-prompt": (
@@ -1482,6 +1492,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.undone": "последний промпт отменён — внешние команды уже выполнились и остаются",
         "chat.undo-empty": "отменять нечего",
         "chat.compact-busy": "дождитесь конца текущего хода",
+        "chat.truncated-retry": "ответ упёрся в лимит вывода внутри вызова — не выполнен",
+        "chat.truncated-blocked": (
+            "модель снова и снова упирается в лимит вывода внутри вызовов; ход остановлен"
+        ),
+        "chat.truncated-note": (
+            "[harness] Your previous answer hit the output token limit while writing a "
+            "tool call, so none of its calls were run (the arguments may be cut). Issue "
+            "the calls again with shorter arguments: split a large script or file into "
+            "several steps."
+        ),
         "chat.compact-skip": "сжимать пока нечего",
         "chat.compacted": "сжато {count} ранних сообщений, оставлено {kept}",
         "chat.compact-prompt": (
