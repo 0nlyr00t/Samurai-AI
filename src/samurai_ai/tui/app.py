@@ -561,6 +561,9 @@ class SamuraiApp(
         #: debounces the one-time "Ctrl+C copies" hint while a drag is live
         self._copy_hint_timer: Timer | None = None
         self._copy_hint_shown = False
+        #: the last text copied on release, so re-releasing the same
+        #: selection (a click inside it) does not rewrite the clipboard
+        self._auto_copied: str | None = None
         #: the OSC-52-only warning is said once per session, not per copy
         self._osc52_warned = False
         #: who had focus before a modal opened: closing it returns there, not to
@@ -852,6 +855,10 @@ class SamuraiApp(
         # the first selection of a session teaches the copy key: the terminal's
         # own Cmd+C / Ctrl+Shift+C never reach a mouse-capturing app
         self.watch(self.screen, "selections", self._on_screen_selections, init=False)
+        # copy on release: the terminal's Cmd+C copies its own (empty) native
+        # selection while the app owns the mouse, so the selection must already
+        # be on the clipboard by then — the way opencode does it
+        self.watch(self.screen, "_selecting", self._on_selecting, init=False)
         # the model may ask a question at any point of a run
         if getattr(self.orchestrator, "question_notice", None) is None:
             self.orchestrator.question_notice = self.question_notice_from_thread
@@ -1189,15 +1196,42 @@ class SamuraiApp(
             return
         self.restore_focus()
 
+    def _copy_on_select(self) -> bool:
+        """On unless the operator turned it off (/autocopy)."""
+        return self.settings.get_value("tui.copy_on_select") != "0"
+
+    def _on_selecting(self, selecting: bool) -> None:
+        """The drag ended: put the selection on the clipboard once.
+
+        Copying on every drag step overwrote the operator's clipboard, so this
+        fires only on release, only for a non-empty selection that differs from
+        the last one copied.
+        """
+        if selecting or not self._copy_on_select():
+            return
+        text = self._selected_text()
+        if not text or text == self._auto_copied:
+            return
+        self._auto_copied = text
+        self.copy_to_clipboard(self._selection_clipboard_text(text))
+        self.notify(self.translator.t("mouse.auto-copied", chars=len(text)), timeout=2)
+
+    def _toggle_copy_on_select(self) -> None:
+        enabled = not self._copy_on_select()
+        self.settings.set_value("tui.copy_on_select", "1" if enabled else "0")
+        self._auto_copied = None
+        self._write_dim(
+            self.translator.t("mouse.autocopy-on" if enabled else "mouse.autocopy-off")
+        )
+
     def _on_screen_selections(self) -> None:
         """A selection appeared: once per session, say which key copies it.
 
-        Auto-copy stays off — writing the clipboard on every drag overwrote the
-        operator's clipboard. But the terminal's own copy keys (Cmd+C on macOS,
-        Ctrl+Shift+C on Linux) are consumed by the terminal and copy its empty
-        native selection, so without this hint copying looks broken.
+        Only needed with copy-on-select off: the terminal's own copy keys
+        (Cmd+C on macOS, Ctrl+Shift+C on Linux) are consumed by the terminal
+        and copy its empty native selection, so copying looks broken.
         """
-        if self._copy_hint_shown:
+        if self._copy_hint_shown or self._copy_on_select():
             return
         if self._copy_hint_timer is not None:
             self._copy_hint_timer.stop()

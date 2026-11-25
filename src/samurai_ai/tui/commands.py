@@ -169,6 +169,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     _spec("/connect", GROUP_VIEW, "_show_model_picker"),
     _spec("/settings", GROUP_VIEW, "_show_settings"),
     _spec("/mouse", GROUP_VIEW, "_toggle_mouse"),
+    _spec("/autocopy", GROUP_VIEW, "_toggle_copy_on_select"),
     _spec("/trust", GROUP_VIEW, "_prompt_trust"),
     # takes an optional word ("code") but must not open a prompt for it
     _spec("/copy", GROUP_VIEW, "_copy_last", argument=True),
