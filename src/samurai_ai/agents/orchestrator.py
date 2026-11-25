@@ -123,6 +123,9 @@ _OVERFLOW_MARKERS = (
     "exceeds the available context size",
     "reduce the length of the messages",
     "too many tokens",
+    "prompt is too long",
+    "input is too long",
+    "exceeds the maximum number of tokens",
 )
 
 
@@ -169,7 +172,8 @@ class ContextOverflowError(AgentError):
     """The model refused the prompt because it does not fit its window."""
 
 
-def _is_overflow(text: str) -> bool:
+def is_context_overflow(text: str) -> bool:
+    """The provider refused the prompt because it does not fit the window."""
     low = text.lower()
     return any(marker in low for marker in _OVERFLOW_MARKERS)
 
@@ -1274,7 +1278,7 @@ class AgentOrchestrator:
                     extra_payload={"agent_run_id": run.id},
                 )
             except ModelError as exc:
-                if _is_overflow(str(exc)):
+                if is_context_overflow(str(exc)):
                     raise ContextOverflowError(str(exc)) from exc
                 raise
             except ApprovalRequiredError as exc:

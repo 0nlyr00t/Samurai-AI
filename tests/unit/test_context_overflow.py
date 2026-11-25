@@ -10,7 +10,7 @@ from samurai_ai.agents.orchestrator import (
     AgentError,
     AgentOrchestrator,
     ContextOverflowError,
-    _is_overflow,
+    is_context_overflow,
 )
 from samurai_ai.domain.agents import AgentRun
 from samurai_ai.domain.models import ModelError
@@ -51,11 +51,11 @@ def run_of() -> AgentRun:
 
 
 def test_the_wording_is_recognised() -> None:
-    assert _is_overflow("This model's maximum context length is 32000 tokens")
-    assert _is_overflow('{"code": "context_length_exceeded"}')
-    assert _is_overflow("request exceeds the available context size")
-    assert not _is_overflow("unknown model")
-    assert not _is_overflow("rate limited")
+    assert is_context_overflow("This model's maximum context length is 32000 tokens")
+    assert is_context_overflow('{"code": "context_length_exceeded"}')
+    assert is_context_overflow("request exceeds the available context size")
+    assert not is_context_overflow("unknown model")
+    assert not is_context_overflow("rate limited")
 
 
 def test_an_overflowing_prompt_is_retried_smaller() -> None:
