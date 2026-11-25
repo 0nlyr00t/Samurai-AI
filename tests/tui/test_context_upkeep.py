@@ -152,3 +152,49 @@ def test_second_overflow_surfaces_as_an_error(tmp_path: Path) -> None:
             assert len(_compact_events(stack, operation.id)) == 1
 
     asyncio.run(exercise())
+
+
+def test_each_agent_round_ends_with_a_fresh_unstored_snapshot(tmp_path: Path) -> None:
+    from samurai_ai.domain.kernel import PlanTask
+
+    stack, operation = _chat_ready_stack(tmp_path, object())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)):
+            sent: list[tuple[Message, ...]] = []
+            call = ToolCall(id="c1", name="update_todo", arguments={"items": []})
+
+            def chat(_operation, _model, messages, **_kwargs):  # type: ignore[no-untyped-def]
+                sent.append(tuple(messages))
+                if len(sent) == 1:
+                    # between rounds the plan changes under the model
+                    stack[1].create_plan(
+                        operation.id,
+                        "Web map",
+                        [PlanTask(id="map", title="Map the login flow")],
+                        [],
+                    )
+                    return ChatResponse(
+                        text="",
+                        tool_calls=(call,),
+                        usage=Usage(prompt_tokens=5, completion_tokens=2),
+                        model_id=MODEL,
+                        provider_id="gpt",
+                    )
+                return _text("done")
+
+            app.models.chat = chat  # type: ignore[method-assign]
+            await app._chat_loop("map it", MODEL, None)
+
+            first, second = sent[0], sent[1]
+            assert first[-1].content.startswith("<operation-state>")
+            assert "Map the login flow" not in first[-1].content
+            assert "Map the login flow" in second[-1].content
+            assert "<operation-state>" not in first[0].content
+            assert not any(
+                message.content.startswith("<operation-state>")
+                for message in app._chat_history
+            )
+
+    asyncio.run(exercise())

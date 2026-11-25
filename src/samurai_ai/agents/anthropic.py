@@ -128,9 +128,10 @@ def _mark_cached(message: dict[str, Any]) -> None:
 def build_messages_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
     """The request, with cache breakpoints on tools, system and the newest turn.
 
-    Tools and the system prompt are the stable prefix; the breakpoint on the
-    last message lets the next round read everything before it from cache, so
-    a tool loop pays full price only for the turn it just added.
+    Tools and the system prompt are the stable prefix; breakpoints on the last
+    two messages let the next round read everything before them from cache, so
+    a tool loop pays full price only for the turns it just added. That is four
+    breakpoints, the API's maximum.
     """
     system_parts, conversation = split_system(wire_messages(request))
     messages: list[dict[str, Any]] = []
@@ -138,8 +139,11 @@ def build_messages_payload(model_name: str, request: ChatRequest) -> dict[str, A
         _append_merged(messages, _wire_message(message))
     if request.images:
         _attach_images(messages, request.images)
-    if messages:
-        _mark_cached(messages[-1])
+    # the newest turn and the one before it: when the newest is per-request
+    # context (an operation snapshot), the next round still finds the history
+    # up to the previous breakpoint in cache
+    for entry in messages[-2:]:
+        _mark_cached(entry)
     payload: dict[str, Any] = {
         "model": model_name,
         "max_tokens": request.max_tokens or 4096,

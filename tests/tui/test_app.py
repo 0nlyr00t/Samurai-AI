@@ -1110,7 +1110,13 @@ class _ChatProvider:
 
         self.calls += 1
         return ChatResponse(
-            text=f"echo: {request.messages[-1].content}",
+            # the per-request operation snapshot is context, not the prompt
+            text="echo: "
+            + next(
+                message.content
+                for message in reversed(request.messages)
+                if not message.content.startswith("<operation-state>")
+            ),
             usage=Usage(prompt_tokens=3, completion_tokens=2),
             model_id=request.model_id,
             provider_id="gpt",
@@ -3839,9 +3845,10 @@ def test_the_frontier_reaches_the_system_prompt(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             await _open(app, pilot, "check /api/v1")
-            prompt = app._chat_system_prompt()
+            prompt = app._operation_snapshot()
             assert "exploration graph" in prompt
             assert "check /api/v1" in prompt
+            assert "exploration graph" not in app._chat_system_prompt()
             await pilot.press("ctrl+c")
             await pilot.press("ctrl+c")
 
@@ -3998,7 +4005,7 @@ def test_constraints_reach_the_prompt_above_the_frontier(tmp_path: Path) -> None
                 operation.id, task_id, ConstraintKind.DENY, "do not touch /admin"
             )
 
-            prompt = app._chat_system_prompt()
+            prompt = app._operation_snapshot()
 
             assert "OPERATOR CONSTRAINTS" in prompt
             assert "do not touch /admin" in prompt

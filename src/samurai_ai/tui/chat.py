@@ -289,6 +289,11 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+#: the per-request operation snapshot; never stored in the history
+SNAPSHOT_OPEN = "<operation-state>"
+SNAPSHOT_CLOSE = "</operation-state>"
+
+
 def _drop_token(_token: str) -> None:
     """A side call's tokens go nowhere: only its final text is used."""
 
@@ -1098,16 +1103,13 @@ class ChatController:
             version=__version__,
             autonomy=autonomy,
         )
-        prompt = self._append_constraints(prompt)
-        prompt = self._append_frontier(prompt)
-        prompt = self._append_state(prompt)
+        # operation state (constraints, graph, targets, tasks, goal) is not
+        # here: it changes mid-session, so it rides at the end of every request
+        # (`_operation_snapshot`) and this prompt stays a stable cache prefix
         if self.operation is not None:
             # the operator doctrine: generic «you have a shell» prompts produced
             # crawler behaviour (HTB Lab never registered an account)
             prompt += "\n\n" + self.translator.t("chat.doctrine")
-        goal = self._operation_goal(self.operation.id) if self.operation else ""
-        if goal:
-            prompt += "\n\n" + self.translator.t("chat.goal-hint", goal=goal)
         try:
             digest, _ids = self.memory.digest(self._memory_workspace())
         except Exception:  # noqa: BLE001 - memory must not break a turn
@@ -1116,6 +1118,27 @@ class ChatController:
             return self._append_lessons(prompt)
         with_memory = f"{prompt}\n\n{self.translator.t('chat.memory', digest=digest)}"
         return self._append_lessons(with_memory)
+
+    def _operation_snapshot(self) -> str:
+        """The operation as the store sees it right now, for the end of a request.
+
+        Built per request and never stored in the history: a snapshot per round
+        would pile up stale copies, and in the system prompt it went stale for
+        the rest of the session. Operator constraints lead, as they outrank
+        everything after them.
+        """
+        if self.operation is None:
+            return ""
+        body = self._append_constraints("")
+        body = self._append_frontier(body)
+        body = self._append_state(body)
+        goal = self._operation_goal(self.operation.id)
+        if goal:
+            body += "\n\n" + self.translator.t("chat.goal-hint", goal=goal)
+        body = body.strip()
+        if not body:
+            return ""
+        return f"{SNAPSHOT_OPEN}\n{body}\n{SNAPSHOT_CLOSE}"
 
     def _append_lessons(self, prompt: str) -> str:
         """Adopted lessons ride behind the memory digest; shadow mode adds nothing."""
@@ -2380,13 +2403,21 @@ class ChatController:
         delta_callback: dict[str, Any] = (
             {"on_tool_delta": self._guard_tool_delta} if guarded else {}
         )
+        if messages is None:
+            outgoing = tuple(self._chat_history)
+            snapshot = self._operation_snapshot() if tools else ""
+            if snapshot:
+                # an agent round sees the operation as it is now, last
+                outgoing = (*outgoing, Message(role="user", content=snapshot))
+        else:
+            outgoing = messages
         while True:
             try:
                 return await asyncio.to_thread(
                     self.models.chat,
                     operation_id,
                     model_id,
-                    messages if messages is not None else tuple(self._chat_history),
+                    outgoing,
                     tools=tools,
                     reasoning_effort=reasoning,
                     approval_id=approval_id,

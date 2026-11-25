@@ -224,7 +224,7 @@ def test_system_prompt_exposes_operation_state(tmp_path: Path) -> None:
         app = SamuraiApp(*stack, operation.id)
         async with app.run_test(size=(120, 34)) as pilot:
             await pilot.pause()
-            prompt = app._chat_system_prompt()
+            prompt = app._operation_snapshot()
             assert "TARGETS: (none)" in prompt
             assert "SCOPE include: (none)" in prompt
             assert "TASKS: (none)" in prompt
@@ -238,7 +238,7 @@ def test_system_prompt_exposes_operation_state(tmp_path: Path) -> None:
                 [PlanTask(id="map", title="Map the web application")],
                 [],
             )
-            prompt = app._chat_system_prompt()
+            prompt = app._operation_snapshot()
             assert "TARGETS: example.co.uk" in prompt
             assert "SCOPE include: example.co.uk" in prompt
             assert "Map the web application" in prompt
