@@ -40,7 +40,7 @@ def _stack(tmp_path: Path) -> tuple[Any, Any, Any, list[str | None]]:
     models.register_endpoint("gpt", "http://127.0.0.1:9/v1", "gpt-key")
     models.add_model("gpt/m")
     seen: list[str | None] = []
-    models._make_provider = lambda _provider, key: _Fake(key, seen)  # type: ignore[method-assign,assignment,return-value]
+    models._make_provider = lambda _provider, key, *_: _Fake(key, seen)  # type: ignore[method-assign,assignment,return-value]
     scope = ScopeContract(includes=("*.example.com",))
     a = operations.create("Client A", OperationMode.BUG_BOUNTY, scope)
     b = operations.create("Client B", OperationMode.BUG_BOUNTY, scope)
