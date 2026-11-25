@@ -88,6 +88,17 @@ def register_model_commands(
         "usage", help="Show aggregated model usage for an operation"
     )
     usage.add_argument("operation_id")
+    policy = model_commands.add_parser(
+        "key-policy",
+        help="Show or set whose API key an operation's model calls may bill",
+    )
+    policy.add_argument("operation_id")
+    policy.add_argument(
+        "mode",
+        nargs="?",
+        choices=("own", "shared"),
+        help="own: only the operation's own key; shared: fall back to the global key",
+    )
 
 
 def handle_model_command(args: argparse.Namespace, models: ModelService) -> int | None:
@@ -192,6 +203,21 @@ def handle_model_command(args: argparse.Namespace, models: ModelService) -> int 
                     f"tokens={usage_entry['prompt_tokens']}+{usage_entry['completion_tokens']}\t"
                     f"cost=${usage_entry['cost_usd']}"
                 )
+            for scope, usage_entry in summary.by_key_scope.items():
+                print(
+                    f"  key={scope}\tcalls={usage_entry['calls']}\t"
+                    f"tokens={usage_entry['prompt_tokens']}+{usage_entry['completion_tokens']}\t"
+                    f"cost=${usage_entry['cost_usd']}"
+                )
+        return 0
+    if args.model_command == "key-policy":
+        if args.mode is not None:
+            models.set_key_policy(args.operation_id, require_own=args.mode == "own")
+        mode = "own" if models.requires_own_key(args.operation_id) else "shared"
+        if args.json_output:
+            _print_json({"operation_id": args.operation_id, "mode": mode})
+        else:
+            print(f"{args.operation_id}\tkey-policy={mode}")
         return 0
     return _complete(args, models)
 

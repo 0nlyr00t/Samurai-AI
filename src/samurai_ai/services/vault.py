@@ -103,6 +103,16 @@ class VaultService:
                 f"secret not found in scope {scope}: {name!r}"
             )
 
+    def get_own(self, name: str, operation_id: str) -> str | None:
+        """The secret stored for exactly this operation; no global fallback.
+
+        ``get`` falls back to the global entry, which is what a target
+        credential wants; billing separation needs to know whether the
+        operation has its own.
+        """
+        entry = self.repository.find(name, operation_id)
+        return self._decrypt(entry) if entry is not None else None
+
     def exists(self, name: str, operation_id: str | None = None) -> bool:
         return self.repository.find_visible(name, operation_id) is not None
 

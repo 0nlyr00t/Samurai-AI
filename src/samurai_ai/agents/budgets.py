@@ -38,6 +38,9 @@ class UsageSummary(BaseModel):
     completion_tokens: int = 0
     cost_usd: float = 0.0
     by_model: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    #: spend by whose key paid: operation, global, oauth, local, none; calls
+    #: recorded before scopes were tracked count as "unknown"
+    by_key_scope: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @property
     def total_tokens(self) -> int:
@@ -50,6 +53,7 @@ def usage_from_events(events: Iterable[OperationEvent]) -> UsageSummary:
     completion_tokens = 0
     cost = 0.0
     by_model: dict[str, dict[str, Any]] = {}
+    by_scope: dict[str, dict[str, Any]] = {}
     for event in events:
         if event.event_type != "model.call":
             continue
@@ -69,12 +73,21 @@ def usage_from_events(events: Iterable[OperationEvent]) -> UsageSummary:
         entry["prompt_tokens"] += prompt
         entry["completion_tokens"] += completion
         entry["cost_usd"] = round(entry["cost_usd"] + estimated, 6)
+        scope = by_scope.setdefault(
+            str(payload.get("key_scope") or "unknown"),
+            {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0},
+        )
+        scope["calls"] += 1
+        scope["prompt_tokens"] += prompt
+        scope["completion_tokens"] += completion
+        scope["cost_usd"] = round(scope["cost_usd"] + estimated, 6)
     return UsageSummary(
         calls=calls,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         cost_usd=round(cost, 6),
         by_model=by_model,
+        by_key_scope=by_scope,
     )
 
 
