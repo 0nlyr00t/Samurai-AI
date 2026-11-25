@@ -16,7 +16,7 @@ from samurai_ai.agents.budgets import (
     usage_from_events,
 )
 from samurai_ai.agents.gemini import GeminiProvider
-from samurai_ai.agents.ollama import OllamaProvider
+from samurai_ai.agents.ollama import DEFAULT_NUM_CTX, OllamaProvider, model_definition_for
 from samurai_ai.agents.openai_compat import OpenAICompatProvider
 from samurai_ai.agents.provider import (
     ChatRequest,
@@ -97,6 +97,8 @@ class ModelService:
         # two requests at once would otherwise wedge (and the TUI with it). A
         # backend that handles concurrency can raise agent.model_concurrency.
         self._operation_gates: dict[str, threading.Semaphore] = {}
+        #: Ollama models resolved live, with the window actually requested
+        self._ollama_models: dict[str, ModelDefinition] = {}
         self._operation_gates_guard = threading.Lock()
 
     def list_providers(self) -> list[dict[str, Any]]:
@@ -360,6 +362,11 @@ class ModelService:
                 should_stop=should_stop,
                 on_tool_delta=on_tool_delta,
                 api_key=api_key,
+                num_ctx=(
+                    candidate_model.context_limit
+                    if candidate_provider.api_family is ApiFamily.OLLAMA
+                    else None
+                ),
             )
 
         def on_fallback(from_model: str, to_model: str, reason: str) -> None:
@@ -464,8 +471,9 @@ class ModelService:
         should_stop: Callable[[], bool] | None = None,
         on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
         api_key: str | None = None,
+        num_ctx: int | None = None,
     ) -> ChatResponse:
-        impl = self._make_provider(provider, api_key)
+        impl = self._make_provider(provider, api_key, num_ctx)
         stream = getattr(impl, "complete_stream", None)
         if on_token is not None and stream is not None:
             supports_deltas = (
@@ -487,9 +495,41 @@ class ModelService:
         provider_id, _ = parse_model_id(model_id)
         provider = self.registry.get_provider(provider_id)
         if provider.api_family is ApiFamily.OLLAMA:
-            model = asyncio.run(OllamaProvider(provider).resolve_model(model_id))
-            return model, provider
+            known = self._ollama_models.get(model_id)
+            if known is not None:
+                return known, provider
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                # CLI and worker threads: resolve live, so a missing model or
+                # a stopped Ollama fails fast, before any work starts
+                return asyncio.run(self._resolve_model_async(model_id))
+            # the UI thread (context gauge) runs a loop and cannot nest one:
+            # answer offline; the call itself resolves the model live
+            _, name = parse_model_id(model_id)
+            fallback = model_definition_for(name)
+            window = self._ollama_window(fallback.id, None)
+            return fallback.model_copy(update={"context_limit": window}), provider
         return self.registry.get_model(model_id)
+
+    def _ollama_window(self, model_id: str, trained: int | None) -> int:
+        """The window to ask Ollama for and to budget against.
+
+        The operator's ``model.context_limit.<id>`` wins; else the model's own
+        window capped at DEFAULT_NUM_CTX (memory), else the default.
+        """
+        key = f"model.context_limit.{model_id}"
+        raw = self.settings.get_setting(key) if self.settings else None
+        if raw:
+            try:
+                override = int(raw)
+            except ValueError:
+                override = 0
+            if override > 0:
+                return override
+        if trained:
+            return min(trained, DEFAULT_NUM_CTX)
+        return DEFAULT_NUM_CTX
 
     def resolve_model(self, model_id: str) -> tuple[ModelDefinition, ProviderDefinition]:
         return self._resolve_model(model_id)
@@ -507,8 +547,19 @@ class ModelService:
         provider_id, _ = parse_model_id(model_id)
         provider = self.registry.get_provider(provider_id)
         if provider.api_family is ApiFamily.OLLAMA:
-            model = await OllamaProvider(provider).resolve_model(model_id)
-            return model, provider
+            client = OllamaProvider(provider)
+            model = await client.resolve_model(model_id)
+            known = self._ollama_models.get(model.id)
+            if known is None:
+                try:
+                    trained = await client.context_length(model.model_name)
+                except (ModelError, ProviderUnavailableError):
+                    trained = None
+                known = model.model_copy(
+                    update={"context_limit": self._ollama_window(model.id, trained)}
+                )
+                self._ollama_models[model.id] = known
+            return known, provider
         return self.registry.get_model(model_id)
 
     def _resolve_approval(
@@ -635,12 +686,14 @@ class ModelService:
         api_key, _scope = self._resolve_key(provider, None)
         return self._make_provider(provider, api_key)
 
-    def _make_provider(self, provider: ProviderDefinition, api_key: str | None) -> ProviderImpl:
+    def _make_provider(
+        self, provider: ProviderDefinition, api_key: str | None, num_ctx: int | None = None
+    ) -> ProviderImpl:
         timeout = self.request_timeout()
         if self.provider_factory is not None:
             return self.provider_factory(provider)
         if provider.api_family is ApiFamily.OLLAMA:
-            return OllamaProvider(provider)
+            return OllamaProvider(provider, num_ctx=num_ctx)
         if provider.api_family is ApiFamily.ANTHROPIC:
             return AnthropicProvider(provider, api_key, timeout=timeout)
         if provider.api_family is ApiFamily.GEMINI:

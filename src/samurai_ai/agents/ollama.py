@@ -41,6 +41,11 @@ from samurai_ai.execution.http import HttpEgressBroker
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_TIMEOUT = 120.0
+#: the window Samurai asks Ollama for when the operator set none. Ollama's own
+#: default is a few thousand tokens and it silently drops the *front* of a
+#: longer prompt — the system prompt first. A bigger window costs memory
+#: (KV cache), so this stays moderate; `model.context_limit.<id>` raises it.
+DEFAULT_NUM_CTX = 16384
 
 _TOOL_CAPABLE_FAMILIES: tuple[str, ...] = (
     "llama3.1",
@@ -70,7 +75,7 @@ def model_definition_for(model_name: str) -> ModelDefinition:
         provider_id="ollama",
         display_name=model_name,
         api_family=ApiFamily.OLLAMA,
-        context_limit=8192,
+        context_limit=DEFAULT_NUM_CTX,
         max_output_tokens=4096,
         capabilities=infer_capabilities(model_name),
         local=True,
@@ -102,7 +107,20 @@ def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]
             return
 
 
-def build_chat_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
+def trained_context_length(show: dict[str, Any]) -> int | None:
+    """The model's own window from ``/api/show`` (``<arch>.context_length``)."""
+    info = show.get("model_info")
+    if not isinstance(info, dict):
+        return None
+    for key, value in info.items():
+        if str(key).endswith(".context_length") and isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
+def build_chat_payload(
+    model_name: str, request: ChatRequest, num_ctx: int | None = None
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model_name,
         "stream": False,
@@ -123,6 +141,9 @@ def build_chat_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
             for tool in request.tools
         ]
     options: dict[str, Any] = {}
+    if num_ctx is not None:
+        # explicit, so the window Samurai budgets for is the one Ollama uses
+        options["num_ctx"] = num_ctx
     if request.max_tokens is not None:
         options["num_predict"] = request.max_tokens
     if request.temperature is not None:
@@ -175,8 +196,10 @@ class OllamaProvider:
         provider: ProviderDefinition,
         broker: HttpEgressBroker | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        num_ctx: int | None = None,
     ) -> None:
         self.provider = provider
+        self.num_ctx = num_ctx
         self.broker = broker or broker_for_base_url(
             provider.base_url, verify_tls=provider.verify_tls
         )
@@ -210,9 +233,16 @@ class OllamaProvider:
             f"'ollama pull {model_name}'"
         )
 
+    async def context_length(self, model_name: str) -> int | None:
+        """The model's trained window, or None when Ollama does not say."""
+        response = await asyncio.to_thread(
+            self._fetch, "/api/show", json.dumps({"model": model_name}).encode("utf-8")
+        )
+        return trained_context_length(self._decode(response.status, response.body))
+
     async def complete(self, request: ChatRequest) -> ChatResponse:
         _, model_name = parse_model_id(request.model_id)
-        payload = build_chat_payload(model_name, request)
+        payload = build_chat_payload(model_name, request, self.num_ctx)
         started = time.monotonic()
         response = await asyncio.to_thread(
             self._fetch, "/api/chat", json.dumps(payload).encode("utf-8")
