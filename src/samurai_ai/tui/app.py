@@ -5399,8 +5399,9 @@ class SamuraiApp(
         """The active model's context window, or 0 when unknown.
 
         An operator override wins: a registered limit can lag behind the real
-        deployment (a 65k entry on a 1M model)."""
-        model_id = self.models.default_model()
+        deployment (a 65k entry on a 1M model). The model is the one the chat
+        is actually on: after a handoff or /model that is not the default."""
+        model_id = self._active_chat_model()
         if not model_id:
             return 0
         override = self.settings.get_value(f"model.context_limit.{model_id}")
