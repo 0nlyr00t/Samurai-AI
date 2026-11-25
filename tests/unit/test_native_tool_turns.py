@@ -130,14 +130,11 @@ def test_anthropic_plain_turns_keep_their_shape() -> None:
         Message(role="user", content="c"),
     )
     messages = build_messages_payload("m", _request(history))["messages"]
-    assert messages[:2] == [
-        {"role": "user", "content": "a"},
-        {"role": "assistant", "content": "b"},
-    ]
-    # only the newest turn becomes blocks, to carry the cache breakpoint
-    assert messages[2]["content"] == [
-        {"type": "text", "text": "c", "cache_control": {"type": "ephemeral"}}
-    ]
+    assert messages[0] == {"role": "user", "content": "a"}
+    # the two newest turns become blocks, to carry the cache breakpoints
+    cached = {"type": "ephemeral"}
+    assert messages[1]["content"] == [{"type": "text", "text": "b", "cache_control": cached}]
+    assert messages[2]["content"] == [{"type": "text", "text": "c", "cache_control": cached}]
 
 
 def test_only_the_leading_system_prompt_is_lifted() -> None:
@@ -151,10 +148,10 @@ def test_only_the_leading_system_prompt_is_lifted() -> None:
     assert payload["system"][0]["text"] == "core"
     messages = payload["messages"]
     assert messages[0] == {"role": "user", "content": "go"}
-    assert messages[1] == {
-        "role": "user",
-        "content": "<system-reminder>\nmemory: port 22\n</system-reminder>",
-    }
+    assert messages[1]["role"] == "user"
+    assert messages[1]["content"][0]["text"] == (
+        "<system-reminder>\nmemory: port 22\n</system-reminder>"
+    )
     contents = build_generate_content_payload(_request(history))
     assert contents["systemInstruction"]["parts"][0]["text"] == "core"
     assert "memory: port 22" in contents["contents"][1]["parts"][0]["text"]
