@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any
 
@@ -18,8 +19,11 @@ from samurai_ai.agents.provider import (
     ChatRequest,
     ChatResponse,
     ImagePart,
+    Message,
     ToolCall,
     Usage,
+    new_call_id,
+    wire_messages,
 )
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
 from samurai_ai.domain.models import (
@@ -35,12 +39,68 @@ DEFAULT_TIMEOUT = 180.0
 _MAX_ERROR_SNIPPET = 200
 
 
+_TOOL_ID_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _tool_id(raw: str) -> str:
+    """Anthropic accepts only ``[A-Za-z0-9_-]`` ids; foreign ids are mapped."""
+    return _TOOL_ID_UNSAFE.sub("_", raw) or "call"
+
+
+def _blocks(content: str | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if isinstance(content, list):
+        return content
+    return [{"type": "text", "text": content}] if content else []
+
+
+def _wire_message(message: Message) -> dict[str, Any]:
+    if message.role == "assistant" and message.tool_calls:
+        blocks = _blocks(message.content)
+        blocks += [
+            {
+                "type": "tool_use",
+                "id": _tool_id(call.id),
+                "name": call.name,
+                "input": call.arguments,
+            }
+            for call in message.tool_calls
+        ]
+        return {"role": "assistant", "content": blocks}
+    if message.role == "tool":
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": _tool_id(message.tool_call_id),
+                    "content": message.content or "(empty)",
+                }
+            ],
+        }
+    return {"role": message.role, "content": message.content}
+
+
+def _append_merged(messages: list[dict[str, Any]], entry: dict[str, Any]) -> None:
+    """Results of one round share a single user turn, as the API requires.
+
+    Only turns carrying blocks merge; plain text turns keep their old shape.
+    """
+    if messages:
+        last = messages[-1]
+        if last["role"] == entry["role"] and (
+            isinstance(last["content"], list) or isinstance(entry["content"], list)
+        ):
+            last["content"] = _blocks(last["content"]) + _blocks(entry["content"])
+            return
+    messages.append(entry)
+
+
 def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
     """Fold images into the last user turn as base64 source blocks."""
     for message in reversed(messages):
         if message["role"] != "user":
             continue
-        blocks: list[dict[str, Any]] = [{"type": "text", "text": message["content"]}]
+        blocks: list[dict[str, Any]] = _blocks(message["content"])
         blocks += [
             {
                 "type": "image",
@@ -55,11 +115,11 @@ def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]
 def build_messages_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
-    for message in request.messages:
+    for message in wire_messages(request):
         if message.role == "system":
             system_parts.append(message.content)
         else:
-            messages.append({"role": message.role, "content": message.content})
+            _append_merged(messages, _wire_message(message))
     if request.images:
         _attach_images(messages, request.images)
     payload: dict[str, Any] = {
@@ -100,7 +160,7 @@ def parse_messages_response(
             arguments = block.get("input")
             tool_calls.append(
                 ToolCall(
-                    id=str(block.get("id") or ""),
+                    id=str(block.get("id") or new_call_id()),
                     name=str(block.get("name") or ""),
                     arguments=arguments if isinstance(arguments, dict) else {},
                 )

@@ -37,6 +37,12 @@ class ChatHistoryService:
         """Persist one message, redacted; tool bodies collapse to their header."""
         if not operation_id:
             return
+        if message.role == "assistant" and message.tool_calls and not message.content.strip():
+            # a pure call turn has nothing to show on restore; its results do
+            return
+        # the disk keeps the plain transcript: restored turns come back as
+        # text, so a cut tail can never strand a call without its result
+        role = "user" if message.role == "tool" else message.role
         content = self.redactor.redact(message.content).text
         truncated = False
         if _is_tool(message) and TOOL_HEADER_ONLY:
@@ -46,7 +52,7 @@ class ChatHistoryService:
         elif len(content) > MESSAGE_LIMIT:
             content = content[:MESSAGE_LIMIT] + "\n…"
             truncated = True
-        self.repository.append(operation_id, Message(role=message.role, content=content), truncated)
+        self.repository.append(operation_id, Message(role=role, content=content), truncated)
 
     def tail(self, operation_id: str) -> tuple[list[Message], int, bool]:
         """Restored messages, the total stored, and whether older turns were left out."""

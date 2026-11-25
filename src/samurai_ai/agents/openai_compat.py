@@ -19,13 +19,17 @@ from collections.abc import Callable
 from typing import Any
 
 from samurai_ai.agents.provider import (
+    IMAGE_CARRIER,
     STREAM_RESET,
     ChatRequest,
     ChatResponse,
     ImagePart,
+    Message,
     ToolCall,
     ToolCallDelta,
     Usage,
+    new_call_id,
+    wire_messages,
 )
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
 from samurai_ai.domain.models import (
@@ -49,8 +53,36 @@ def broker_for_base_url(base_url: str, verify_tls: bool = True) -> HttpEgressBro
     return HttpEgressBroker(ScopeContract(includes=(host,)), verify_tls=verify_tls)
 
 
+def _wire_message(message: Message) -> dict[str, Any]:
+    if message.role == "assistant" and message.tool_calls:
+        return {
+            "role": "assistant",
+            "content": message.content or None,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                    },
+                }
+                for call in message.tool_calls
+            ],
+        }
+    if message.role == "tool":
+        return {"role": "tool", "tool_call_id": message.tool_call_id, "content": message.content}
+    return {"role": message.role, "content": message.content}
+
+
 def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]) -> None:
-    """Fold images into the last user turn as content parts."""
+    """Fold images into the last user turn as content parts.
+
+    A tool result cannot carry images here, so when the history ends on one the
+    images ride in a user turn of their own right after it.
+    """
+    if messages and messages[-1]["role"] == "tool":
+        messages.append({"role": "user", "content": IMAGE_CARRIER})
     for message in reversed(messages):
         if message["role"] != "user":
             continue
@@ -68,10 +100,7 @@ def build_completion_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model_name,
-        "messages": [
-            {"role": message.role, "content": message.content}
-            for message in request.messages
-        ],
+        "messages": [_wire_message(message) for message in wire_messages(request)],
     }
     if request.images:
         _attach_images(payload["messages"], request.images)
@@ -119,7 +148,7 @@ def parse_completion(
             arguments = {}
         tool_calls.append(
             ToolCall(
-                id=str(entry.get("id") or ""),
+                id=str(entry.get("id") or new_call_id()),
                 name=str(function.get("name") or ""),
                 arguments=arguments if isinstance(arguments, dict) else {},
             )
@@ -256,11 +285,11 @@ class OpenAICompatProvider:
         latency_ms = int((time.monotonic() - started) * 1000)
         calls = tuple(
             ToolCall(
-                id=str(entry.get("id") or f"call-{index}"),
+                id=str(entry.get("id") or new_call_id()),
                 name=str(entry.get("function", {}).get("name", "")),
                 arguments=_json_dict(entry.get("function", {}).get("arguments")),
             )
-            for index, (_, entry) in enumerate(sorted(tool_map.items()))
+            for _, entry in sorted(tool_map.items())
         )
         text = "".join(text_parts)
         if "DSML" in text:
@@ -453,7 +482,7 @@ def _salvage_dsml(text: str) -> tuple[str, list[ToolCall]]:
     strip the markup from the visible text.
     """
     calls: list[ToolCall] = []
-    for index, match in enumerate(_DSML_INVOKE.finditer(text)):
+    for match in _DSML_INVOKE.finditer(text):
         body = match.group(2)
         arguments = {
             name: value.strip()
@@ -461,7 +490,7 @@ def _salvage_dsml(text: str) -> tuple[str, list[ToolCall]]:
         }
         calls.append(
             ToolCall(
-                id=f"dsml-{index}",
+                id=new_call_id(),
                 # keep the name as written: chat handlers use shell_exec & co
                 name=match.group(1),
                 arguments=arguments,
