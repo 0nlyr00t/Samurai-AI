@@ -4657,7 +4657,10 @@ class ChatController:
         row = self.translator.t(
             "chat.exec-group-row", command=_one_line(_bounded(command, 72)), lines=lines
         )
-        if self._exec_group is None or not getattr(self._exec_group, "is_mounted", False):
+        # attached, not mounted: a block is in the DOM as soon as mount() is
+        # called, but its Mount event lands later — checking is_mounted let a
+        # quick second run start a second group (flaky on slower hosts)
+        if self._exec_group is None or not getattr(self._exec_group, "is_attached", False):
             self._exec_group_rows = []
             self._exec_group_ok = 0
             self._exec_group_fail = 0

@@ -12044,3 +12044,31 @@ def test_a_judge_stop_without_store_proof_is_not_credited(tmp_path: Path) -> Non
             assert notes
 
     asyncio.run(exercise())
+
+
+def test_back_to_back_runs_share_a_group_before_it_mounts(tmp_path: Path) -> None:
+    """The group block is mounted asynchronously; a second run must not race it."""
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            # no await between the runs: the first block has no Mount yet
+            app._append_exec_group("echo first", 1)
+            first = app._exec_group
+            assert first is not None and not first.is_mounted
+            app._append_exec_group("echo second", 1)
+            assert app._exec_group is first
+            await pilot.pause()
+            journal = app.query_one("#journal", BlockJournal)
+            groups = [b for b in journal.tool_blocks if "commands" in b._title.plain]
+            assert len(groups) == 1
+            assert len(first._body) == 2
+            # a cleared journal detaches the block: the next run starts fresh
+            journal.remove_children()
+            await pilot.pause()
+            app._append_exec_group("echo third", 1)
+            assert app._exec_group is not first
+
+    asyncio.run(exercise())
