@@ -135,9 +135,13 @@ Retry-бюджет ограничен, исчерпание оставляет `
 artifact, атомарное оформление результата/finding и итоговый вывод, но не новые
 attack tools или исследования. Разрешена одна write-only попытка и один итоговый
 ответ; незакрытая работа или неясный verdict переводит goal в
-`BLOCKED/finalization_required` и ждёт оператора без model calls. Продолжение
-возможно только после действий оператора. Общий budget не расширяется
-автоматически: новый research budget задаётся явно оператором.
+`BLOCKED/finalization_required` и ждёт оператора без model calls. Явное
+`/finalize resume` продолжает closing path после разрешения блокеров; новое
+сообщение оператора в чате при оставшемся budget означает продолжить
+исследование и переводит goal в ACTIVE. Исчерпание budget не обходится этим
+сообщением: нужен явный `/goal extend`. До входа в финализацию допускается один bounded retry раннего отказа;
+повторный отказ не продлевает research budget автоматически. Общий budget не
+расширяется автоматически: новый research budget задаётся явно оператором.
 
 `FinalizationService.snapshot` перечисляет eligible artifact-backed facts,
 unresolved hypotheses и pending execution/approvals. Finding создаётся только из

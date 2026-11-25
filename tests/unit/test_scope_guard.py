@@ -3,9 +3,28 @@
 import pytest
 
 from samurai_ai.domain.scope import ScopeContract
-from samurai_ai.domain.scope_guard import ScopeGuardError, guard, infra_hosts
+from samurai_ai.domain.scope_guard import ScopeGuardError, guard, infra_hosts, text_hosts
 
 SCOPE = ScopeContract(includes=("10.10.0.0/24", "example.com", "*.example.com"))
+
+
+def test_text_hosts_recognizes_urls_and_common_tlds() -> None:
+    text = (
+        "Исследуй https://example.co.uk и https://target.dev:8443/a, затем "
+        "demo-site.app, portal.example.ai и http://10.10.11.5:8080."
+    )
+    assert text_hosts(text) == [
+        "example.co.uk",
+        "target.dev",
+        "demo-site.app",
+        "portal.example.ai",
+        "10.10.11.5",
+    ]
+
+
+def test_text_hosts_ignores_files_and_invalid_addresses() -> None:
+    assert text_hosts("open app.js, notes.md, module.py and 999.1.2.3") == []
+    assert text_hosts("read https://example.com/README.md") == ["example.com"]
 
 
 def test_a_host_inside_the_scope_passes() -> None:

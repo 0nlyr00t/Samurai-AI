@@ -141,10 +141,19 @@ _PROMISE_RE = re.compile(
     r"|reading\b|checking\b|looking\b|fetching\b|downloading\b|examining\b|reviewing\b)",
     re.IGNORECASE,
 )
+_REFUSAL_RE = re.compile(
+    r"(?:\bi (?:can(?:not|'t)|won't|am unable)\b|\bi'm unable\b"
+    r"|cannot assist|can't assist|against my guidelines"
+    r"|не могу|не буду|против моих правил"
+    r"|not in scope|out of scope|no target in scope"
+    r"|вне\s+(?:скоупа|scope)|добавь(?:те)?\s+.{0,40}\s(?:скоуп|scope))",
+    re.IGNORECASE,
+)
 # A turn that ends on a promise of action is a broken turn: nudge the model to
 # actually make the call instead of closing "completed". Bounded so a chatty
 # model cannot spend the whole budget on promises.
 _MAX_PROMISE_NUDGES = 2
+_MAX_REFUSAL_NUDGES = 1
 _MAX_GUARD_RETRIES = 4
 _REVIEWER_DRAIN_SECONDS = 3.0
 _REVIEWER_BATCH_MESSAGES = 40
@@ -484,6 +493,7 @@ class ChatController:
         _fresh_task_text: str | None
         _unstructured_shells: int
         _structure_nudged: bool
+        _plan_nudged: bool
         _drift_nudged: bool
         _drift_marks: Any
         _strategist_spawned_turn: bool
@@ -1041,6 +1051,7 @@ class ChatController:
         )
         prompt = self._append_constraints(prompt)
         prompt = self._append_frontier(prompt)
+        prompt = self._append_state(prompt)
         if self.operation is not None:
             # the operator doctrine: generic «you have a shell» prompts produced
             # crawler behaviour (HTB Lab never registered an account)
@@ -1104,6 +1115,53 @@ class ChatController:
         if not block:
             return prompt
         return f"{prompt}\n\n{self.translator.t('chat.frontier', block=block)}"
+
+    def _append_state(self, prompt: str) -> str:
+        """Authoritative operation records: targets, scope and current tasks.
+
+        Without this block the model learns that the operation has no targets
+        only after a tool refusal. Keep it bounded: it is orientation, not a
+        second copy of the plan or the whole scope journal.
+        """
+        if self.operation is None:
+            return prompt
+        try:
+            operation = self.service.get(self.operation.id)
+            scope = operation.scope
+            from samurai_ai.tui.killchain import scope_rows
+
+            targets = [row.rule for row in scope_rows(scope, ())]
+            plan = self.kernel.get_current_plan(operation.id)
+            tasks = [
+                f"{task.title if len(task.title) <= 120 else task.title[:117] + '...'} "
+                f"[{task.status.value}]"
+                for task in (plan.tasks if plan is not None else ())
+            ]
+        except Exception:  # noqa: BLE001 - orientation must not break a turn
+            return prompt
+
+        none = self.translator.t("chat.state-none")
+
+        def values(items: list[str], limit: int) -> str:
+            if not items:
+                return none
+            shown = ", ".join(items[:limit])
+            return f"{shown} … +{len(items) - limit}" if len(items) > limit else shown
+
+        empty = (
+            self.translator.t("chat.state-scope-empty")
+            if not scope.includes and not scope.hosts
+            else ""
+        )
+        block = self.translator.t(
+            "chat.operation-state",
+            targets=values(targets, 8),
+            includes=values(list(scope.includes), 8),
+            excludes=values(list(scope.excludes), 4),
+            tasks=values(tasks, 6),
+            scope_empty=empty,
+        )
+        return f"{prompt}\n\n{block}"
 
     def _finding_count(self) -> int:
         if self.operation is None:
@@ -1218,7 +1276,17 @@ class ChatController:
         to record the finding it just made — but a tool that belongs to a later
         stage does not need its full description on a recon turn.
         """
-        early = getattr(self, "_stage_label", "") in ("", "recon", "surface")
+        operation = getattr(self, "operation", None)
+        plan = None
+        if operation is not None:
+            try:
+                plan = self.kernel.get_current_plan(operation.id)
+            except Exception:  # noqa: BLE001 - missing plan must not hide tools
+                plan = None
+        early = (
+            getattr(self, "_stage_label", "") in ("", "recon", "surface")
+            and (operation is None or plan is not None)
+        )
         specs = self._CHAT_TOOL_SPECS
         if early:
             specs = tuple(
@@ -1229,7 +1297,6 @@ class ChatController:
                 else spec
                 for spec in specs
             )
-        operation = getattr(self, "operation", None)
         if operation is not None:
             try:
                 experiment = self.experiments.state(operation.id)
@@ -1328,6 +1395,19 @@ class ChatController:
     def _note_structure_written(self) -> None:
         """A fact, intent or finding re-arms the bare-shell counter."""
         self._unstructured_shells = 0
+
+    def _maybe_nudge_initial_plan(self) -> None:
+        """After the first useful result, make the empty TASKS board actionable."""
+        if self.operation is None or self._plan_nudged:
+            return
+        try:
+            if self.kernel.get_current_plan(self.operation.id) is not None:
+                return
+        except Exception:  # noqa: BLE001 - a plan hint must not break a result
+            return
+        self._plan_nudged = True
+        self._write_dim(self.translator.t("chat.plan-nudge"))
+        self._steer_queue.append(SteerItem(self.translator.t("chat.plan-note")))
 
     def _note_local_drift(self, command: str) -> None:
         """Repeated reads of local paths outside the workspace are drift."""
@@ -2332,6 +2412,7 @@ class ChatController:
         self._handoff_failed = False
         self._unstructured_shells = 0
         self._structure_nudged = False
+        self._plan_nudged = False
         self._drift_marks.clear()
         self._drift_nudged = False
         self._strategist_spawned_turn = False
@@ -2375,6 +2456,7 @@ class ChatController:
             or current_goal.block_reason == "finalization_required"
         )
         promise_nudges = 0
+        refusal_nudges = 0
         completion_judges = 0
         hypothesis_nudges = 0
         tool_calls_made = 0
@@ -2394,9 +2476,18 @@ class ChatController:
                     findings_at_start,
                 )
             if current_goal is not None and current_goal.block_reason == "finalization_required":
-                # Waiting for the operator is process-free: even a new prompt
-                # must not silently buy another model round.
-                return self._block_finalization(operation_id)
+                if current_goal.exhausted:
+                    # A spent goal budget still needs `/goal extend`; a chat
+                    # message must not silently buy another research allotment.
+                    return self._block_finalization(operation_id)
+                # A fresh operator message is an explicit decision to continue
+                # research with budget remaining. `/finalize resume` still
+                # enters the closing path before chat starts; this path returns
+                # the starved goal to work.
+                self.goals.resume(current_goal.id)
+                current_goal = self.goals.current(operation_id)
+                finalizing = False
+                self._write_dim(self.translator.t("chat.goal-resumed"), process=False)
             rounds_left -= 1
             self._drain_steering()
             self._drain_background()
@@ -2470,6 +2561,24 @@ class ChatController:
                     self._present_final_response(response)
                     continue
                 if not finalizing and self._continue_experiment(operation_id, response):
+                    continue
+                if (
+                    not finalizing
+                    and not tool_calls_made
+                    and refusal_nudges < _MAX_REFUSAL_NUDGES
+                    and _REFUSAL_RE.search(response.text or "")
+                ):
+                    refusal_nudges += 1
+                    self._present_final_response(response)
+                    self._write_dim(self.translator.t("chat.refusal-nudge"))
+                    self._remember(
+                        Message(
+                            role="user",
+                            content=self.translator.t(
+                                "chat.refusal-note", task=" ".join(text.split())[:300]
+                            ),
+                        )
+                    )
                     continue
                 if (
                     finalizing
@@ -2637,7 +2746,12 @@ class ChatController:
             self.goals.create(self.operation.id, derived)
 
     def _goal_requires_judgment(self, operation_id: str, tool_calls_made: int) -> bool:
-        """Explicit operation goals need proof; an incidental chat does not."""
+        """A researched target needs proof; an incidental chat does not.
+
+        Tool calls and explicit objectives always earn judgment. An adopted
+        goal with no calls earns it only when the task names a concrete target:
+        otherwise a simple "hello" would pay for a judge and a finalization.
+        """
         if tool_calls_made:
             return True
         operation = self.service.get(operation_id)
@@ -2645,8 +2759,12 @@ class ChatController:
             return True
         for event in reversed(self.service.repository.events(operation_id)):
             if event.event_type == "operation.goal.changed":
-                return not bool(event.payload.get("automatic", False))
-        return False
+                if not bool(event.payload.get("automatic", False)):
+                    return True
+                break
+        from samurai_ai.domain.scope_guard import text_hosts
+
+        return bool(text_hosts(operation.goal))
 
     def _mark_goal_reached(self, operation_id: str) -> None:
         """Persist the judge's STOP; readiness must survive leaving active view."""
@@ -3117,6 +3235,7 @@ class ChatController:
             includes=(*scope.includes, *valid), excludes=scope.excludes, hosts=scope.hosts
         )
         self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._forget_covered_refusals(updated)
         self._write_dim(
             self.translator.t("scope.extended", rules=", ".join(valid)), process=False
         )
@@ -3125,6 +3244,16 @@ class ChatController:
                 self._scope_event("include", target, "operator added it", author=author)
         self._refresh_chrome()
         return valid
+
+    def _forget_covered_refusals(self, scope: ScopeContract) -> None:
+        """A scope change reopens refused targets that are now authorized.
+
+        Declined targets stay declined; caching an old refusal after the
+        operator or analyst added the rule made a valid retry impossible.
+        """
+        self._scope_declined = {
+            key for key in self._scope_declined if not scope.evaluate(key[1]).allowed
+        }
 
     def _chat_adapter(self, tool_id: str) -> Any:
         """The adapter for a tool id, or None when the catalogue has no such tool."""
@@ -4350,6 +4479,8 @@ class ChatController:
         exit_code = result.run.exit_code
         self._progress.last_stuck = None if self._graph_used else self._progress.record(command)
         failed = exit_code not in (0, None)
+        if not failed:
+            self._maybe_nudge_initial_plan()
         if self._exec_quiet is None:
             # quiet in the real interactive app, a block per run under a headless
             # drive so existing per-run assertions keep holding

@@ -590,6 +590,13 @@ def scope_relatedness(
         return []
     reasons: list[str] = []
     address = parsed.address
+    if goal and re.search(
+        rf"(?<![a-z0-9.-]){re.escape(parsed.host)}(?![a-z0-9.-])", goal.lower()
+    ):
+        # An operation's first target has no existing rule to be related to.
+        # The operator's own goal is the authorization signal; exclusions still
+        # win in the caller and the analyst/budget still bound the widening.
+        reasons.append("named in the operation goal")
     if address is not None:
         for rule in scope.includes:
             try:

@@ -449,6 +449,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "chat.filesystem-denied": (
             "filesystem scope denied: {paths}; use /tmp or /var/tmp for scratch"
         ),
+        "chat.state-none": "(none)",
+        "chat.operation-state": (
+            "Current operation state, from harness records:\n"
+            "TARGETS: {targets}\n"
+            "SCOPE include: {includes}\n"
+            "SCOPE exclude: {excludes}\n"
+            "TASKS: {tasks}{scope_empty}"
+        ),
+        "chat.state-scope-empty": (
+            "\nSCOPE is empty: add the target named in the task with add_scope "
+            "before working it. A refusal before that is the boundary working, "
+            "not a reason to stop the investigation."
+        ),
         "chat.doctrine": (
             "Work the target like an operator, not a crawler: when a "
             "registration form exists, register and log in; after logging in "
@@ -476,6 +489,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "You have made many shell calls without recording anything. Stop and "
             "fix the state: record every confirmed fact with record_fact, open "
             "the next testable direction with open_intent, then continue."
+        ),
+        "chat.plan-nudge": "[progress] no plan tasks — record the next checks",
+        "chat.plan-note": (
+            "TASKS is empty. Record 2-4 concrete next checks with propose_plan "
+            "now, then continue the investigation; do not stop to restate this plan."
         ),
         "chat.drift-nudge": (
             "[progress] commands keep reading local paths outside the workspace — "
@@ -516,6 +534,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "You described an action instead of performing it. Do it now: "
             "make the actual tool call, do not narrate intentions."
         ),
+        "chat.refusal-nudge": "[nudge] the answer stopped early; retrying the original task",
+        "chat.refusal-note": (
+            "Continue the original authorized request: {task}. Make the next "
+            "concrete tool call now. For an empty SCOPE, first call add_scope "
+            "with the target named in the request, then gather evidence."
+        ),
+        "chat.goal-resumed": "[goal] operator continued the investigation",
         "chat.settle-prompt": (
             "[wrap-up] rounds are spent. Record what this turn established with "
             "record_fact (and close_intent) — or with memory_learn when no intent "
@@ -797,7 +822,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "strategist.spawned": "[strategist] new fact — reviewing vectors (run {run})",
         "newop.title": "New operation tab",
         "newop.name": "operation name",
-        "newop.scope": "scope includes, comma-separated (empty = 127.0.0.1/32)",
+        "newop.scope": "scope includes, comma-separated (empty = fully denied)",
         "newop.created": "new operation tab: {name} ({mode})",
         "goal.current": "[goal] {goal}",
         "goal.empty": "[goal] no completion condition set",
@@ -1451,6 +1476,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.tool-denied": "отклонено оператором: {command}",
         "chat.filesystem-denied": "filesystem scope denied: {paths}; scratch — /tmp или /var/tmp",
+        "chat.state-none": "(нет)",
+        "chat.operation-state": (
+            "Текущее состояние операции по записям harness:\n"
+            "TARGETS: {targets}\n"
+            "SCOPE include: {includes}\n"
+            "SCOPE exclude: {excludes}\n"
+            "TASKS: {tasks}{scope_empty}"
+        ),
+        "chat.state-scope-empty": (
+            "\nSCOPE пуст: сначала добавь цель из задачи через add_scope. "
+            "Отказ до этого означает работающую границу, а не причину "
+            "прекращать исследование."
+        ),
         "chat.doctrine": (
             "Работай цель как оператор, а не как краулер: есть форма регистрации — "
             "зарегистрируйся и залогинься; после логина перечисли, что изменилось; "
@@ -1477,6 +1515,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Много вызовов shell без единой записи. Остановись и зафиксируй "
             "состояние: подтверждённые факты — через record_fact, следующее "
             "проверяемое направление — через open_intent, затем продолжай."
+        ),
+        "chat.plan-nudge": "[прогресс] задач в плане нет — зафиксируй следующие проверки",
+        "chat.plan-note": (
+            "TASKS пуст. Сейчас зафиксируй 2-4 конкретные следующие проверки "
+            "через propose_plan и продолжай исследование, не пересказывая план."
         ),
         "chat.drift-nudge": (
             "[прогресс] команды всё читают локальные пути вне рабочей папки — "
@@ -1517,6 +1560,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "Ты описал действие вместо того, чтобы его выполнить. Сделай это сейчас: "
             "реальный вызов инструмента, без описания намерений."
         ),
+        "chat.refusal-nudge": "[напоминание] ответ остановился рано — повторяю исходную задачу",
+        "chat.refusal-note": (
+            "Продолжай исходный авторизованный запрос: {task}. Сделай следующий "
+            "конкретный вызов инструмента. Если SCOPE пуст, сначала вызови "
+            "add_scope с целью из запроса, затем собирай доказательства."
+        ),
+        "chat.goal-resumed": "[цель] оператор продолжил исследование",
         "chat.tool-exit": "код выхода {code}",
         "inspect.unknown": "{kind} {ref} уже нет — показать нечего",
         "inspect.more": "Enter — подробнее",
@@ -1799,7 +1849,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "strategist.spawned": "[стратег] новый факт — пересмотр векторов (run {run})",
         "newop.title": "Новая вкладка операции",
         "newop.name": "название операции",
-        "newop.scope": "скоуп через запятую (пусто = только 127.0.0.1/32)",
+        "newop.scope": "скоуп через запятую (пусто = всё запрещено)",
         "newop.created": "новая вкладка операции: {name} ({mode})",
         "trust.title": (
             "Довериться директории? Samurai AI выполняет команды здесь от вашего пользователя."

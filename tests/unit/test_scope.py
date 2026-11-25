@@ -303,3 +303,9 @@ def test_scope_relatedness_signals_the_moderate_boundary() -> None:
     # an unrelated target has no signal
     assert scope_relatedness(scope, "example.com") == []
     assert scope_relatedness(scope, "203.0.113.4") == []
+    # the first target of a new operation is authorized by its own goal
+    empty = ScopeContract(includes=())
+    assert scope_relatedness(
+        empty, "example.co.uk", goal="research https://example.co.uk"
+    ) == ["named in the operation goal"]
+    assert scope_relatedness(empty, "unrelated.dev", goal="research example.co.uk") == []

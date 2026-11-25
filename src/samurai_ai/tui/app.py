@@ -513,6 +513,7 @@ class SamuraiApp(
         self._scope_auto_spent = 0
         self._unstructured_shells = 0
         self._structure_nudged = False
+        self._plan_nudged = False
         self._drift_marks: deque[bool] = deque(maxlen=8)
         self._drift_nudged = False
         self._strategist_spawned_turn = False
@@ -1771,6 +1772,7 @@ class SamuraiApp(
             )
             note = self.translator.t("scope.rule-excluded", rule=rule)
         self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._forget_covered_refusals(updated)
         if rule in scope.excludes:
             self._scope_event("include", rule, "operator restored it", author="operator")
         else:
@@ -3655,6 +3657,7 @@ class SamuraiApp(
             self._write_line(f"[scope] {exc}")
             return
         self.operation = self.service.replace_scope(self.operation.id, updated)
+        self._forget_covered_refusals(updated)
         self._write_dim(
             self.translator.t(
                 "scope.edited",

@@ -22,6 +22,28 @@
         "max_transport_failures": 0
       },
       "difficulty": "easy"
+    },
+    {
+      "id": "empty-scope-url-bootstrap",
+      "title": "Первый URL задачи авторизует пустую операцию и запускает веб-разведку",
+      "note": "Перед прогоном подними офлайн-сервер: python3 -m http.server 8000 --bind 127.0.0.1. --host не передавать: сценарий проверяет именно bootstrap из текста задачи.",
+      "mode": "bug-bounty",
+      "objective": "Исследуй веб-ресурс http://127.0.0.1:8000. Зафиксируй задачи, проверь ответ сервера и корневой индекс, запиши подтверждённые факты с артефактами. Не выходи за пределы этого origin.",
+      "finish_line": "127.0.0.1 добавлен в SCOPE из первого сообщения, план непуст, получен HTTP-ответ с артефактом и нет transport-отказов по scope",
+      "scope_includes": [],
+      "probe": {
+        "port": 8000,
+        "timeout_seconds": 5.0
+      },
+      "limits": {
+        "steps": 16,
+        "seconds": 600,
+        "stretches": 2,
+        "max_wall_seconds": 900.0,
+        "max_failed_rate": 0.25,
+        "max_transport_failures": 0
+      },
+      "difficulty": "easy"
     }
   ]
 }

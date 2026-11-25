@@ -9,7 +9,6 @@ without flags still reads as a campaign instead of an empty rail.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -18,6 +17,7 @@ from samurai_ai.domain.graph import NodeKind, NodeState
 from samurai_ai.domain.kernel import PlanTask, TaskStatus
 from samurai_ai.domain.operations import OperationMode
 from samurai_ai.domain.scope import ScopeContract
+from samurai_ai.domain.scope_guard import text_host_spans, text_hosts
 
 #: Fallback chains, cheap stage first. `None` in CTF means "flags, if any".
 _CHAINS: dict[OperationMode, tuple[str, ...]] = {
@@ -268,12 +268,6 @@ def nodes_to_payloads(nodes: Iterable[object]) -> list[dict[str, object]]:
     ]
 
 
-#: Anything that looks like a host worth naming in the side block.
-_HOST_RE = re.compile(
-    r"\b(?:\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9][a-z0-9.-]*\.(?:htb|local|lan|internal|com|net|io|org))\b",
-    re.IGNORECASE,
-)
-
 #: What level of access a fact reports, strongest last.
 _LEVEL_RE = (
     ("root", ("root", "uid=0", "system", "domain admin", "administrator")),
@@ -321,21 +315,20 @@ def access_rows(
     order = {"read": 0, "user": 1, "root": 2}
     for entry in facts:
         text, node_id = entry if isinstance(entry, tuple) else (entry, "")
-        matches = list(_HOST_RE.finditer(text))
+        matches = text_host_spans(text)
         if not matches:
             continue
-        for index, match in enumerate(matches):
-            host = match.group(0)
+        for index, (host, start, _host_end) in enumerate(matches):
             if scope is not None and not scope.evaluate(host).allowed:
                 continue
-            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            fragment = text[max(0, match.start() - 24):end].lower()
+            end = matches[index + 1][1] if index + 1 < len(matches) else len(text)
+            fragment = text[max(0, start - 24):end].lower()
             level = next(
                 (name for name, markers in _LEVEL_RE
                  if any(m in fragment for m in markers)),
                 "read",
             )
-            note = text[max(0, match.start() - 24):end].strip()[:80]
+            note = text[max(0, start - 24):end].strip()[:80]
             previous = found.get(host)
             if previous is None or order[level] > order[previous.level]:
                 found[host] = AccessRow(host, level, note, node_id)
@@ -355,23 +348,12 @@ def attack_map(rows: Iterable[AccessRow]) -> list[str]:
 
 def hosts_in(texts: Iterable[str]) -> set[str]:
     """Every host named anywhere in the texts, lower-cased."""
-    found: set[str] = set()
-    for text in texts:
-        for match in _HOST_RE.finditer(text):
-            found.add(match.group(0).lower())
-    return found
+    return {host for text in texts for host in text_hosts(text)}
 
 
 def hosts_mentioned(text: str) -> list[str]:
     """Hosts in first-mention order — for presenting a task's targets."""
-    found: list[str] = []
-    seen: set[str] = set()
-    for match in _HOST_RE.finditer(text):
-        host = match.group(0).lower()
-        if host not in seen:
-            seen.add(host)
-            found.append(host)
-    return found
+    return text_hosts(text)
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from samurai_ai.domain.execution import ToolScopeError
-from samurai_ai.domain.scope import ScopeContract, ScopeDecision
+from samurai_ai.domain.scope import ScopeContract, ScopeDecision, ScopeValidationError
 from samurai_ai.domain.url_scheme import HTTP_SCHEMES
 
 #: real top-level domains. The loose "letters after a dot" rule called
@@ -32,6 +32,13 @@ _TLDS = frozenset(
     """.split()
 )
 _DOMAIN = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63})\Z", re.I)
+#: Free-form task text is not a command line: pull host-shaped words out first,
+#: then let the scope parser and the TLD/file rules decide whether they count.
+_TEXT_HOST = re.compile(
+    r"(?<![a-z0-9_-])(?:\d{1,3}(?:\.\d{1,3}){3}|"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})(?![a-z0-9_-])",
+    re.I,
+)
 
 
 def _known_tld(value: str) -> bool:
@@ -208,6 +215,37 @@ def _looks_like_file(token: str) -> bool:
         return False
     _, _, suffix = token.rpartition(".")
     return bool(suffix) and suffix.lower() in _FILE_EXTENSIONS
+
+
+def text_host_spans(text: str) -> list[tuple[str, int, int]]:
+    """Concrete hosts named by free-form prose, with their source spans.
+
+    Task targets and the TARGETS panel need the same answer as the execution
+    guard. A short hard-coded TLD list used to make `target.dev` and
+    `example.co.uk` invisible before the guard ever saw them. Scope parsing
+    still validates every candidate; file-shaped words are not destinations.
+    """
+    found: list[tuple[str, int, int]] = []
+    for match in _TEXT_HOST.finditer(text):
+        candidate = match.group(0).lower()
+        if _looks_like_file(candidate):
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            if not _known_tld(candidate):
+                continue
+        try:
+            normalized = ScopeContract(includes=(candidate,)).includes[0]
+        except ScopeValidationError:
+            continue
+        found.append((normalized, match.start(), match.end()))
+    return found
+
+
+def text_hosts(text: str) -> list[str]:
+    """Concrete hosts named by free-form prose, in first-mention order."""
+    return list(dict.fromkeys(host for host, _start, _end in text_host_spans(text)))
 
 
 def _tokens(text: str) -> list[str]:
