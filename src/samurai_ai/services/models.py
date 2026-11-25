@@ -58,6 +58,18 @@ class ProviderImpl(Protocol):
     async def complete(self, request: ChatRequest) -> ChatResponse: ...
 
 
+#: per-operation key policy (app setting ``model.key_policy.<operation>``)
+KEY_POLICY_PREFIX = "model.key_policy."
+KEY_POLICY_OWN = "own"
+KEY_POLICY_SHARED = "shared"
+#: where the credential of a call came from, as recorded on ``model.call``
+KEY_SCOPE_OPERATION = "operation"
+KEY_SCOPE_GLOBAL = "global"
+KEY_SCOPE_OAUTH = "oauth"
+KEY_SCOPE_LOCAL = "local"
+KEY_SCOPE_NONE = "none"
+
+
 class ModelService:
     def __init__(
         self,
@@ -323,11 +335,16 @@ class ModelService:
             reasoning_effort=reasoning_effort or self.default_reasoning_effort(),
         )
 
+        #: which credential each candidate ran on, for the bill (never the value)
+        key_scopes: dict[str, str] = {}
+
         async def invoke(candidate_id: str) -> ChatResponse:
             candidate_model, candidate_provider = await self._resolve_model_async(
                 candidate_id
             )
             self._check_budget(operation_id)
+            api_key, scope = self._resolve_key(candidate_provider, operation_id)
+            key_scopes[candidate_model.id] = scope
             return await self._complete(
                 candidate_provider,
                 ChatRequest(
@@ -342,6 +359,7 @@ class ModelService:
                 on_token=on_token,
                 should_stop=should_stop,
                 on_tool_delta=on_tool_delta,
+                api_key=api_key,
             )
 
         def on_fallback(from_model: str, to_model: str, reason: str) -> None:
@@ -371,6 +389,8 @@ class ModelService:
             "prompt_tokens": response.usage.prompt_tokens,
             "completion_tokens": response.usage.completion_tokens,
             "latency_ms": response.latency_ms,
+            # whose bill the call went on: operation, global, oauth, local, none
+            "key_scope": key_scopes.get(response.model_id, KEY_SCOPE_NONE),
             # cached prompt tokens bill at a discount the provider does not
             # disclose, so they are not charged at the full input rate
             "estimated_cost_usd": used_model.estimate_cost(
@@ -443,8 +463,9 @@ class ModelService:
         on_token: Callable[[str], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
         on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
+        api_key: str | None = None,
     ) -> ChatResponse:
-        impl = self._build_provider(provider)
+        impl = self._make_provider(provider, api_key)
         stream = getattr(impl, "complete_stream", None)
         if on_token is not None and stream is not None:
             supports_deltas = (
@@ -546,26 +567,80 @@ class ModelService:
             return 180.0
         return min(max(value, 10.0), 600.0)
 
-    def _build_provider(self, provider: ProviderDefinition) -> ProviderImpl:
-        timeout = self.request_timeout()
-        if self.provider_factory is not None:
-            return self.provider_factory(provider)
-        if provider.api_family is ApiFamily.OLLAMA:
-            return OllamaProvider(provider)
-        api_key: str | None = None
+    def requires_own_key(self, operation_id: str) -> bool:
+        """Whether this operation may only bill model calls to its own key."""
+        if self.settings is None or not operation_id:
+            return False
+        return self.settings.get_setting(f"{KEY_POLICY_PREFIX}{operation_id}") == KEY_POLICY_OWN
+
+    def set_key_policy(self, operation_id: str, *, require_own: bool) -> None:
+        self.operations.get(operation_id)
+        if self.settings is None:
+            raise ModelError("key policy persistence is not configured")
+        self.settings.set_setting(
+            f"{KEY_POLICY_PREFIX}{operation_id}",
+            KEY_POLICY_OWN if require_own else KEY_POLICY_SHARED,
+        )
+
+    def _resolve_key(
+        self, provider: ProviderDefinition, operation_id: str | None
+    ) -> tuple[str | None, str]:
+        """The credential for a call and where it came from.
+
+        Precedence: the operation's own key (the most specific, and the one
+        that keeps the bill separate), then a device-login token, then the
+        shared global key. Under the "own key" policy only the first is
+        accepted for a paid provider: silently falling back would put the
+        call on someone else's bill.
+        """
+        if provider.api_family is ApiFamily.OLLAMA or provider.local:
+            return None, KEY_SCOPE_LOCAL
+        if provider.secret_name and operation_id:
+            own = self.vault.get_own(provider.secret_name, operation_id)
+            if own:
+                return own, KEY_SCOPE_OPERATION
+        if operation_id and self.requires_own_key(operation_id):
+            name = provider.secret_name or f"{provider.id}-api-key"
+            raise ProviderUnavailableError(
+                f"operation {operation_id} requires its own API key for provider "
+                f"{provider.id}; add it with 'samurai secret add {name} --stdin "
+                f"--operation {operation_id}'",
+                transient=False,
+                auth=True,
+            )
         token = self.oauth_token(provider.id)
         if token:
-            # a device-code login outranks a stored key for this provider
-            api_key = token
-        elif provider.secret_name:
+            return token, KEY_SCOPE_OAUTH
+        if provider.secret_name:
             try:
-                api_key = self.vault.get(provider.secret_name)
+                return self.vault.get(provider.secret_name), KEY_SCOPE_GLOBAL
             except SecretNotFoundError as exc:
+                if self.provider_factory is not None:
+                    # an injected client (tests, embedders) brings its own
+                    # transport and needs no stored key
+                    return None, KEY_SCOPE_NONE
                 raise ProviderUnavailableError(
                     f"API key for provider {provider.id} is not configured; "
                     f"add it with 'samurai secret add {provider.secret_name} --stdin'",
                     auth=True,
                 ) from exc
+        return None, KEY_SCOPE_NONE
+
+    def _build_provider(self, provider: ProviderDefinition) -> ProviderImpl:
+        """A client outside any operation (health, discovery): the shared key."""
+        if self.provider_factory is not None:
+            return self.provider_factory(provider)
+        if provider.api_family is ApiFamily.OLLAMA:
+            return OllamaProvider(provider)
+        api_key, _scope = self._resolve_key(provider, None)
+        return self._make_provider(provider, api_key)
+
+    def _make_provider(self, provider: ProviderDefinition, api_key: str | None) -> ProviderImpl:
+        timeout = self.request_timeout()
+        if self.provider_factory is not None:
+            return self.provider_factory(provider)
+        if provider.api_family is ApiFamily.OLLAMA:
+            return OllamaProvider(provider)
         if provider.api_family is ApiFamily.ANTHROPIC:
             return AnthropicProvider(provider, api_key, timeout=timeout)
         if provider.api_family is ApiFamily.GEMINI:

@@ -147,7 +147,7 @@ def fake_model(monkeypatch: pytest.MonkeyPatch) -> FakeProvider:
     monkeypatch.setattr(ModelRegistry, "get_provider", lambda self, provider_id: provider)
     monkeypatch.setattr(ModelRegistry, "get_model", lambda self, model_id: (model, provider))
     fake = FakeProvider()
-    monkeypatch.setattr(ModelService, "_build_provider", lambda self, _provider: fake)
+    monkeypatch.setattr(ModelService, "_make_provider", lambda self, _provider, _key: fake)
     return fake
 
 
