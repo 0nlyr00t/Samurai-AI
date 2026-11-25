@@ -24,6 +24,7 @@ class OperationReadiness(BaseModel):
     finalization_required: bool
     finalization_ready: bool
     eligible_fact_ids: tuple[str, ...]
+    missing_proof: tuple[str, ...] = ()
     pending_execution_ids: tuple[str, ...]
     pending_approval_ids: tuple[str, ...]
     budget_steps_left: int
@@ -113,6 +114,7 @@ class ReadinessService:
             ),
             finalization_ready=snapshot.ready_to_complete,
             eligible_fact_ids=snapshot.eligible_fact_ids,
+            missing_proof=snapshot.missing_proof,
             pending_execution_ids=snapshot.pending_execution,
             pending_approval_ids=snapshot.pending_approvals,
             budget_steps_left=snapshot.budget_steps_left,

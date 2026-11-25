@@ -182,3 +182,26 @@ def test_events_carry_the_state_and_goal_id(tmp_path) -> None:  # type: ignore[n
     ]
     assert paused[0]["goal_id"] == goal.id
     assert paused[0]["state"] == "paused"
+
+
+def test_sub_second_steps_still_spend_the_clock(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Frequent steps used to drop every fraction: 0.6 s × 5 counted as 0 s."""
+    service, _repo, _operations, operation = make_service(tmp_path)
+    goal = service.create(operation.id, "quick steps")
+    for _ in range(5):
+        service.clock.advance(0.6)  # type: ignore[attr-defined]
+        goal = service.record_step(goal.id)
+    assert goal.spent_seconds == 3
+
+
+def test_each_goal_keeps_its_own_clock(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, _repo, operations, operation = make_service(tmp_path)
+    other_op = operations.create(
+        "Other op", OperationMode.RED_TEAM, ScopeContract(includes=("example.org",))
+    )
+    first = service.create(operation.id, "first")
+    service.clock.advance(10)  # type: ignore[attr-defined]
+    second = service.create(other_op.id, "second")  # must not reset the first clock
+    service.clock.advance(5)  # type: ignore[attr-defined]
+    assert service.record_step(first.id).spent_seconds == 15
+    assert service.record_step(second.id).spent_seconds == 5

@@ -162,6 +162,8 @@ def _handle_readiness(args: argparse.Namespace, services: tuple[Any, ...]) -> in
         )
         for hypothesis_id in (*report.open_ids, *report.testing_ids):
             print(f"open\t{hypothesis_id}")
+        for missing in report.missing_proof:
+            print(f"missing-proof\t{missing}")
         print(
             f"terminal\t{report.terminal_reason or '-'}\t"
             f"runs={report.tool_runs} failed={report.failed_runs} "

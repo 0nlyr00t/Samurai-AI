@@ -504,6 +504,7 @@ class ToolExecutionService:
             summary=f"{run.tool_id} {'stdout' if is_stdout else 'stderr'} ({run.id})",
             task_id=run.task_id,
             created_by=f"tool:{run.tool_id}",
+            source_run_id=run.id,
         )
         return artifact.id
 

@@ -8,7 +8,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
-from samurai_ai.domain.graph import NodeKind, NodeState
+from samurai_ai.domain.evidence import (
+    artifact_is_bound,
+    fact_has_artifacts,
+    fact_is_positive,
+    fact_is_proven,
+)
+from samurai_ai.domain.graph import NodeKind
 from samurai_ai.domain.kernel import (
     Approval,
     ApprovalStateError,
@@ -239,10 +245,7 @@ class KernelService:
     def _task_has_positive_facts(self, task_id: str) -> bool:
         """Positive, artifact-backed facts contradict a no-finding verdict."""
         return any(
-            node.kind is NodeKind.FACT
-            and node.state is NodeState.CONFIRMED
-            and node.payload.get("result", "success") != "negative"
-            and bool(node.payload.get("artifact_ids"))
+            fact_is_positive(node) and fact_has_artifacts(node)
             for node in self.graph.for_task(task_id)
         )
 
@@ -261,19 +264,17 @@ class KernelService:
         )
 
     def _task_has_evidence(self, operation_id: str, task_id: str) -> bool:
-        """Any artifact of this task, or a finding one of them proves."""
-        own = [
-            artifact.id
+        """A bound artifact of this task, or a confirmed fact in its graph.
+
+        An artifact the agent imported without a run behind it is a claim, and
+        another task's finding says nothing about this one.
+        """
+        if any(
+            artifact.task_id == task_id and artifact_is_bound(artifact)
             for artifact in self.kernel.list_artifacts(operation_id)
-            if artifact.task_id == task_id
-        ]
-        if own:
+        ):
             return True
-        return any(
-            finding.evidence_ids
-            for finding in self.kernel.list_findings(operation_id)
-            if set(finding.evidence_ids)
-        )
+        return any(fact_is_proven(node) for node in self.graph.for_task(task_id))
 
     def reset_task(self, operation_id: str, task_id: str) -> OperationPlan:
         """Return a task to pending: after a stopped subagent, or to redo it."""
@@ -429,6 +430,7 @@ class KernelService:
         created_by: str = "system",
         data: bytes | None = None,
         extension: str = "txt",
+        source_run_id: str | None = None,
     ) -> Artifact:
         """Register evidence. ``data`` carries binary evidence (a PDF, an image)."""
         self.operations.get(operation_id)
@@ -463,6 +465,7 @@ class KernelService:
             size_bytes=len(payload),
             path=relative_path,
             created_by=created_by,
+            source_run_id=source_run_id,
         )
         directory = self.kernel.artifact_root / operation_id
         directory.mkdir(parents=True, exist_ok=True)

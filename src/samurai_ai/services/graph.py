@@ -1,8 +1,10 @@
 """Exploration graph service: the invariants the model cannot talk its way past.
 
 Every rule in `md/exploration-graph.md` is a check here, not a prompt line: a
-fact needs an intent that was actually running, a `done` intent needs a fact, a
-finding needs a fact that carries an artifact, a task cannot close over open
+fact needs an intent that was actually running, a `done` intent needs a
+confirmed fact (one backed by a traceable run or artifact, see
+`domain/evidence.py` — a bare sentence stays a claim), a finding needs a fact
+that carries an artifact, a task cannot close over open
 intents. State moves are compare-and-set, so an operator pressing stop while the
 model works comes back to the model as text instead of being overwritten.
 """
@@ -11,6 +13,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from samurai_ai.domain.evidence import (
+    artifact_is_bound,
+    fact_is_proven,
+    fact_state,
+    run_is_proof,
+)
 from samurai_ai.domain.graph import (
     FACT_SUMMARY_MAX,
     FRONTIER_MAX_CHARS,
@@ -31,6 +39,7 @@ from samurai_ai.domain.graph import (
 from samurai_ai.domain.operations import OperationEvent
 from samurai_ai.services.kernel import KernelService
 from samurai_ai.services.operations import OperationService
+from samurai_ai.storage.execution import ToolRunRepository
 from samurai_ai.storage.graph import GraphRepository
 
 
@@ -48,6 +57,7 @@ class GraphService:
         self.operations = operations
         self.kernel = kernel
         self.graph = graph
+        self.runs = ToolRunRepository(operations.repository.database)
 
     # --- reading ----------------------------------------------------------
 
@@ -103,9 +113,11 @@ class GraphService:
         ]
         hints = active + spent
         open_intents = [n for n in nodes if n.open]
-        facts = [n for n in nodes if n.kind is NodeKind.FACT and n.state is NodeState.CONFIRMED][
-            -3:
-        ]
+        facts = [
+            n
+            for n in nodes
+            if n.kind is NodeKind.FACT and n.state in (NodeState.CONFIRMED, NodeState.CLAIMED)
+        ][-3:]
         if not (hints or open_intents or facts):
             return ""
         lines: list[str] = []
@@ -124,7 +136,7 @@ class GraphService:
             lines.append("latest results:")
             lines += [
                 f"- {node.text('summary')[:200]}"
-                f"{'' if node.payload.get('artifact_ids') else ' (no artifact)'}"
+                f"{' (claim: cite a run or artifact)' if node.state is NodeState.CLAIMED else ''}"
                 for node in facts
             ]
         text = "\n".join(lines)
@@ -163,10 +175,14 @@ class GraphService:
         if not title:
             raise GraphInvariantError("an intent needs a title")
         parent = self._require(parent_fact_id, operation_id, task_id)
-        confirmed_fact = parent.kind is NodeKind.FACT and parent.state is NodeState.CONFIRMED
-        if not confirmed_fact and parent.kind is not NodeKind.ORIGIN:
+        # a claim is a lead worth following; it just cannot close anything
+        live_fact = parent.kind is NodeKind.FACT and parent.state in (
+            NodeState.CONFIRMED,
+            NodeState.CLAIMED,
+        )
+        if not live_fact and parent.kind is not NodeKind.ORIGIN:
             raise GraphInvariantError(
-                f"intent must hang on a confirmed fact or the task origin, {parent.id} is "
+                f"intent must hang on a recorded fact or the task origin, {parent.id} is "
                 f"{parent.kind.value}/{parent.state.value}"
             )
         if self.graph.count_intents(task_id) >= MAX_INTENTS_PER_TASK:
@@ -207,10 +223,18 @@ class GraphService:
             raise GraphInvariantError(f"unknown outcome {outcome!r}") from exc
         if target not in (NodeState.DONE, NodeState.BLOCKED, NodeState.EXHAUSTED):
             raise GraphInvariantError("an intent closes as done, blocked or exhausted")
-        if target is NodeState.DONE and not self.graph.targets(node.id, EdgeRel.YIELDS.value):
-            raise GraphInvariantError(
-                f"intent {node.id} has no fact yet — record one before closing it as done"
-            )
+        if target is NodeState.DONE:
+            facts = self.graph.targets(node.id, EdgeRel.YIELDS.value)
+            if not facts:
+                raise GraphInvariantError(
+                    f"intent {node.id} has no fact yet — record one before closing it as done"
+                )
+            if not any(fact.state is NodeState.CONFIRMED for fact in facts):
+                raise GraphInvariantError(
+                    f"intent {node.id} has only claimed facts — record one that cites the "
+                    "run_ids or artifact_ids proving it, or close it as blocked/exhausted "
+                    "with a reason"
+                )
         if target is not NodeState.DONE and not reason.strip():
             raise GraphInvariantError(f"closing {node.id} as {target.value} needs a reason")
         return self._move(node, target, reason=reason.strip() or None, completed=True)
@@ -235,8 +259,15 @@ class GraphService:
         artifact_ids: tuple[str, ...] = (),
         *,
         negative: bool = False,
+        run_ids: tuple[str, ...] = (),
     ) -> GraphNode:
-        """Attach a result to a running intent; artifacts are validated against the operation."""
+        """Attach a result to a running intent.
+
+        Artifacts and runs are validated against the operation. The fact is
+        ``confirmed`` only when a cited run actually executed or a cited artifact
+        is bound to the harness (a tool wrote it, the operator supplied it);
+        otherwise it is recorded as a ``claimed`` lead that cannot close an intent.
+        """
         intent = self.get(node_id)
         if intent.kind is not NodeKind.INTENT:
             raise GraphInvariantError(f"{intent.id} is a {intent.kind.value}, not an intent")
@@ -249,18 +280,35 @@ class GraphService:
             raise GraphInvariantError("a fact needs a summary")
         if len(artifact_ids) > MAX_ARTIFACT_REFS:
             raise GraphLimitError(f"at most {MAX_ARTIFACT_REFS} artifacts per fact")
-        known = {artifact.id for artifact in self.kernel.kernel.list_artifacts(intent.operation_id)}
+        if len(run_ids) > MAX_ARTIFACT_REFS:
+            raise GraphLimitError(f"at most {MAX_ARTIFACT_REFS} runs per fact")
+        known = {
+            artifact.id: artifact
+            for artifact in self.kernel.kernel.list_artifacts(intent.operation_id)
+        }
         unknown = [artifact_id for artifact_id in artifact_ids if artifact_id not in known]
         if unknown:
             raise GraphInvariantError(f"unknown artifacts: {', '.join(unknown)}")
+        proof_runs: list[str] = []
+        for run_id in dict.fromkeys(run_ids):
+            run = self.runs.get_run(run_id)
+            if run is None or run.operation_id != intent.operation_id:
+                raise GraphInvariantError(f"unknown run: {run_id}")
+            if not run_is_proof(run, intent.operation_id):
+                raise GraphInvariantError(
+                    f"run {run_id} is {run.status.value}; only a finished run proves a fact"
+                )
+            proof_runs.append(run_id)
+        bound = sum(1 for artifact_id in artifact_ids if artifact_is_bound(known[artifact_id]))
         node = GraphNode(
             operation_id=intent.operation_id,
             task_id=intent.task_id,
             kind=NodeKind.FACT,
-            state=NodeState.CONFIRMED,
+            state=fact_state(bound_artifacts=bound, proof_runs=len(proof_runs)),
             payload={
                 "summary": summary,
                 "artifact_ids": list(artifact_ids),
+                "run_ids": proof_runs,
                 "result": "negative" if negative else "success",
             },
         )
@@ -274,7 +322,7 @@ class GraphService:
     def attach_finding(self, fact_id: str, finding_id: str) -> GraphNode:
         """A finding proves a fact, and only a fact with an artifact can carry it."""
         fact = self.get(fact_id)
-        if fact.kind is not NodeKind.FACT or fact.state is not NodeState.CONFIRMED:
+        if not fact_is_proven(fact):
             raise GraphInvariantError(
                 f"a finding hangs on a confirmed fact, {fact.id} is "
                 f"{fact.kind.value}/{fact.state.value}"

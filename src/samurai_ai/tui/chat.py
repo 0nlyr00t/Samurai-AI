@@ -34,6 +34,8 @@ from samurai_ai.agents.provider import (
     ToolCallDelta,
     ToolSpec,
 )
+from samurai_ai.domain.completion import CompletionCriterion, CompletionDecision
+from samurai_ai.domain.completion import decide as decide_completion
 from samurai_ai.domain.execution import (
     ApprovalRequiredError,
     SecretRedactor,
@@ -162,6 +164,15 @@ _REVIEWER_BATCH_CHARS = 24_000
 #: exists gets judged before it may end; this many times per turn at most
 _MAX_COMPLETION_JUDGES = 2
 _MAX_HYPOTHESIS_NUDGES = 2
+
+
+def _id_list(raw: object) -> tuple[str, ...]:
+    """A model-supplied id array, tolerant of a single string or junk items."""
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list | tuple):
+        return ()
+    return tuple(str(item).strip() for item in raw if str(item).strip())
 
 
 @dataclass(frozen=True)
@@ -664,7 +675,9 @@ class ChatController:
             description=(
                 "Import an existing evidence file from the trusted workspace or scratch. "
                 "The file is size-checked, text is redacted, and the returned artifact_id "
-                "can be passed to record_fact or propose_finding."
+                "can be passed to record_fact or propose_finding. Without source_run_id "
+                "the file is only your claim; name the finished run that wrote it to "
+                "make it evidence."
             ),
             parameters={
                 "type": "object",
@@ -676,6 +689,7 @@ class ChatController:
                     },
                     "summary": {"type": "string", "maxLength": 500},
                     "task_id": {"type": "string"},
+                    "source_run_id": {"type": "string"},
                 },
                 "required": ["path"],
                 "additionalProperties": False,
@@ -686,7 +700,8 @@ class ChatController:
             description=(
                 "Atomically record one result and close its existing intent. Use this "
                 "during finalization instead of separate record_fact/close_intent calls. "
-                "Optionally attach a finding to the new artifact-backed fact."
+                "Optionally attach a finding to the new artifact-backed fact. "
+                "`done` needs proof: cite run_ids or bound artifact_ids."
             ),
             parameters={
                 "type": "object",
@@ -697,6 +712,13 @@ class ChatController:
                         "type": "array",
                         "items": {"type": "string"},
                         "maxItems": 8,
+                    },
+                    "run_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 8,
+                        "description": "Finished tool runs (the run=… id in a tool result) "
+                        "that prove the result.",
                     },
                     "outcome": {"type": "string", "enum": ["done", "blocked", "exhausted"]},
                     "reason": {"type": "string", "maxLength": 500},
@@ -715,9 +737,10 @@ class ChatController:
         ToolSpec(
             name="record_fact",
             description=(
-                "Record what an intent produced. Pass the artifact ids that prove it — "
-                "a fact without an artifact is a claim. `result=negative` is for a "
-                "checked-and-empty direction."
+                "Record what an intent produced. Cite the run_ids or artifact_ids that "
+                "prove it — without them the fact is stored as a claim and cannot close "
+                "the intent as done. `result=negative` is for a checked-and-empty "
+                "direction (cite the run that checked it)."
             ),
             parameters={
                 "type": "object",
@@ -728,6 +751,13 @@ class ChatController:
                         "type": "array",
                         "items": {"type": "string"},
                         "maxItems": 8,
+                    },
+                    "run_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 8,
+                        "description": "Finished tool runs (the run=… id in a tool result) "
+                        "that prove the result.",
                     },
                     "result": {"type": "string", "enum": ["success", "negative"]},
                 },
@@ -2271,6 +2301,11 @@ class ChatController:
                 )
                 return None
 
+    def _goal_finalizing(self, operation_id: str) -> bool:
+        """The stored goal entered the closing path (its step cap tripped)."""
+        goal = self.goals.current(operation_id)
+        return goal is not None and goal.state is GoalState.FINALIZING
+
     def _enter_finalization(self, operation_id: str) -> bool:
         goal = self.goals.current(operation_id)
         if goal is None:
@@ -2355,7 +2390,14 @@ class ChatController:
         self._write_domain_summary(operation_id)
         if self._goal_requires_judgment(operation_id, 1):
             verdict = await self._judge_goal(operation_id, model_id)
-            if verdict != goal_judge.STOP:
+            decision = decide_completion(verdict, self._missing_proof(operation_id))
+            if decision is not CompletionDecision.COMPLETE:
+                # a collapsed run explains itself better than missing proof
+                if decision is CompletionDecision.UNPROVEN and self._completion_reason(
+                    operation_id, runs_at_start, findings_at_start
+                ) is TerminalReason.COMPLETED:
+                    # remembered: the next turn must know what proof is missing
+                    self._report_unproven(operation_id, remember=True)
                 return self._block_finalization(operation_id)
         reason = self._completion_reason(operation_id, runs_at_start, findings_at_start)
         if reason is TerminalReason.COMPLETED:
@@ -2492,6 +2534,19 @@ class ChatController:
             self._drain_steering()
             self._drain_background()
             self._count_goal_step()
+            if not finalizing and self._goal_finalizing(operation_id):
+                # the step cap tripped mid-turn: the research budget is spent,
+                # so the turn takes the bounded closing path right away instead
+                # of handing the model another round of research tools
+                finalizing = True
+                return await self._finish_finalization(
+                    operation_id,
+                    model_id,
+                    reasoning,
+                    None,
+                    runs_at_start,
+                    findings_at_start,
+                )
             tools = self._finalization_tool_specs() if finalizing else self._tool_specs()
             try:
                 response = await self._request_chat_completion(
@@ -2618,15 +2673,25 @@ class ChatController:
                     # judge may agree, otherwise the turn ends on a promise
                     completion_judges += 1
                     verdict = await self._judge_goal(operation_id, model_id)
-                    if verdict == goal_judge.STOP:
+                    decision = decide_completion(verdict, self._missing_proof(operation_id))
+                    if decision in (
+                        CompletionDecision.COMPLETE,
+                        CompletionDecision.UNPROVEN,
+                    ):
                         reason = self._completion_reason(
                             operation_id, runs_at_start, findings_at_start
                         )
-                        if reason is TerminalReason.COMPLETED:
-                            self._mark_goal_reached(operation_id)
-                            self._write_dim(self.translator.t("chat.goal-met"))
+                        if reason is not TerminalReason.COMPLETED:
+                            return reason
+                        if decision is CompletionDecision.UNPROVEN:
+                            # the judge agreed, the store does not: the model
+                            # must record the proof (or keep working), not sign off
+                            self._report_unproven(operation_id, remember=True)
+                            continue
+                        self._mark_goal_reached(operation_id)
+                        self._write_dim(self.translator.t("chat.goal-met"))
                         return reason
-                    if verdict is None:
+                    if decision is CompletionDecision.UNAVAILABLE:
                         # an unavailable judge must not invent goal completion
                         if not self.goals.reached(operation_id):
                             return TerminalReason.BLOCKED
@@ -2683,41 +2748,6 @@ class ChatController:
             if self._finding_count() > findings_before:
                 findings_before = self._finding_count()
                 self._progress.finding_seen()
-        # every stretch is spent without the model concluding: one closing answer
-        try:
-            final = await self._request_chat_completion(
-                operation_id, model_id, reasoning, (), guard_rules=True
-            )
-        except GuardBlockedError:
-            self._write_dim(self.translator.t("guard.blocked"), process=False)
-            return TerminalReason.BLOCKED
-        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
-            self._write_line(f"[error] {exc}")
-            return TerminalReason.MODEL_ERROR
-        if final is None:
-            return TerminalReason.DENIED
-        self._count_usage(final.usage)
-        self._add_cost(
-            model_id,
-            final.usage.prompt_tokens,
-            final.usage.completion_tokens,
-            final.usage.cached_tokens,
-        )
-        self._remember(Message(role="assistant", content=final.text))
-        self._trim_chat_history()
-        if final.text.strip():
-            self._write_ai_message(final)
-        if self._stop_requested:
-            return TerminalReason.CANCELLED
-        if not self._hypothesis_coverage(operation_id).complete:
-            return self._completion_reason(operation_id, runs_at_start, findings_at_start)
-        if (
-            self._operation_goal(operation_id)
-            and self._goal_requires_judgment(operation_id, tool_calls_made)
-            and not self.goals.reached(operation_id)
-        ):
-            return TerminalReason.BLOCKED
-        return TerminalReason.ROUNDS
 
 
     def _adopt_goal(self, text: str) -> None:
@@ -2780,9 +2810,28 @@ class ChatController:
         except Exception:  # noqa: BLE001 - no operation means no goal
             return ""
 
+    def _completion_criterion(self, operation_id: str) -> CompletionCriterion:
+        """The goal's finish line first: the condition the operator actually set."""
+        return self._finalization_service().criterion(operation_id)
+
+    def _missing_proof(self, operation_id: str) -> tuple[str, ...]:
+        """What the store still lacks for the finish line; empty when met."""
+        return self._finalization_service().missing_proof(operation_id)
+
+    def _report_unproven(self, operation_id: str, *, remember: bool) -> None:
+        missing = "; ".join(self._missing_proof(operation_id))
+        self._write_dim(self.translator.t("chat.goal-unproven", missing=missing))
+        if remember:
+            self._remember(
+                Message(
+                    role="user",
+                    content=self.translator.t("chat.goal-unproven-note", missing=missing),
+                )
+            )
+
     async def _judge_goal(self, operation_id: str, model_id: str) -> str | None:
         """Ask the cheap judge whether the condition holds; None when unsure."""
-        goal = self._operation_goal(operation_id)
+        goal = self._completion_criterion(operation_id).text
         if not goal:
             return None
         transcript = [
@@ -2790,7 +2839,11 @@ class ChatController:
             for message in self._chat_history[-12:]
             if message.role in ("assistant", "user")
         ]
-        system, question = goal_judge.build_prompt(goal, goal_judge.digest(transcript))
+        system, question = goal_judge.build_prompt(
+            goal,
+            goal_judge.digest(transcript),
+            self._finalization_service().evidence(operation_id).digest(),
+        )
         messages = (
             Message(role="system", content=system),
             Message(role="user", content=question),
@@ -3499,15 +3552,18 @@ class ChatController:
                 kind=kind,
                 summary=str(call.arguments.get("summary", "") or ""),
                 task_id=str(call.arguments.get("task_id", "") or "") or None,
+                source_run_id=str(call.arguments.get("source_run_id", "") or "").strip()
+                or None,
             )
         except (ArtifactImportError, KernelError, OSError, ValueError) as exc:
             return Message(role="user", content=f"[tool import_artifact] {exc}")
         self._write_entity_line("◆", "artifact", artifact.id, artifact.id)
+        bound = "" if artifact.source_run_id else " (unbound: a claim, not evidence)"
         return Message(
             role="user",
             content=(
                 f"[tool import_artifact] {artifact.id} {artifact.kind.value} "
-                f"{artifact.summary or artifact.path}"
+                f"{artifact.summary or artifact.path}{bound}"
             ),
         )
 
@@ -3529,6 +3585,7 @@ class ChatController:
             "artifact_ids": tuple(
                 str(item) for item in call.arguments.get("artifact_ids", [])
             ),
+            "run_ids": _id_list(call.arguments.get("run_ids")),
             "outcome": str(call.arguments.get("outcome", "done") or "done"),
             "reason": str(call.arguments.get("reason", "") or ""),
             "negative": str(call.arguments.get("result", "") or "") == "negative",
@@ -3568,10 +3625,9 @@ class ChatController:
                 summary,
                 artifacts,
                 negative=str(call.arguments.get("result", "")) == "negative",
+                run_ids=_id_list(call.arguments.get("run_ids")),
             )
-            if fact.payload.get("artifact_ids"):
-                pass
-            else:
+            if fact.state is NodeState.CLAIMED:
                 self._write_dim(self.translator.t("graph.fact-bare"))
         except GraphError as exc:
             return Message(role="user", content=f"[tool record_fact] {exc}")
@@ -3593,8 +3649,14 @@ class ChatController:
             self._write_dim(
                 self.translator.t("graph.fact-recorded", fact=fact.id, intent=intent.id)
             )
+        claim = (
+            " as a claim — cite run_ids or bound artifact_ids to confirm it"
+            if fact.state is NodeState.CLAIMED
+            else ""
+        )
         return Message(
-            role="user", content=f"[tool record_fact] {fact.id} recorded for {intent.id}"
+            role="user",
+            content=f"[tool record_fact] {fact.id} recorded for {intent.id}{claim}",
         )
 
     def _graph_tasks(self) -> list[str]:

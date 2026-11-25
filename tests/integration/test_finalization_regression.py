@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from samurai_ai import cli
+from samurai_ai.domain.execution import ToolRun, ToolRunStatus
 from samurai_ai.domain.goal import GoalState
 from samurai_ai.domain.graph import EdgeRel, NodeState
 from samurai_ai.domain.kernel import (
@@ -22,11 +23,31 @@ from samurai_ai.domain.kernel import (
     TaskEvidenceError,
     TaskStatus,
 )
-from samurai_ai.domain.operations import OperationMode
+from samurai_ai.domain.operations import OperationEvent, OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.goals import GoalService
 from samurai_ai.services.graph import GraphService
 from samurai_ai.storage.graph import GraphRepository
+
+
+def _finished_run(graph: GraphService, operation_id: str, **parameters: object) -> str:
+    """A tool run the harness executed: the only thing besides a bound artifact
+    that confirms a fact."""
+    run = ToolRun(
+        operation_id=operation_id,
+        tool_id="process.exec",
+        tool_version=1,
+        parameters=dict(parameters),
+        status=ToolRunStatus.COMPLETED,
+        exit_code=0,
+    )
+    graph.runs.add_run(
+        run,
+        OperationEvent(
+            operation_id=operation_id, event_type="tool.run.completed", payload={"run_id": run.id}
+        ),
+    )
+    return run.id
 
 
 @dataclass
@@ -83,7 +104,13 @@ def _legacy_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Regression
         ).id,
     }
     file_read = graph.start_intent(intents["file_read"])
-    bare_fact = graph.record_fact(file_read.id, "file functions are denied", negative=True)
+    # a negative result proven by the run that checked it, with no artifact
+    bare_fact = graph.record_fact(
+        file_read.id,
+        "file functions are denied",
+        negative=True,
+        run_ids=(_finished_run(graph, operation.id, command="probe file functions"),),
+    )
     graph.close_intent(file_read.id, "done")
     oracle = graph.start_intent(intents["oracle"])
     proof_fact = graph.record_fact(

@@ -5730,6 +5730,42 @@ class _TwoToolRoundsProvider:
         )
 
 
+def _proof_run_id(graph, operation_id: str) -> str:  # type: ignore[no-untyped-def]
+    """A finished tool run: what turns a recorded fact from a claim into proof."""
+    from samurai_ai.domain.execution import ToolRun, ToolRunStatus
+    from samurai_ai.domain.operations import OperationEvent
+
+    run = ToolRun(
+        operation_id=operation_id,
+        tool_id="process.exec",
+        tool_version=1,
+        status=ToolRunStatus.COMPLETED,
+        exit_code=0,
+    )
+    graph.runs.add_run(
+        run, OperationEvent(operation_id=operation_id, event_type="tool.run.test", payload={})
+    )
+    return run.id
+
+
+def _proven_result(graph, operation_id: str, task_id: str = "t-proof") -> None:  # type: ignore[no-untyped-def]
+    """A closed direction with a run-backed fact: proof the goal judge may rely on."""
+    origin = graph.origin(operation_id, task_id, "proof")
+    intent = graph.open_intent(operation_id, task_id, "prove it", origin.id)
+    graph.start_intent(intent.id)
+    graph.record_fact(
+        intent.id, "result proven by a run", run_ids=(_proof_run_id(graph, operation_id),)
+    )
+    graph.close_intent(intent.id, "done")
+
+
+def _graph_for(stack):  # type: ignore[no-untyped-def]
+    from samurai_ai.services.graph import GraphService
+    from samurai_ai.storage.graph import GraphRepository
+
+    return GraphService(stack[0], stack[1], GraphRepository(stack[0].repository.database))
+
+
 def _chat_ready_stack(tmp_path: Path, provider: object):
     stack = _minimal_stack(tmp_path, provider_factory=lambda _p: provider)
     stack[2].set_locale("en")
@@ -7028,7 +7064,14 @@ def test_a_settled_selection_does_not_copy_itself(tmp_path: Path) -> None:
 
             app.screen.selections = {journal: SELECT_ALL}
             await pilot.pause(0.6)  # settle past the debounce
-            assert app._last_auto_copy is None
+            assert not getattr(app, "_clipboard", "")
+            # the first selection teaches the copy key, once per session
+            assert app._copy_hint_shown
+            assert any("Ctrl+C copies" in str(n.message) for n in app._notifications)
+            app.screen.clear_selection()
+            app.screen.selections = {journal: SELECT_ALL}
+            await pilot.pause(0.6)
+            assert sum("Ctrl+C copies" in str(n.message) for n in app._notifications) == 1
 
     asyncio.run(exercise())
 
@@ -8619,7 +8662,7 @@ def test_the_attack_map_shows_once_two_hosts_have_access(tmp_path: Path) -> None
             graph.record_fact(
                 intent.id,
                 "root on 10.0.0.5 via suid; shell as www-data on 10.0.0.9",
-                artifact_ids=(),
+                run_ids=(_proof_run_id(graph, operation.id),),
             )
             app._refresh_attack_map()
             await pilot.pause()
@@ -9256,13 +9299,15 @@ def test_a_turn_with_a_good_run_still_completes(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause()
             app.service.set_goal(operation.id, "reach the box")
+            app.goals.create(operation.id, "reach the box")
+            _proven_result(app.graph, operation.id)
             command_input = app.query_one("#command-input", Input)
             command_input.value = "work the box"
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
             runs = stack[4].list_runs(operation.id)
-            assert [run.status.value for run in runs] == ["completed"]
+            assert [run.status.value for run in runs] == ["completed", "completed"]
             reasons = [
                 event.payload["reason"]
                 for event in app.service.repository.events(operation.id)
@@ -10294,7 +10339,11 @@ def test_the_phase_moves_only_on_evidence_and_is_journaled(tmp_path: Path) -> No
             origin = app.graph.origin(operation.id, "t-1", "root")
             node = app.graph.open_intent(operation.id, "t-1", "foothold attempt", origin.id)
             app.graph.start_intent(node.id)
-            app.graph.record_fact(node.id, "uid=0 root shell on 10.0.0.4")
+            app.graph.record_fact(
+                node.id,
+                "uid=0 root shell on 10.0.0.4",
+                run_ids=(_proof_run_id(app.graph, operation.id),),
+            )
             app._refresh_killchain()
             await pilot.pause()
             assert app._killchain().current == "privesc"
@@ -10442,7 +10491,11 @@ def test_a_hypothesis_shows_its_evidence_plan_and_age(tmp_path: Path) -> None:
                 {"next_test": "hydra with 10k list", "stop_condition": "after 20 min"},
             )
             app.graph.start_intent(intent.id)
-            app.graph.record_fact(intent.id, "password hunter2 works on ssh")
+            app.graph.record_fact(
+                intent.id,
+                "password hunter2 works on ssh",
+                run_ids=(_proof_run_id(app.graph, operation.id),),
+            )
             app._switch_view("view-hunt")
             await pilot.pause()
             text = app.query_one("#view-hunt", BlockJournal).text()
@@ -10478,7 +10531,12 @@ def test_a_refuted_hypothesis_says_so(tmp_path: Path) -> None:
             origin = app.graph.origin(operation.id, "t-1", "root")
             intent = app.graph.open_intent(operation.id, "t-1", "default creds", origin.id)
             app.graph.start_intent(intent.id)
-            app.graph.record_fact(intent.id, "admin/admin refused", negative=True)
+            app.graph.record_fact(
+                intent.id,
+                "admin/admin refused",
+                negative=True,
+                run_ids=(_proof_run_id(app.graph, operation.id),),
+            )
             app._switch_view("view-hunt")
             await pilot.pause()
             text = app.query_one("#view-hunt", BlockJournal).text()
@@ -10949,7 +11007,11 @@ def test_loot_access_rows_do_not_need_a_scope_hit_field(tmp_path: Path) -> None:
             origin = app.graph.origin(operation.id, "t-1", "root")
             intent = app.graph.open_intent(operation.id, "t-1", "get a shell", origin.id)
             app.graph.start_intent(intent.id)
-            fact = app.graph.record_fact(intent.id, "user shell on 192.0.2.1")
+            fact = app.graph.record_fact(
+                intent.id,
+                "user shell on 192.0.2.1",
+                run_ids=(_proof_run_id(app.graph, operation.id),),
+            )
             # this exact path used to raise AttributeError: AccessRow.hit
             app._refresh_side_blocks()
             entries = app._loot_entries(app._access_rows())
@@ -11548,7 +11610,15 @@ def test_unresolved_finalization_waits_for_the_operator_without_more_calls(
 
             app._finalize_command("")
             assert provider.calls == 3  # the snapshot itself never calls a model
-            app.graph.close_intent(intent.id, "exhausted", "SSH was checked")
+            # the operator records the checked-and-empty result the run proved
+            app.graph.start_intent(intent.id)
+            app.graph.record_fact(
+                intent.id,
+                "SSH refuses password auth",
+                negative=True,
+                run_ids=(_proof_run_id(app.graph, operation.id),),
+            )
+            app.graph.close_intent(intent.id, "done")
             app._finalize_command("resume")
             await app.workers.wait_for_complete()
             await pilot.pause()
@@ -11613,6 +11683,7 @@ def test_finalization_does_not_execute_shell_calls(tmp_path: Path) -> None:
     provider = _Provider()
     stack, operation = _chat_ready_stack(tmp_path, provider)
     goal = stack[14].create(operation.id, "finish safely")
+    _proven_result(_graph_for(stack), operation.id)
     stack[14].begin_finalization(goal.id)
 
     async def exercise() -> None:
@@ -11624,7 +11695,11 @@ def test_finalization_does_not_execute_shell_calls(tmp_path: Path) -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
 
-            assert stack[4].list_runs(operation.id) == []
+            # only the seeded proof run exists: the shell call never executed
+            assert not any(
+                "should-not-run" in str(run.parameters)
+                for run in stack[4].list_runs(operation.id)
+            )
             assert app.goals.reached(operation.id)
             assert "does not allow new research" in app.query_one("#journal", BlockJournal).text()
 
@@ -11696,6 +11771,8 @@ def test_open_hypotheses_are_checked_before_the_main_conclusion(tmp_path: Path) 
 
     provider = _HypothesisProvider()
     stack, operation = _chat_ready_stack(tmp_path, provider)
+    stack[14].create(operation.id, "check SSH and conclude")
+    _proven_result(_graph_for(stack), operation.id)
 
     async def exercise() -> None:
         app = SamuraiApp(*stack, operation.id)
@@ -11708,7 +11785,11 @@ def test_open_hypotheses_are_checked_before_the_main_conclusion(tmp_path: Path) 
 
             assert provider.calls == 3, app.query_one("#journal", BlockJournal).text()
             nodes = app.graph.for_operation(operation.id)
-            intent = next(node for node in nodes if node.kind is NodeKind.INTENT)
+            intent = next(
+                node
+                for node in nodes
+                if node.kind is NodeKind.INTENT and node.task_id != "t-proof"
+            )
             assert intent.state is NodeState.EXHAUSTED
             assert "Main conclusion" in app.query_one("#journal", BlockJournal).text()
             reasons = [
@@ -11827,6 +11908,12 @@ def test_a_text_only_answer_is_judged_before_completion(tmp_path: Path) -> None:
 
     stack, operation = _chat_ready_stack(tmp_path, _TextOnlyProvider())
     stack[0].set_goal(operation.id, "answer with a conclusion")
+    # an answer, not a result: the operator explicitly waives store proof
+    stack[14].create(
+        operation.id,
+        "answer with a conclusion",
+        finish_line="answer with a conclusion\nrequire: none",
+    )
 
     async def exercise() -> None:
         app = SamuraiApp(*stack, operation.id)
@@ -11843,5 +11930,117 @@ def test_a_text_only_answer_is_judged_before_completion(tmp_path: Path) -> None:
                 if event.event_type == "chat.turn.end"
             ]
             assert reasons == ["completed"]
+
+    asyncio.run(exercise())
+
+
+def test_goal_budget_tripping_mid_turn_stops_research_tools(tmp_path: Path) -> None:
+    """The step cap enters finalization inside the turn, not on the next one."""
+    from samurai_ai.agents.provider import ChatResponse, Usage
+
+    stack, _provider, operation = _sequence_stack(tmp_path, [])
+    stack[2].set_locale("en")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            goal = app.goals.create(operation.id, "probe a.example.com", budget_steps=2)
+            seen: list[tuple[str, ...]] = []
+            usage = Usage(prompt_tokens=1, completion_tokens=1)
+
+            async def fake_request(
+                operation_id, model_id, reasoning, tools, guard_rules=False, **kwargs
+            ):  # type: ignore[no-untyped-def]
+                if kwargs.get("messages") is not None:  # the goal judge
+                    return ChatResponse(
+                        text="CONTINUE", usage=usage, model_id=model_id,
+                        provider_id="gpt", latency_ms=1,
+                    )
+                names = tuple(spec.name for spec in tools)
+                seen.append(names)
+                if "shell_exec" in names:
+                    return ChatResponse(
+                        text="",
+                        tool_calls=(
+                            ToolCall(id=f"c{len(seen)}", name="no_such_probe", arguments={}),
+                        ),
+                        usage=usage, model_id=model_id, provider_id="gpt", latency_ms=1,
+                    )
+                return ChatResponse(
+                    text="closing", usage=usage, model_id=model_id,
+                    provider_id="gpt", latency_ms=1,
+                )
+
+            app._request_chat_completion = fake_request  # type: ignore[method-assign]
+            await app._chat_loop("probe a.example.com", "gpt/test-model@v1", None)
+
+            research = [names for names in seen if "shell_exec" in names]
+            assert len(research) == 1, seen
+            # after the cap tripped, every request carried only closing tools
+            assert all("shell_exec" not in names for names in seen[1:])
+            stored = app.goals.get(goal.id)
+            assert stored.spent_steps == 2
+            assert stored.state.value in ("finalizing", "blocked", "complete")
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+def test_a_judge_stop_without_store_proof_is_not_credited(tmp_path: Path) -> None:
+    """STOP is a vote: with nothing proven in the store the goal stays unmet."""
+    from samurai_ai.agents.provider import ChatResponse, Usage
+
+    class _ConfidentProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def health(self) -> bool:
+            return True
+
+        async def list_models(self) -> list[str]:
+            return ["m"]
+
+        async def complete(self, request):  # type: ignore[no-untyped-def]
+            if not request.tools and request.max_tokens is not None and request.max_tokens <= 8:
+                return ChatResponse(
+                    text="STOP", usage=Usage(), model_id=request.model_id, provider_id="gpt"
+                )
+            self.calls += 1
+            return ChatResponse(
+                text="The flag is obtained, trust me.",
+                usage=Usage(),
+                model_id="gpt/test-model@v1",
+                provider_id="gpt",
+            )
+
+    provider = _ConfidentProvider()
+    stack, operation = _chat_ready_stack(tmp_path, provider)
+    stack[0].set_goal(operation.id, "get the user flag")
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#command-input", Input).value = "get the user flag"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not app.goals.reached(operation.id)
+            reasons = [
+                event.payload["reason"]
+                for event in stack[0].repository.events(operation.id)
+                if event.event_type == "chat.turn.end"
+            ]
+            assert reasons == ["blocked"]
+            assert "goal not credited" in app.query_one("#journal", BlockJournal).text()
+            # the model was told what proof is missing, once per judged sign-off
+            notes = [
+                message
+                for message in app._chat_history
+                if message.role == "user" and "does not prove it" in str(message.content)
+            ]
+            assert notes
 
     asyncio.run(exercise())

@@ -120,6 +120,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.reviewer": "/reviewer [on model [fallback]|off]  Independent operation review",
         "help.experiment": "/experiment [start|off|resume]  Benchmark shadow-gene candidates",
         "help.copy": "/copy [code]      Copy the last reply (or its code block)",
+        "help.select": (
+            "mouse select      Drag + Ctrl+C copies; native select for Cmd+C: Option+drag "
+            "(iTerm2), ⌘R (Terminal.app), Shift+drag (Linux)"
+        ),
         "help.expand": "/expand           Reveal the collapsed tool output in full",
         "inspector.title": "Run {run} · {tool} v{version}",
         "inspector.section.definition": "TOOL",
@@ -576,7 +580,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "graph.intent-opened": "intent {title}",
         "graph.intent-closed": "intent {intent} is {state}",
         "graph.fact-recorded": "fact {fact} for {intent}",
-        "graph.fact-bare": "fact recorded without an artifact",
+        "graph.fact-bare": "fact recorded as a claim: no run or bound artifact proves it",
         "graph.finding": "finding {finding}: {title}",
         "chat.frontier": "exploration graph (code-owned, above the heuristics):\n{block}",
         "chat.constraints": "OPERATOR CONSTRAINTS — these beat everything below:\n{block}",
@@ -783,6 +787,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "strip.todo": "todo {done}/{total}",
         "mouse.copied": "copied {chars} chars",
         "mouse.nothing-selected": "nothing is selected",
+        "mouse.copy-hint": (
+            "Ctrl+C copies the selection — Cmd+C / Ctrl+Shift+C are taken by the terminal. "
+            "For Cmd+C: Option+drag in iTerm2, ⌘R (Allow Mouse Reporting) in Terminal.app, "
+            "Shift+drag on Linux."
+        ),
+        "clipboard.osc52-only": (
+            "no clipboard tool reachable (pbcopy, wl-copy, xclip, xsel); the copy went "
+            "via OSC 52 only. If paste is empty: install wl-clipboard or xclip, or in "
+            "tmux enable `set -g set-clipboard on`."
+        ),
         "mouse.enabled": "mouse capture on (drag over the journal, then Ctrl+C copies)",
         "sandbox.mode": "host shell confinement: {mode}",
         "sandbox.unavailable": (
@@ -835,6 +849,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "The goal condition is not met yet according to the judge. Keep "
             "working: make the next tool call instead of summarizing."
         ),
+        "chat.goal-unproven": "goal not credited: the store holds no proof ({missing})",
+        "chat.goal-unproven-note": (
+            "The judge considers the goal met, but the store does not prove it: "
+            "{missing}. Record the proof (record_fact / finalize_result with run_ids "
+            "or bound artifact_ids, propose_finding) or keep working."
+        ),
         "chat.goal-judge-failed": "[goal] judge unavailable, falling back to the counter",
         "chat.finalization-required": "[goal] operator finalization required: /finalize",
         "chat.domain-summary": (
@@ -846,6 +866,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "finalize.not-waiting": "There is no finalization waiting for the operator.",
         "finalize.facts": "[finalize] eligible facts: {ids}",
         "finalize.blockers": "[finalize] unresolved: {ids} | runs: {runs} | approvals: {approvals}",
+        "finalize.proof": "Proof still missing for the finish line: {missing}",
         "finalize.ready": "Ready to complete: /finalize resume",
         "finalize.waiting": (
             "WAITING_OPERATOR: resolve results with /graph and /finalize, then /finalize resume"
@@ -1157,6 +1178,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "help.reviewer": "/reviewer [on model [fallback]|off]  Независимая рецензия",
         "help.experiment": "/experiment [start|off|resume]  Эксперименты с shadow-генами",
         "help.copy": "/copy [code]      Скопировать последний ответ (или блок кода)",
+        "help.select": (
+            "выделение мышью  Drag + Ctrl+C копирует; для Cmd+C: Option+drag (iTerm2), "
+            "⌘R (Terminal.app), Shift+drag (Linux)"
+        ),
         "help.expand": "/expand           Раскрыть свёрнутый вывод команд полностью",
                 "inspector.title": "Запуск {run} · {tool} v{version}",
         "inspector.section.definition": "ИНСТРУМЕНТ",
@@ -1613,7 +1638,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "graph.intent-opened": "интент {title}",
         "graph.intent-closed": "интент {intent} → {state}",
         "graph.fact-recorded": "факт {fact} для {intent}",
-        "graph.fact-bare": "факт записан без артефакта",
+        "graph.fact-bare": (
+            "факт записан как заявление: его не подтверждает ни запуск, "
+            "ни привязанный артефакт"
+        ),
         "graph.finding": "находка {finding}: {title}",
         "chat.frontier": "граф исследования (принадлежит коду, выше эвристик):\n{block}",
         "chat.constraints": "ОГРАНИЧЕНИЯ ОПЕРАТОРА — они важнее всего ниже:\n{block}",
@@ -1810,6 +1838,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "strip.todo": "todo {done}/{total}",
         "mouse.copied": "скопировано символов: {chars}",
         "mouse.nothing-selected": "ничего не выделено",
+        "mouse.copy-hint": (
+            "Ctrl+C копирует выделение — Cmd+C / Ctrl+Shift+C забирает себе терминал. "
+            "Чтобы работал Cmd+C: Option+drag в iTerm2, ⌘R (Allow Mouse Reporting) в "
+            "Terminal.app, Shift+drag в Linux."
+        ),
+        "clipboard.osc52-only": (
+            "утилита буфера обмена недоступна (pbcopy, wl-copy, xclip, xsel); копия "
+            "отправлена только через OSC 52. Если вставляется пусто: установи "
+            "wl-clipboard или xclip, а в tmux включи `set -g set-clipboard on`."
+        ),
         "mouse.enabled": "захват мыши включён (выделяй по журналу, Ctrl+C скопирует)",
         "sandbox.mode": "изоляция хостового shell: {mode}",
         "sandbox.unavailable": (
@@ -1883,6 +1921,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
             "По мнению оценщика условие цели ещё не выполнено. Продолжай "
             "работу: делай следующий вызов инструмента, а не сводку."
         ),
+        "chat.goal-unproven": "цель не засчитана: в хранилище нет доказательства ({missing})",
+        "chat.goal-unproven-note": (
+            "Судья считает цель достигнутой, но хранилище этого не подтверждает: "
+            "{missing}. Запиши доказательство (record_fact / finalize_result с run_ids "
+            "или привязанными artifact_ids, propose_finding) или продолжай работу."
+        ),
         "chat.goal-judge-failed": "[цель] оценщик недоступен, работает счётчик",
         "chat.finalization-required": "[цель] нужна финализация оператором: /finalize",
         "chat.domain-summary": (
@@ -1894,6 +1938,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "finalize.not-waiting": "Сейчас нет финализации, ожидающей оператора.",
         "finalize.facts": "[finalize] eligible facts: {ids}",
         "finalize.blockers": "[finalize] unresolved: {ids} | runs: {runs} | approvals: {approvals}",
+        "finalize.proof": "Для финишной черты не хватает доказательства: {missing}",
         "finalize.ready": "Готово к завершению: /finalize resume",
         "finalize.waiting": (
             "WAITING_OPERATOR: оформи результаты через /graph и /finalize, затем /finalize resume"
@@ -2113,6 +2158,7 @@ _HELP_KEYS: tuple[str, ...] = (
     "help.reviewer",
     "help.experiment",
     "help.copy",
+    "help.select",
     "help.expand",
     "help.ask",
     "help.yolo",

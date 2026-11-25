@@ -73,6 +73,8 @@ class NodeState(StrEnum):
     EXHAUSTED = "exhausted"
     DELETED = "deleted"
     CONFIRMED = "confirmed"
+    #: a fact the model asserted with nothing traceable behind it
+    CLAIMED = "claimed"
     DISMISSED = "dismissed"
     ACTIVE = "active"
     CONSUMED = "consumed"
@@ -99,7 +101,7 @@ ALLOWED_STATES: dict[NodeKind, frozenset[NodeState]] = {
             NodeState.DELETED,
         }
     ),
-    NodeKind.FACT: frozenset({NodeState.CONFIRMED, NodeState.DISMISSED}),
+    NodeKind.FACT: frozenset({NodeState.CONFIRMED, NodeState.CLAIMED, NodeState.DISMISSED}),
     NodeKind.FINDING: frozenset({NodeState.CONFIRMED, NodeState.DISMISSED}),
     NodeKind.HINT: frozenset({NodeState.ACTIVE, NodeState.CONSUMED}),
 }

@@ -249,6 +249,8 @@ class Artifact(BaseModel):
     size_bytes: int = Field(ge=0)
     path: str = Field(min_length=1)
     created_by: str = "system"
+    #: the tool run that wrote this evidence; unset for operator/system records
+    source_run_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

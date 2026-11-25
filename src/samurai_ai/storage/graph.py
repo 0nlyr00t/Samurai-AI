@@ -121,13 +121,14 @@ class GraphRepository:
             cursor = connection.execute(
                 """
                 UPDATE exploration_nodes SET state = ?, updated_at = ?
-                WHERE id = ? AND state = ?
+                WHERE id = ? AND state IN (?, ?)
                 """,
                 (
                     NodeState.DISMISSED.value,
                     now,
                     node_id,
                     NodeState.CONFIRMED.value,
+                    NodeState.CLAIMED.value,
                 ),
             )
             if (cursor.rowcount or 0) == 0:
