@@ -996,7 +996,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "guard.retry": "retrying the model round after a rule match ({attempt}/4)",
         "guard.blocked": "turn blocked: the same stream rule kept matching after 4 retries",
         "reviewer.no-operation": "open an operation before configuring its reviewer",
-        "reviewer.usage": "usage: /reviewer on <model> [fallback] | /reviewer off",
+        "reviewer.usage": (
+            "usage: /reviewer on <model> [fallback] | /reviewer off | "
+            "/reviewer dismiss <id> <reason>"
+        ),
         "reviewer.status": "reviewer: {model} | fallback: {fallback}",
         "reviewer.on": "reviewer enabled: {model} | fallback: {fallback}",
         "reviewer.off": "reviewer disabled",
@@ -1004,7 +1007,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "reviewer.busy": "wait for the active turn before changing the reviewer",
         "reviewer.failed": "reviewer failed; the operation continues without it",
         "reviewer.note": "reviewer {severity}: {text}",
-        "reviewer.blocker": "reviewer blocker: {text}",
+        "reviewer.blocker": "reviewer blocker {id}: {text}",
+        "reviewer.resolved": "blocker {id} answered: {text}",
+        "reviewer.dismissed": "blocker {id} dismissed by the operator",
+        "reviewer.open": "open blockers: {items}",
+        "reviewer.gate-nudge": "an open reviewer blocker holds the sign-off — asking for an answer",
+        "reviewer.gate-blocked": (
+            "turn stopped: reviewer blockers {ids} are still open — answer them, or "
+            "/reviewer dismiss <id> <reason>"
+        ),
         "experiment.no-operation": "open an operation before starting an experiment",
         "experiment.none": "no experiment configured",
         "experiment.usage": (
@@ -2056,7 +2067,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "guard.retry": "повтор раунда модели после срабатывания ({attempt}/4)",
         "guard.blocked": "ход заблокирован: правило сработало снова после 4 повторов",
         "reviewer.no-operation": "откройте операцию, чтобы настроить рецензента",
-        "reviewer.usage": "использование: /reviewer on <model> [fallback] | /reviewer off",
+        "reviewer.usage": (
+            "использование: /reviewer on <model> [fallback] | /reviewer off | "
+            "/reviewer dismiss <id> <причина>"
+        ),
         "reviewer.status": "рецензент: {model} | fallback: {fallback}",
         "reviewer.on": "рецензент включён: {model} | fallback: {fallback}",
         "reviewer.off": "рецензент выключен",
@@ -2064,7 +2078,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "reviewer.busy": "дождитесь конца хода перед сменой рецензента",
         "reviewer.failed": "рецензия не удалась; операция продолжается без неё",
         "reviewer.note": "рецензент {severity}: {text}",
-        "reviewer.blocker": "рецензент blocker: {text}",
+        "reviewer.blocker": "рецензент blocker {id}: {text}",
+        "reviewer.resolved": "blocker {id} закрыт: {text}",
+        "reviewer.dismissed": "blocker {id} снят оператором",
+        "reviewer.open": "открытые blocker: {items}",
+        "reviewer.gate-nudge": "открытый blocker рецензента держит завершение — прошу ответ",
+        "reviewer.gate-blocked": (
+            "ход остановлен: blocker {ids} рецензента ещё открыты — ответьте на них или "
+            "/reviewer dismiss <id> <причина>"
+        ),
         "experiment.no-operation": "откройте операцию перед запуском эксперимента",
         "experiment.none": "эксперимент не настроен",
         "experiment.usage": (

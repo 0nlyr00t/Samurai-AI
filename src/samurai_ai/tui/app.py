@@ -5705,6 +5705,29 @@ class SamuraiApp(
                     ),
                     process=False,
                 )
+            blockers = self.reviewers.open_blockers(operation_id)
+            if blockers:
+                self._write_dim(
+                    self.translator.t(
+                        "reviewer.open",
+                        items="; ".join(f"{b.id}: {b.text[:80]}" for b in blockers),
+                    ),
+                    process=False,
+                )
+            return
+        if action.startswith("dismiss"):
+            # the operator outranks the reviewer: closing a blocker needs a
+            # reason on the record, not the agent's agreement
+            parts = action.split(maxsplit=2)
+            if len(parts) < 3:
+                self._write_dim(self.translator.t("reviewer.usage"), process=False)
+                return
+            try:
+                self.reviewers.resolve(operation_id, parts[1], parts[2], actor="operator")
+            except ValueError as exc:
+                self._write_line(f"[error] {exc}")
+                return
+            self._write_dim(self.translator.t("reviewer.dismissed", id=parts[1]), process=False)
             return
         if self._chat_busy:
             self._write_dim(self.translator.t("reviewer.busy"), process=False)
