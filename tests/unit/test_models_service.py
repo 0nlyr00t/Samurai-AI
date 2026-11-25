@@ -322,9 +322,13 @@ def test_the_goal_judge_reads_a_verdict() -> None:
     assert goal_judge.parse_verdict("STOP") == "stop"
     assert goal_judge.parse_verdict("continue.") == "continue"
     assert goal_judge.parse_verdict("hmm") is None
-    system, question = goal_judge.build_prompt("both flags", "ran nmap")
-    assert "STOP" in system
+    # the whole answer is the verdict: a hedge is not a sign-off
+    assert goal_judge.parse_verdict("not STOP, CONTINUE") is None
+    assert goal_judge.parse_verdict("I would STOP") is None
+    system, question = goal_judge.build_prompt("both flags", "ran nmap", "- fact node_1: x")
+    assert "STOP" in system and "untrusted" in system
     assert "both flags" in question and "ran nmap" in question
+    assert "- fact node_1: x" in question
 
 
 def test_the_digest_keeps_the_tail() -> None:

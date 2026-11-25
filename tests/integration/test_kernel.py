@@ -440,6 +440,31 @@ def test_a_task_without_evidence_is_refused_until_forced(tmp_path: Path) -> None
     )
 
 
+def test_an_agent_import_alone_or_a_foreign_finding_is_not_task_evidence(
+    tmp_path: Path,
+) -> None:
+    """A self-imported file is a claim; another task's finding proves nothing here."""
+    service = make_service(tmp_path / "claims.db")
+    operation = make_operation(service)
+    service.create_plan(
+        operation.id,
+        "Evidence",
+        [PlanTask(id="probe", title="Probe"), PlanTask(id="other", title="Other")],
+        [],
+    )
+    service.approve_plan(operation.id)
+    service.start_task(operation.id, "probe")
+    service.register_artifact(
+        operation.id, ArtifactKind.OTHER, "trust me", task_id="probe", created_by="agent"
+    )
+    foreign = service.register_artifact(operation.id, ArtifactKind.NOTE, "y", task_id="other")
+    finding = service.create_finding(operation.id, "Elsewhere", FindingSeverity.LOW)
+    service.attach_evidence(finding.id, foreign.id)
+
+    with pytest.raises(TaskEvidenceError, match="no evidence"):
+        service.complete_task(operation.id, "probe", no_finding="nothing here")
+
+
 def test_force_closes_a_task_that_produced_nothing(tmp_path: Path) -> None:
     service = make_service(tmp_path / "forced.db")
     operation = make_operation(service)

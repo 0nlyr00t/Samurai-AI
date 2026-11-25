@@ -151,3 +151,46 @@ def test_import_validates_the_task_id(
 
     with pytest.raises(TaskStateError):
         service.import_artifact(operation_id, "evidence.txt", task_id="missing")
+
+
+def _run(service, operation_id: str, status: str = "completed", **parameters: object) -> str:  # type: ignore[no-untyped-def]
+    from samurai_ai.domain.execution import ToolRun, ToolRunStatus
+    from samurai_ai.domain.operations import OperationEvent
+
+    run = ToolRun(
+        operation_id=operation_id,
+        tool_id="process.exec",
+        tool_version=1,
+        parameters=dict(parameters),
+        status=ToolRunStatus(status),
+    )
+    service.graph.runs.add_run(
+        run, OperationEvent(operation_id=operation_id, event_type="tool.run.test", payload={})
+    )
+    return run.id
+
+
+def test_import_binds_to_the_run_that_wrote_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from samurai_ai.domain.evidence import artifact_is_bound
+    from samurai_ai.services.finalization import ArtifactImportError
+
+    operation_id, workspace, _kernel, service = _services(tmp_path, monkeypatch)
+    loot = workspace / "loot.txt"
+    loot.write_text("flag{example}\n", encoding="utf-8")
+    writer = _run(service, operation_id, command=f"curl -o {loot} http://target.internal/")
+    stranger = _run(service, operation_id, command="id")
+    pending = _run(service, operation_id, "running", command=f"cat {loot}")
+
+    unbound = service.import_artifact(operation_id, loot)
+    bound = service.import_artifact(operation_id, loot, source_run_id=writer)
+
+    assert not artifact_is_bound(unbound)
+    assert bound.source_run_id == writer and artifact_is_bound(bound)
+    with pytest.raises(ArtifactImportError, match="never touched"):
+        service.import_artifact(operation_id, loot, source_run_id=stranger)
+    with pytest.raises(ArtifactImportError, match="only a finished run"):
+        service.import_artifact(operation_id, loot, source_run_id=pending)
+    with pytest.raises(ArtifactImportError, match="unknown run"):
+        service.import_artifact(operation_id, loot, source_run_id="run_missing")

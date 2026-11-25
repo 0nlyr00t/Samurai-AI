@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from samurai_ai.domain.completion import CompletionCriterion, CompletionCriterionError
 from samurai_ai.domain.goal import (
     DEFAULT_BUDGET_SECONDS,
     DEFAULT_BUDGET_STEPS,
@@ -36,7 +37,8 @@ class GoalService:
         self.operations = operations
         self.goals = goals
         self.clock = clock
-        self._last_tick: float | None = None
+        #: per goal: the clock reading its spent time is accounted up to
+        self._ticks: dict[str, float] = {}
 
     # --- creation ---------------------------------------------------------
 
@@ -52,6 +54,11 @@ class GoalService:
     ) -> Goal:
         """Create a goal; ``queue`` puts it behind the current one."""
         self._require_operation(operation_id)
+        try:
+            # a typo in a requirement must fail now, not at the finish line
+            CompletionCriterion.parse(finish_line)
+        except CompletionCriterionError as exc:
+            raise GoalError(str(exc)) from exc
         state = GoalState.QUEUED if queue or self.goals.current(operation_id) else GoalState.ACTIVE
         goal = Goal(
             operation_id=operation_id,
@@ -66,7 +73,7 @@ class GoalService:
             self._event(goal, "goal.created", {"objective": goal.objective}),
         )
         if goal.state is GoalState.ACTIVE:
-            self.restart_clock()
+            self.restart_clock(goal.id)
         return goal
 
     def replace(self, operation_id: str, objective: str, **kwargs: object) -> Goal:
@@ -107,7 +114,7 @@ class GoalService:
         expected = goal.version
         goal.resume()
         saved = self._save(goal, expected, "goal.resumed", {})
-        self.restart_clock()
+        self.restart_clock(goal.id)
         return saved
 
     def begin_finalization(self, goal_id: str) -> Goal:
@@ -118,7 +125,7 @@ class GoalService:
         expected = goal.version
         self._accrue(goal)
         goal.begin_finalization()
-        self._stop_clock()
+        self._stop_clock(goal.id)
         return self._save(
             goal,
             expected,
@@ -155,7 +162,7 @@ class GoalService:
             goal.cancel()
             event_type = "goal.cancelled"
         saved = self._save(goal, expected, event_type, {})
-        self._stop_clock()
+        self._stop_clock(goal.id)
         self._promote_next(goal.operation_id)
         return saved
 
@@ -183,7 +190,7 @@ class GoalService:
         goal.budget_steps += steps
         goal.budget_seconds += seconds
         goal.resume()
-        self.restart_clock()
+        self.restart_clock(goal.id)
         return self._save(
             goal,
             expected,
@@ -203,19 +210,24 @@ class GoalService:
             raise GoalError(f"cannot resume finalization from {goal.state.value}")
         return self.begin_finalization(goal_id)
 
-    def restart_clock(self) -> None:
-        self._last_tick = self.clock()
+    def restart_clock(self, goal_id: str) -> None:
+        self._ticks[goal_id] = self.clock()
 
-    def _stop_clock(self) -> None:
-        self._last_tick = None
+    def _stop_clock(self, goal_id: str) -> None:
+        self._ticks.pop(goal_id, None)
 
     def _accrue(self, goal: Goal) -> None:
-        """Move wall-clock time into the goal while it is active."""
-        if goal.state is not GoalState.ACTIVE or self._last_tick is None:
+        """Move wall-clock time into the goal while it is active.
+
+        Only whole seconds move; the fraction stays on the goal's own clock for
+        the next accrual, so frequent steps cannot shave the budget down.
+        """
+        last = self._ticks.get(goal.id)
+        if goal.state is not GoalState.ACTIVE or last is None:
             return
-        elapsed = int(self.clock() - self._last_tick)
-        self._last_tick = self.clock()
+        elapsed = int(self.clock() - last)
         if elapsed > 0:
+            self._ticks[goal.id] = last + elapsed
             goal.tick(elapsed)
 
     # --- internals --------------------------------------------------------
@@ -227,7 +239,7 @@ class GoalService:
         expected = queued.version
         queued.promote()
         self._save(queued, expected, "goal.promoted", {})
-        self.restart_clock()
+        self.restart_clock(queued.id)
 
     def _require_operation(self, operation_id: str) -> None:
         if self.operations.repository.get(operation_id) is None:

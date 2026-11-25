@@ -27,7 +27,11 @@ _GROUPS: tuple[tuple[str, NodeKind, frozenset[NodeState]], ...] = (
         frozenset({NodeState.OPEN, NodeState.RUNNING, NodeState.PAUSED}),
     ),
     ("board.group.hints", NodeKind.HINT, frozenset({NodeState.ACTIVE, NodeState.CONSUMED})),
-    ("board.group.facts", NodeKind.FACT, frozenset({NodeState.CONFIRMED})),
+    (
+        "board.group.facts",
+        NodeKind.FACT,
+        frozenset({NodeState.CONFIRMED, NodeState.CLAIMED}),
+    ),
     ("board.group.findings", NodeKind.FINDING, frozenset({NodeState.CONFIRMED})),
 )
 _CLOSED_STATES = frozenset(

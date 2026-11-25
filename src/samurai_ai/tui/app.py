@@ -1,9 +1,8 @@
 import asyncio
 import json
+import os
 import pathlib
 import re
-import shutil
-import subprocess
 import threading
 import time
 from collections import deque
@@ -118,6 +117,7 @@ from samurai_ai.storage.traffic import TrafficRepository
 from samurai_ai.tui import keys, preferences
 from samurai_ai.tui.boards import BoardController
 from samurai_ai.tui.chat import ChatController, SteerItem
+from samurai_ai.tui.clipboard import copy_native
 from samurai_ai.tui.commands import CommandSpec, command_path, find_command
 from samurai_ai.tui.graph_board import GraphBoardController
 from samurai_ai.tui.hints import GENERIC_MODAL_HINTS, context_for, render_hints
@@ -555,8 +555,11 @@ class SamuraiApp(
         self._exec_group_ok = 0
         self._exec_group_fail = 0
         self._tab_activations_seen: int = 0
-        self._selection_copy_timer: Timer | None = None
-        self._last_auto_copy: str | None = None
+        #: debounces the one-time "Ctrl+C copies" hint while a drag is live
+        self._copy_hint_timer: Timer | None = None
+        self._copy_hint_shown = False
+        #: the OSC-52-only warning is said once per session, not per copy
+        self._osc52_warned = False
         #: who had focus before a modal opened: closing it returns there, not to
         #: the input — the operator was reading something, and stays there
         self._focus_before_modal: Widget | None = None
@@ -843,8 +846,8 @@ class SamuraiApp(
         self.execution.sandbox_policy = self._sandbox_policy
         self.execution.autonomy_policy = self._autonomy_enabled
         self._apply_mouse()
-        # a finished drag copies itself — the operator should never think
-        # about *how* to copy; like Claude Code, selection IS the copy
+        # the first selection of a session teaches the copy key: the terminal's
+        # own Cmd+C / Ctrl+Shift+C never reach a mouse-capturing app
         self.watch(self.screen, "selections", self._on_screen_selections, init=False)
         # the model may ask a question at any point of a run
         if getattr(self.orchestrator, "question_notice", None) is None:
@@ -1184,25 +1187,31 @@ class SamuraiApp(
         self.restore_focus()
 
     def _on_screen_selections(self) -> None:
-        """Selection changes during the drag; auto-copy is disabled.
+        """A selection appeared: once per session, say which key copies it.
 
-        Use Ctrl+Shift+C (action_copy_selection) to copy explicitly — writing
-        to the clipboard on every drag overwrote the operator's clipboard.
+        Auto-copy stays off — writing the clipboard on every drag overwrote the
+        operator's clipboard. But the terminal's own copy keys (Cmd+C on macOS,
+        Ctrl+Shift+C on Linux) are consumed by the terminal and copy its empty
+        native selection, so without this hint copying looks broken.
         """
-        return
+        if self._copy_hint_shown:
+            return
+        if self._copy_hint_timer is not None:
+            self._copy_hint_timer.stop()
+        # debounced: a drag fires a change per cell
+        self._copy_hint_timer = self.set_timer(0.4, self._show_copy_hint)
+
+    def _show_copy_hint(self) -> None:
+        self._copy_hint_timer = None
+        if self._copy_hint_shown or not self._selected_text():
+            return
+        self._copy_hint_shown = True
+        self.notify(self.translator.t("mouse.copy-hint"), timeout=8)
 
     @staticmethod
     def _selection_clipboard_text(text: str) -> str:
         """A shell tool row copies as a paste-ready command, not its label."""
         return text.removeprefix("shell.exec ") if text.startswith("shell.exec ") else text
-
-    def _copy_settled_selection(self) -> None:
-        self._selection_copy_timer = None
-        text = self._selected_text()
-        if not text or text == self._last_auto_copy:
-            return
-        self._last_auto_copy = text
-        self.copy_to_clipboard(self._selection_clipboard_text(text))
 
     def _selected_text(self) -> str | None:
         """What is selected, the focused input's selection included.
@@ -1362,22 +1371,16 @@ class SamuraiApp(
         self.focus_command_input(force=True)
 
     def copy_to_clipboard(self, text: str) -> None:
+        # OSC 52 first: the only path over SSH, ignored by some terminals
         super().copy_to_clipboard(text)
-        # OSC52 does not reach the clipboard on every terminal (e.g. macOS
-        # Terminal.app), so also go through the native clipboard tool.
-        for command in (
-            ("pbcopy",),
-            ("wl-copy",),
-            ("xclip", "-selection", "clipboard"),
-            ("xsel", "--clipboard", "--input"),
-            ("clip",),
-        ):
-            if shutil.which(command[0]):
-                try:
-                    subprocess.run(command, input=text.encode("utf-8"), check=False, timeout=2)
-                except OSError:
-                    pass
-                break
+        if self.is_headless:
+            # tests and headless runs must never touch the operator's clipboard
+            return
+        if copy_native(text, os.environ) is None and not self._osc52_warned:
+            # no tool reached the clipboard: the copy now depends on the
+            # terminal honouring OSC 52, which the operator must hear about
+            self._osc52_warned = True
+            self._write_dim(self.translator.t("clipboard.osc52-only"))
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         # The Tabs widget fires one TabActivated for the first tab while
@@ -2402,6 +2405,11 @@ class SamuraiApp(
             ),
             process=False,
         )
+        if snapshot.missing_proof:
+            self._write_dim(
+                self.translator.t("finalize.proof", missing="; ".join(snapshot.missing_proof)),
+                process=False,
+            )
         self._write_dim(
             self.translator.t(
                 "finalize.ready" if snapshot.ready_to_complete else "finalize.waiting"
