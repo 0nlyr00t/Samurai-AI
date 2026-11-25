@@ -24,6 +24,9 @@ from samurai_ai.domain.models import (
 
 MAX_RETRIES = 2
 BACKOFF_SECONDS = 0.25
+#: a Retry-After above this is a quota wall, not a blip: the next candidate
+#: takes the call instead of the turn sitting idle
+MAX_WAIT_SECONDS = 20.0
 
 
 class ModelRouter:
@@ -32,12 +35,14 @@ class ModelRouter:
         max_retries: int = MAX_RETRIES,
         backoff_seconds: float = BACKOFF_SECONDS,
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        max_wait_seconds: float = MAX_WAIT_SECONDS,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be >= 0")
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
         self.sleeper = sleeper
+        self.max_wait_seconds = max_wait_seconds
 
     async def complete(
         self,
@@ -81,5 +86,11 @@ class ModelRouter:
             except ProviderUnavailableError as exc:
                 if exc.auth or not exc.transient or attempt == attempts - 1:
                     raise
-                await self.sleeper(self.backoff_seconds * (attempt + 1))
+                wait = self.backoff_seconds * (attempt + 1)
+                if exc.retry_after is not None:
+                    if exc.retry_after > self.max_wait_seconds:
+                        # waiting this out would stall the turn: fall back now
+                        raise
+                    wait = max(wait, exc.retry_after)
+                await self.sleeper(wait)
         raise ModelError("unreachable router state")

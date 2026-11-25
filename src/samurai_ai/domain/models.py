@@ -37,10 +37,13 @@ class ProviderUnavailableError(ModelError):
         status: int | None = None,
         transient: bool = True,
         auth: bool = False,
+        retry_after: float | None = None,
     ) -> None:
         self.status = status
         self.transient = transient
         self.auth = auth
+        #: seconds the server asked us to wait, when it said
+        self.retry_after = retry_after
         super().__init__(message)
 
 

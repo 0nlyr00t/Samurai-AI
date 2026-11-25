@@ -645,6 +645,7 @@ class ChatController:
     _TOOL_OUTPUT_FEEDBACK_LIMIT = 4000
     _MODEL_RETRY_ATTEMPTS = 5
     _MODEL_RETRY_DELAY = 3.0
+    _MODEL_RETRY_MAX_DELAY = 60.0
     #: how long a command may hold the turn before it becomes a background run
     _FOREGROUND_WINDOW = 25.0
     #: autonomous scope widenings allowed per operation before the agent stops
@@ -1994,6 +1995,17 @@ class ChatController:
             limit = 0
         return ContextBudget.for_limit(limit)
 
+    def _retry_delay(self, attempt: int, error: ProviderUnavailableError) -> float:
+        """Wait before retry ``attempt``: what the server asked for, else back off.
+
+        Doubling from the base delay keeps a briefly sick gateway cheap and a
+        longer outage from being hammered; both are capped.
+        """
+        if error.retry_after is not None:
+            return min(error.retry_after, self._MODEL_RETRY_MAX_DELAY)
+        backoff: float = self._MODEL_RETRY_DELAY * 2 ** (attempt - 1)
+        return min(backoff, self._MODEL_RETRY_MAX_DELAY)
+
     def _output_budget(
         self, model_id: str, messages: tuple[Message, ...], tools: tuple[ToolSpec, ...]
     ) -> int | None:
@@ -2861,9 +2873,12 @@ class ChatController:
                     return TerminalReason.MODEL_ERROR
                 # a slow or sick gateway is the common case; the operator sees
                 # the attempt counter instead of a turn that silently dies
-                if exc.auth or self._stop_requested:
+                if exc.auth or not exc.transient or self._stop_requested:
+                    # a refused key or a rejected request (HTTP 4xx) fails the
+                    # same way every time: retrying only burns the operator's wait
                     self._write_line(f"[error] {exc}")
                     return TerminalReason.MODEL_ERROR
+                pending: ProviderUnavailableError = exc
                 for attempt in range(1, self._MODEL_RETRY_ATTEMPTS + 1):
                     self._write_dim(
                         self.translator.t(
@@ -2872,7 +2887,7 @@ class ChatController:
                             total=self._MODEL_RETRY_ATTEMPTS,
                         )
                     )
-                    await asyncio.sleep(self._MODEL_RETRY_DELAY)
+                    await asyncio.sleep(self._retry_delay(attempt, pending))
                     try:
                         response = await self._request_chat_completion(
                             operation_id, model_id, reasoning, tools, guard_rules=True
@@ -2882,9 +2897,10 @@ class ChatController:
                         self._write_dim(self.translator.t("guard.blocked"), process=False)
                         return TerminalReason.BLOCKED
                     except ProviderUnavailableError as retry_exc:
-                        if retry_exc.auth or self._stop_requested:
+                        if retry_exc.auth or not retry_exc.transient or self._stop_requested:
                             self._write_line(f"[error] {retry_exc}")
                             return TerminalReason.MODEL_ERROR
+                        pending = retry_exc
                         if attempt == self._MODEL_RETRY_ATTEMPTS:
                             self._write_line(f"[error] {retry_exc}")
                             return TerminalReason.MODEL_ERROR

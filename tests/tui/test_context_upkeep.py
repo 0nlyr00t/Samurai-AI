@@ -261,3 +261,48 @@ def test_repeated_cut_calls_stop_the_turn(tmp_path: Path) -> None:
             assert stack[4].list_runs(operation.id) == []
 
     asyncio.run(exercise())
+
+
+def test_a_rejected_request_is_not_retried(tmp_path: Path) -> None:
+    from samurai_ai.domain.models import ProviderUnavailableError
+
+    stack, operation = _chat_ready_stack(tmp_path, object())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)):
+            calls = 0
+
+            def chat(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+                nonlocal calls
+                calls += 1
+                raise ProviderUnavailableError(
+                    "HTTP 400: invalid tool schema", status=400, transient=False
+                )
+
+            app.models.chat = chat  # type: ignore[method-assign]
+            reason = await app._chat_loop("go", MODEL, None)
+            assert reason.value == "model-error"
+            assert calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_retry_waits_what_the_server_asked_and_backs_off_otherwise(tmp_path: Path) -> None:
+    from samurai_ai.domain.models import ProviderUnavailableError
+
+    stack, operation = _chat_ready_stack(tmp_path, object())
+
+    async def exercise() -> None:
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 30)):
+            asked = ProviderUnavailableError("429", status=429, retry_after=12.0)
+            silent = ProviderUnavailableError("503", status=503)
+            assert app._retry_delay(1, asked) == 12.0
+            assert app._retry_delay(1, silent) == app._MODEL_RETRY_DELAY
+            assert app._retry_delay(3, silent) == app._MODEL_RETRY_DELAY * 4
+            assert app._retry_delay(20, silent) == app._MODEL_RETRY_MAX_DELAY
+            huge = ProviderUnavailableError("429", status=429, retry_after=9999.0)
+            assert app._retry_delay(1, huge) == app._MODEL_RETRY_MAX_DELAY
+
+    asyncio.run(exercise())
