@@ -270,8 +270,9 @@ class OpenAICompatProvider:
             on_token(token)
 
         try:
+            meta: dict[str, str] = {}
             text_parts, reasoning_parts, tool_map, usage = await asyncio.to_thread(
-                self._read_stream, payload, emit, should_stop, on_tool_delta
+                self._read_stream, payload, emit, should_stop, on_tool_delta, meta
             )
         except ProviderStreamError as exc:
             # an error status before the first byte: classify it like any other
@@ -310,6 +311,9 @@ class OpenAICompatProvider:
             provider_id=self.provider.id,
             latency_ms=latency_ms,
             reasoning="".join(reasoning_parts),
+            # `length` must survive streaming: it is how a call cut by the
+            # output cap is kept from running with truncated arguments
+            stop_reason=meta.get("stop_reason", ""),
         )
 
     def _read_stream(
@@ -318,8 +322,11 @@ class OpenAICompatProvider:
         on_token: Callable[[str], None],
         should_stop: Callable[[], bool] | None = None,
         on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
+        meta: dict[str, str] | None = None,
     ) -> tuple[list[str], list[str], dict[int, dict[str, Any]], Usage]:
         """Drain the SSE stream into text parts, reasoning and tool calls.
+
+        ``meta`` receives the stream's finish reason under ``stop_reason``.
 
         Anything malformed is skipped rather than fatal: a chunk with a junk
         index or a non-string content must not lose the answer that arrived.
@@ -356,6 +363,9 @@ class OpenAICompatProvider:
                     )
                 if not isinstance(choice, dict):
                     continue
+                finish = choice.get("finish_reason")
+                if isinstance(finish, str) and finish and meta is not None:
+                    meta["stop_reason"] = finish
                 delta = choice.get("delta") or {}
                 if not isinstance(delta, dict):
                     continue
