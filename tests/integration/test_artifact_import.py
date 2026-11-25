@@ -77,6 +77,8 @@ def test_import_rejects_outside_trust_and_symlink_escape(
     from samurai_ai.services.finalization import ArtifactImportError
 
     operation_id, workspace, _kernel, service = _services(tmp_path, monkeypatch)
+    # Scratch roots differ by host; this case isolates the explicit trust boundary.
+    service.trusted_roots = (workspace,)
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
 
