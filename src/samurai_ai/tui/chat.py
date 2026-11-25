@@ -25,6 +25,14 @@ from rich.text import Text
 from textual.widgets import Input, Static
 
 from samurai_ai import __version__
+from samurai_ai.agents.context import (
+    ContextBudget,
+    build_brief,
+    compaction_cut,
+    elide_tool_outputs,
+    estimate_tokens,
+)
+from samurai_ai.agents.orchestrator import is_context_overflow
 from samurai_ai.agents.provider import (
     STREAM_RESET,
     ChatResponse,
@@ -281,6 +289,10 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def _drop_token(_token: str) -> None:
+    """A side call's tokens go nowhere: only its final text is used."""
+
+
 def _bounded_call(call: ToolCall) -> ToolCall:
     """The command the approval and the process will both actually run."""
     if call.name != "shell_exec":
@@ -418,6 +430,7 @@ class ChatController:
         _handoff_shell_seen: bool
         _handoff_failed: bool
         _guard_matcher: StreamGuardMatcher | None
+        _compact_narrative: bool | None
         _guard_tool_reminders: dict[str, tuple[RuleMatch, ...]]
         _guard_text_reminders: tuple[RuleMatch, ...]
         _reviewer_runtimes: dict[str, _ReviewerRuntime]
@@ -498,6 +511,7 @@ class ChatController:
         def _reusable_approval(self, tool_id: str) -> bool: ...
         def _drain_steering(self) -> None: ...
         def _count_goal_step(self) -> None: ...
+        def _context_limit(self) -> int: ...
         def run_worker(self, *args: Any, **kwargs: Any) -> Any: ...
         def push_screen_wait(self, screen: Any) -> Any: ...
         _scope_offered: set[str]
@@ -578,7 +592,8 @@ class ChatController:
     _DRIFT_ALLOWED = ("/tmp", "/var", "/usr", "/bin", "/sbin", "/opt", "/System", "/Library")
     _TOOL_ROUNDS_MIN = 4
     _TOOL_ROUNDS_MAX = 600
-    _CHAT_HISTORY_LIMIT = 40
+    #: a last-resort cap on message count; tokens, not this, govern the window
+    _CHAT_HISTORY_LIMIT = 240
     _TOOL_OUTPUT_FEEDBACK_LIMIT = 4000
     _MODEL_RETRY_ATTEMPTS = 5
     _MODEL_RETRY_DELAY = 3.0
@@ -1859,13 +1874,118 @@ class ChatController:
             self.chat_history.remember(self.operation.id, message)
             self._enqueue_reviewer(message)
 
+    def _context_budget(self) -> ContextBudget:
+        try:
+            limit = self._context_limit()
+        except Exception:  # noqa: BLE001 - an unknown window gets the fallback
+            limit = 0
+        return ContextBudget.for_limit(limit)
+
+    def _history_tokens(self) -> int:
+        return estimate_tokens(self._chat_history)
+
     def _trim_chat_history(self) -> None:
+        """Cheap, model-free upkeep: elide old tool output, then cap the count."""
+        budget = self._context_budget()
+        if self._history_tokens() > budget.elide_at:
+            self._chat_history, _saved = elide_tool_outputs(
+                self._chat_history, budget.protect
+            )
         if len(self._chat_history) > self._CHAT_HISTORY_LIMIT + 1:
             # never open the kept window on a result whose call was cut away
             start = pair_safe_start(
                 self._chat_history, len(self._chat_history) - self._CHAT_HISTORY_LIMIT
             )
             self._chat_history = self._chat_history[:1] + self._chat_history[start:]
+
+    async def _maintain_context(self, operation_id: str, *, force: bool = False) -> bool:
+        """Fold the oldest history into a brief once the window runs full.
+
+        Elision runs first (``_trim_chat_history``); a fold happens only when
+        that was not enough, or when ``force`` says the provider already
+        refused the prompt as too long. Returns whether anything was folded.
+        """
+        self._trim_chat_history()
+        budget = self._context_budget()
+        if not force and self._history_tokens() <= budget.compact_at:
+            return False
+        keep = budget.keep
+        if force:
+            # the provider counted more than we did: our estimate is not to be
+            # trusted, so keep a quarter of what is actually there
+            keep = min(budget.keep // 2, self._history_tokens() // 4)
+        cut = compaction_cut(self._chat_history, keep)
+        if cut <= 1:
+            return False
+        folded = self._chat_history[1:cut]
+        narrative = None
+        if self._compact_narrative is None:
+            # a summary is an extra model call: scripted headless drives count
+            # their calls, so there the brief stays mechanical
+            self._compact_narrative = not self.is_headless
+        if self._compact_narrative:
+            narrative = await self._fold_narrative(operation_id, folded)
+        self._apply_fold(operation_id, cut, narrative, reason="force" if force else "auto")
+        return True
+
+    def _fold_evidence(self, operation_id: str) -> str:
+        if not operation_id:
+            return ""
+        try:
+            return self._finalization_service().evidence(operation_id).digest()
+        except Exception:  # noqa: BLE001 - a brief without records still saves the turn
+            return ""
+
+    async def _fold_narrative(self, operation_id: str, folded: list[Message]) -> str | None:
+        model_id = self.settings.get_value("model.fast") or self._active_chat_model()
+        if not model_id:
+            return None
+        messages = (
+            Message(role="system", content="You condense an agent's working history."),
+            *folded,
+            Message(role="user", content=self.translator.t("chat.compact-prompt")),
+        )
+        try:
+            response = await self._request_chat_completion(
+                operation_id,
+                model_id,
+                None,
+                (),
+                max_tokens=900,
+                messages=messages,
+                silent=True,
+            )
+        except Exception:  # noqa: BLE001 - the mechanical brief is enough
+            return None
+        if response is None:
+            return None
+        self._count_usage(response.usage)
+        return response.text.strip() or None
+
+    def _apply_fold(
+        self, operation_id: str, cut: int, narrative: str | None, *, reason: str
+    ) -> None:
+        """Replace ``history[1:cut]`` with one brief and say so."""
+        folded = self._chat_history[1:cut]
+        brief = build_brief(folded, self._fold_evidence(operation_id), narrative)
+        self._chat_history = [self._chat_history[0], brief, *self._chat_history[cut:]]
+        kept = len(self._chat_history) - 2
+        self._write_dim(
+            self.translator.t("chat.compacted", count=len(folded), kept=kept), process=False
+        )
+        if operation_id:
+            self.service.repository.append_event(
+                OperationEvent(
+                    operation_id=operation_id,
+                    event_type="chat.compact",
+                    payload={
+                        "compacted": len(folded),
+                        "kept": kept,
+                        "reason": reason,
+                        "narrative": narrative is not None,
+                    },
+                )
+            )
 
     def _thinking_start(self) -> None:
         self._thinking_depth += 1
@@ -2182,12 +2302,13 @@ class ChatController:
         max_tokens: int | None = None,
         messages: tuple[Message, ...] | None = None,
         guard_rules: bool = False,
+        silent: bool = False,
     ) -> ChatResponse | None:
         """One model round, optionally retried after an operator-rule match."""
         matcher = self._guard_matcher if guard_rules else None
         if matcher is None:
             return await self._request_model_completion(
-                operation_id, model_id, reasoning, tools, max_tokens, messages
+                operation_id, model_id, reasoning, tools, max_tokens, messages, silent=silent
             )
         for attempt in range(_MAX_GUARD_RETRIES + 1):
             matcher.begin_attempt()
@@ -2246,8 +2367,12 @@ class ChatController:
         max_tokens: int | None = None,
         messages: tuple[Message, ...] | None = None,
         guarded: bool = False,
+        silent: bool = False,
     ) -> ChatResponse | None:
-        """One provider call with inline approval handling; None = denied/failed."""
+        """One provider call with inline approval handling; None = denied/failed.
+
+        ``silent`` keeps a side call (a history fold) out of the live answer.
+        """
         approval_id: str | None = None
         delta_callback: dict[str, Any] = (
             {"on_tool_delta": self._guard_tool_delta} if guarded else {}
@@ -2263,7 +2388,11 @@ class ChatController:
                     reasoning_effort=reasoning,
                     approval_id=approval_id,
                     max_tokens=max_tokens,
-                    on_token=self._guard_stream_token if guarded else self._stream_token,
+                    on_token=(
+                        _drop_token
+                        if silent
+                        else self._guard_stream_token if guarded else self._stream_token
+                    ),
                     should_stop=lambda: self._stop_requested
                     or (
                         guarded
@@ -2508,6 +2637,7 @@ class ChatController:
         completion_judges = 0
         hypothesis_nudges = 0
         tool_calls_made = 0
+        overflow_folded = False
         self._remember(Message(role="user", content=text))
         self._begin_live_answer()
         while True:
@@ -2561,7 +2691,20 @@ class ChatController:
             except GuardBlockedError:
                 self._write_dim(self.translator.t("guard.blocked"), process=False)
                 return TerminalReason.BLOCKED
-            except ProviderUnavailableError as exc:
+            except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+                if (
+                    not overflow_folded
+                    and is_context_overflow(str(exc))
+                    and await self._maintain_context(operation_id, force=True)
+                ):
+                    # the window, not the gateway, refused: retry once on a
+                    # folded history instead of losing the turn
+                    overflow_folded = True
+                    rounds_left += 1
+                    continue
+                if not isinstance(exc, ProviderUnavailableError):
+                    self._write_line(f"[error] {exc}")
+                    return TerminalReason.MODEL_ERROR
                 # a slow or sick gateway is the common case; the operator sees
                 # the attempt counter instead of a turn that silently dies
                 if exc.auth or self._stop_requested:
@@ -2593,9 +2736,6 @@ class ChatController:
                             return TerminalReason.MODEL_ERROR
                 else:
                     continue
-            except Exception as exc:  # noqa: BLE001 - surfaced to the operator
-                self._write_line(f"[error] {exc}")
-                return TerminalReason.MODEL_ERROR
             if response is None:
                 return TerminalReason.CANCELLED if self._stop_requested else TerminalReason.DENIED
             self._count_usage(response.usage)
@@ -2754,7 +2894,7 @@ class ChatController:
             model_id, reasoning = self._apply_model_handoff(
                 operation_id, model_id, reasoning, checklist_ready=checklist_ready
             )
-            self._trim_chat_history()
+            await self._maintain_context(operation_id)
             if self._stop_requested and not self._stop_note_sent:
                 self._stop_note_sent = True
                 self._remember(Message(role="user", content=self.translator.t("chat.stop-note")))

@@ -525,6 +525,8 @@ class SamuraiApp(
         self._projects: list[str] = []
         self._proposed_plan: tuple[str, list[dict[str, object]]] | None = None
         self._ctx_tokens: int = 0
+        #: None = decide on first fold (a model-written recollection when interactive)
+        self._compact_narrative: bool | None = None
         self._sent_tokens: int = 0
         self._recv_tokens: int = 0
         self._running_tools: int = 0
@@ -2476,16 +2478,14 @@ class SamuraiApp(
             )
 
     async def _compact_history(self) -> None:
-        """Fold the oldest part of the conversation into one bounded digest."""
+        """Fold the oldest part of the conversation into one bounded brief."""
         if self._chat_busy:
             self._write_dim(self.translator.t("chat.compact-busy"))
             return
-        start = pair_safe_start(
+        cut = pair_safe_start(
             self._chat_history, max(1, len(self._chat_history) - self._COMPACT_KEEP)
         )
-        kept = self._chat_history[start:]
-        system = self._chat_history[:1]
-        older = self._chat_history[1 : len(self._chat_history) - len(kept)]
+        older = self._chat_history[1:cut]
         if not older:
             self._write_dim(self.translator.t("chat.compact-skip"))
             return
@@ -2496,20 +2496,9 @@ class SamuraiApp(
         digest = await self._summarize(older)
         if digest is None:
             return
-        self._chat_history = [
-            *system,
-            Message(role="user", content=f"[compacted]\n{digest}"),
-            *kept,
-        ]
-        self._write_dim(self.translator.t("chat.compacted", count=len(older), kept=len(kept)))
-        if self.operation is not None:
-            self.service.repository.append_event(
-                OperationEvent(
-                    operation_id=self.operation.id,
-                    event_type="chat.compact",
-                    payload={"compacted": len(older), "kept": len(kept)},
-                )
-            )
+        self._apply_fold(
+            self.operation.id if self.operation else "", cut, digest, reason="manual"
+        )
 
     async def _summarize(self, messages: list[Message]) -> str | None:
         model_id = self.models.default_model()
