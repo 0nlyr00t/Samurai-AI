@@ -1887,10 +1887,13 @@ class ChatController:
     def _trim_chat_history(self) -> None:
         """Cheap, model-free upkeep: elide old tool output, then cap the count."""
         budget = self._context_budget()
-        if self._history_tokens() > budget.elide_at:
-            self._chat_history, _saved = elide_tool_outputs(
-                self._chat_history, budget.protect
-            )
+        tokens = self._history_tokens()
+        if tokens > budget.elide_at:
+            elided, saved = elide_tool_outputs(self._chat_history, budget.protect)
+            # batch the rewrites: a small pass every round would miss the
+            # provider's prefix cache every round
+            if saved >= budget.min_elide or tokens > budget.compact_at:
+                self._chat_history = elided
         if len(self._chat_history) > self._CHAT_HISTORY_LIMIT + 1:
             # never open the kept window on a result whose call was cut away
             start = pair_safe_start(

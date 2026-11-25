@@ -36,6 +36,7 @@ def test_budget_falls_back_when_the_window_is_unknown() -> None:
     assert ContextBudget.for_limit(0).limit == FALLBACK_CONTEXT_TOKENS
     budget = ContextBudget.for_limit(10_000)
     assert (budget.elide_at, budget.compact_at, budget.keep) == (5_000, 7_000, 2_500)
+    assert budget.min_elide == 1_000
 
 
 def test_elision_keeps_the_protected_tail_and_every_pair() -> None:

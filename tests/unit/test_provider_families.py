@@ -53,7 +53,10 @@ def make_request(tools: bool = False) -> ChatRequest:
 def test_anthropic_payload_extracts_system() -> None:
     payload = build_messages_payload("claude-sonnet-4-20250514", make_request(tools=True))
     assert payload["model"] == "claude-sonnet-4-20250514"
-    assert payload["system"] == "be terse\n\nbe precise"
+    assert payload["system"] == [
+        {"type": "text", "text": "be terse\n\nbe precise", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert payload["tools"][-1]["cache_control"] == {"type": "ephemeral"}
     assert [message["role"] for message in payload["messages"]] == [
         "user",
         "assistant",

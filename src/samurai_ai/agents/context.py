@@ -37,6 +37,10 @@ COMPACT_AT = 0.7
 PROTECT_SHARE = 0.25
 #: newest share of the window a compaction keeps verbatim
 KEEP_SHARE = 0.25
+#: elide only when it frees at least this share of the window: each pass
+#: rewrites history mid-prefix (a prompt-cache miss from that point), so a
+#: pass that frees a few hundred tokens every round costs more than it saves
+MIN_ELIDE_SHARE = 0.1
 #: a result shorter than this is not worth the cache churn of eliding it
 MIN_ELIDE_TOKENS = 64
 #: the brief may not outgrow this many characters
@@ -80,6 +84,10 @@ class ContextBudget:
     @property
     def protect(self) -> int:
         return int(self.limit * PROTECT_SHARE)
+
+    @property
+    def min_elide(self) -> int:
+        return int(self.limit * MIN_ELIDE_SHARE)
 
     @property
     def keep(self) -> int:

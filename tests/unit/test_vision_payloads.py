@@ -33,7 +33,9 @@ def test_openai_attaches_a_data_uri_part() -> None:
 def test_anthropic_attaches_a_base64_source_block() -> None:
     payload = build_messages_payload("m", _request())
 
-    block = payload["messages"][0]["content"][1]
+    block = dict(payload["messages"][0]["content"][1])
+    # the newest block carries the prompt-cache breakpoint
+    assert block.pop("cache_control") == {"type": "ephemeral"}
     assert block == {
         "type": "image",
         "source": {"type": "base64", "media_type": "image/png", "data": "QUJD"},

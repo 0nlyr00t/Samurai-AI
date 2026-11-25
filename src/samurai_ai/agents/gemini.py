@@ -24,6 +24,7 @@ from samurai_ai.agents.provider import (
     ToolCall,
     Usage,
     new_call_id,
+    split_system,
     wire_messages,
 )
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
@@ -91,13 +92,10 @@ def _attach_images(contents: list[dict[str, Any]], images: tuple[ImagePart, ...]
 
 
 def build_generate_content_payload(request: ChatRequest) -> dict[str, Any]:
-    system_parts: list[str] = []
+    system_parts, conversation = split_system(wire_messages(request))
     contents: list[dict[str, Any]] = []
-    for message in wire_messages(request):
-        if message.role == "system":
-            system_parts.append(message.content)
-        else:
-            _append_merged(contents, _wire_content(message))
+    for message in conversation:
+        _append_merged(contents, _wire_content(message))
     if request.images:
         _attach_images(contents, request.images)
     payload: dict[str, Any] = {"contents": contents}
@@ -162,6 +160,8 @@ def parse_generate_content_response(
         usage=Usage(
             prompt_tokens=int(metadata.get("promptTokenCount") or 0),
             completion_tokens=int(metadata.get("candidatesTokenCount") or 0),
+            # implicit caching: already included in promptTokenCount
+            cached_tokens=int(metadata.get("cachedContentTokenCount") or 0),
         ),
         model_id=model_id,
         provider_id=provider_id,

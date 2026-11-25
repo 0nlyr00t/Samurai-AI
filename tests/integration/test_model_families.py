@@ -63,7 +63,12 @@ class _AnthropicHandler(_Base):
         if self.fail_with_500:
             return self._reply(500, {"error": {"message": "internal"}})
         request = self._read_json()
-        content = "anthropic:" + request["messages"][-1]["content"]
+        last = request["messages"][-1]["content"]
+        if isinstance(last, list):
+            # the newest turn arrives as blocks carrying the cache breakpoint
+            assert last[-1]["cache_control"] == {"type": "ephemeral"}
+            last = "".join(block.get("text", "") for block in last)
+        content = "anthropic:" + last
         self._reply(
             200,
             {
