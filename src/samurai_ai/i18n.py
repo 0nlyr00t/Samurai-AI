@@ -338,6 +338,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "subagent.started": "subagent {run} started on task {task}",
         "subagent.finished": "subagent {run} finished: {status}",
         "subagent.no-notes": "subagent {run} left no notes",
+        "subagent.report": "tool runs {runs}, findings {findings}, closed with evidence: {proven}",
+        "subagent.proven-yes": "yes",
+        "subagent.proven-no": "no",
         "subagent.no-result": "subagent produced nothing: {error}",
         "subagent.stopped": "subagent {run} ended: {status}",
         "welcome.title": "No operation open",
@@ -1389,6 +1392,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "subagent.started": "субагент {run} запущен на задаче {task}",
         "subagent.finished": "субагент {run} завершил: {status}",
         "subagent.no-notes": "субагент {run} не оставил заметок",
+        "subagent.report": (
+            "запусков {runs}, находок {findings}, закрыт с доказательствами: {proven}"
+        ),
+        "subagent.proven-yes": "да",
+        "subagent.proven-no": "нет",
         "subagent.no-result": "субагент ничего не дал: {error}",
         "subagent.stopped": "субагент {run} закончил: {status}",
         "welcome.title": "Операция не открыта",

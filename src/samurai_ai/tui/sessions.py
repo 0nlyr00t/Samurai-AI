@@ -19,6 +19,7 @@ from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentError, AgentPlanError, AgentRun, AgentRunStatus
 from samurai_ai.domain.execution import SecretRedactor
 from samurai_ai.domain.kernel import PlanTask, RiskClass, StageGate, TaskStatus
+from samurai_ai.domain.subagent_report import SubagentReport, build_report
 from samurai_ai.domain.swarm import AgentSpecialization
 
 #: A subagent hands back what it learned, not a transcript.
@@ -48,6 +49,7 @@ class SessionController:
         screen: Any
         orchestrator: Any
         kernel: Any
+        execution: Any
         settings: Any
         models: Any
         translator: Any
@@ -194,7 +196,22 @@ class SessionController:
             )
             self._write_line(self.translator.t(key, run=run.id, status=run.status.value))
             summary = self._subagent_digest(run)
-            if summary:
+            # the operator gets the gist; the model gets the records in full
+            report = self._subagent_report(run)
+            if report is not None:
+                self._write_dim(
+                    self.translator.t(
+                        "subagent.report",
+                        runs=len(report.runs) + report.runs_omitted,
+                        findings=len(report.findings),
+                        proven=self.translator.t(
+                            "subagent.proven-yes" if report.proven else "subagent.proven-no"
+                        ),
+                    )
+                )
+                for note in report.notes:
+                    self._write_dim(note)
+            elif summary:
                 self._write_dim(summary)
             else:
                 self._write_dim(self.translator.t("subagent.no-notes", run=run.id))
@@ -205,22 +222,42 @@ class SessionController:
             )
         self._refresh_chrome()
 
+    def _subagent_report(self, run: AgentRun) -> SubagentReport | None:
+        """The run as the store records it; None when a lookup fails."""
+        operation_id = run.operation_id
+        events = self.service.repository.events(operation_id)
+        try:
+            plan = self.kernel.get_current_plan(operation_id)
+            task = plan.task_by_id(run.task_id) if plan is not None else None
+            repository = self.kernel.kernel
+            return build_report(
+                run,
+                task_status=task.status if task is not None else None,
+                tool_runs=self.execution.list_runs(operation_id),
+                findings={f.id: f for f in repository.list_findings(operation_id)},
+                artifacts=repository.list_artifacts(operation_id),
+                events=[(event.event_type, event.payload) for event in events],
+                notes=Blackboard.from_events(events).visible_for(run.id),
+            )
+        except Exception:  # noqa: BLE001 - a broken lookup must not lose the hand-back
+            return None
+
     def _subagent_digest(self, run: AgentRun) -> str:
-        """What the subagent left on the blackboard, bounded and redacted."""
-        notes = Blackboard.from_events(self.service.repository.events(run.operation_id))
-        visible = list(notes.visible_for(run.id).items())[:_SPAWN_MAX_NOTES]
-        redactor = SecretRedactor()
-        lines = []
-        spent = 0
-        for key, value in visible:
-            line = f"{key}: {value}"
-            if spent + len(line) > _SPAWN_MAX_CHARS:
-                line = line[: max(0, _SPAWN_MAX_CHARS - spent)] + "…"
-            lines.append(redactor.redact(line).text)
-            spent += len(line)
-            if spent >= _SPAWN_MAX_CHARS:
-                break
-        return "\n".join(lines)
+        """The run's records from the store, then its notes; redacted.
+
+        Falls back to the bare notes when the records cannot be read.
+        """
+        report = self._subagent_report(run)
+        if report is not None:
+            text = report.render()
+        else:
+            notes = Blackboard.from_events(
+                self.service.repository.events(run.operation_id)
+            ).visible_for(run.id)
+            text = "\n".join(
+                f"{key}: {value}" for key, value in list(notes.items())[:_SPAWN_MAX_NOTES]
+            )[:_SPAWN_MAX_CHARS]
+        return SecretRedactor().redact(text).text
 
     def _hand_back(self, spawn: _Spawn, text: str, status: str = "none") -> None:
         """Feed the outcome back to the chat model; it runs on a later call."""
