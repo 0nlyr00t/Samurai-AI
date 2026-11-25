@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from samurai_ai.domain.operations import OperationEvent
-from samurai_ai.domain.reviewer import ReviewerConfig, ReviewNote
+from samurai_ai.domain.reviewer import OpenBlocker, ReviewerConfig, ReviewNote, ReviewSeverity
 from samurai_ai.services.models import ModelService
 from samurai_ai.services.operations import OperationService
 
@@ -13,6 +15,7 @@ class ReviewerService:
     DISABLED = "reviewer.disabled"
     NOTE = "reviewer.note"
     ERROR = "reviewer.error"
+    RESOLVED = "reviewer.resolved"
 
     def __init__(self, operations: OperationService, models: ModelService) -> None:
         self.operations = operations
@@ -56,12 +59,46 @@ class ReviewerService:
         )
         return True
 
-    def record_note(self, operation_id: str, note: ReviewNote, text: str) -> None:
+    def record_note(self, operation_id: str, note: ReviewNote, text: str) -> str:
+        """Journal a note; returns its id (a blocker is answered by that id)."""
+        note_id = f"rv_{uuid4().hex[:8]}"
         self.operations.repository.append_event(
             OperationEvent(
                 operation_id=operation_id,
                 event_type=self.NOTE,
-                payload={"severity": note.severity.value, "text": text},
+                payload={"id": note_id, "severity": note.severity.value, "text": text},
+            )
+        )
+        return note_id
+
+    def open_blockers(self, operation_id: str) -> list[OpenBlocker]:
+        """Blockers nobody has answered yet, oldest first."""
+        raised: dict[str, OpenBlocker] = {}
+        for event in self.operations.events(operation_id):
+            note_id = str(event.payload.get("id") or "")
+            if event.event_type == self.NOTE and note_id:
+                if event.payload.get("severity") == ReviewSeverity.BLOCKER.value:
+                    raised[note_id] = OpenBlocker(note_id, str(event.payload.get("text", "")))
+            elif event.event_type == self.RESOLVED:
+                raised.pop(str(event.payload.get("note_id") or ""), None)
+        return list(raised.values())
+
+    def resolve(self, operation_id: str, note_id: str, resolution: str, actor: str) -> None:
+        """Close an open blocker with the reason it no longer holds.
+
+        ``actor`` says who closed it: the agent answering it, or the operator
+        dismissing it. Both are journaled; only an open blocker can close.
+        """
+        resolution = resolution.strip()
+        if not resolution:
+            raise ValueError("a resolution must say how the blocker was addressed")
+        if note_id not in {blocker.id for blocker in self.open_blockers(operation_id)}:
+            raise ValueError(f"no open reviewer blocker {note_id!r}")
+        self.operations.repository.append_event(
+            OperationEvent(
+                operation_id=operation_id,
+                event_type=self.RESOLVED,
+                payload={"note_id": note_id, "resolution": resolution[:1000], "by": actor},
             )
         )
 

@@ -28,6 +28,14 @@ class ReviewerConfig:
 
 
 @dataclass(frozen=True)
+class OpenBlocker:
+    """A blocker note still waiting for an answer."""
+
+    id: str
+    text: str
+
+
+@dataclass(frozen=True)
 class ReviewNote:
     severity: ReviewSeverity
     text: str
