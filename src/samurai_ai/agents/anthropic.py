@@ -12,15 +12,19 @@ import asyncio
 import json
 import re
 import time
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from typing import Any
 
 from samurai_ai.agents.openai_compat import broker_for_base_url
 from samurai_ai.agents.provider import (
+    STREAM_RESET,
     ChatRequest,
     ChatResponse,
     ImagePart,
     Message,
     ToolCall,
+    ToolCallDelta,
     Usage,
     new_call_id,
     retry_after_seconds,
@@ -34,7 +38,7 @@ from samurai_ai.domain.models import (
     ProviderUnavailableError,
     parse_model_id,
 )
-from samurai_ai.execution.http import HttpEgressBroker
+from samurai_ai.execution.http import HttpEgressBroker, ProviderStreamError
 
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_TIMEOUT = 180.0
@@ -211,6 +215,133 @@ def parse_messages_response(
     )
 
 
+@dataclass
+class _Block:
+    kind: str
+    id: str = ""
+    name: str = ""
+    text: str = ""
+
+
+@dataclass
+class StreamedMessage:
+    """What one SSE stream of /v1/messages added up to."""
+
+    text: str = ""
+    reasoning: str = ""
+    tool_calls: tuple[ToolCall, ...] = ()
+    usage: Usage = field(default_factory=Usage)
+    stop_reason: str = ""
+
+
+def read_message_stream(
+    lines: Iterable[bytes],
+    on_token: Callable[[str], None],
+    should_stop: Callable[[], bool] | None = None,
+    on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
+) -> StreamedMessage:
+    """Fold the Messages SSE events into one answer, emitting text as it lands.
+
+    Tool input arrives as JSON fragments; each fragment is reported as the
+    cumulative raw arguments (what the stream guard matches against). A stop
+    request ends the read: what arrived is the answer. An ``error`` event is
+    raised, transient when Anthropic says it is overloaded.
+    """
+    blocks: dict[int, _Block] = {}
+    texts: list[str] = []
+    reasoning: list[str] = []
+    prompt = cache_read = cache_write = output = 0
+    stop_reason = ""
+    for raw in lines:
+        if should_stop is not None and should_stop():
+            break
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        try:
+            event = json.loads(line[5:].strip())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "message_start":
+            usage = (event.get("message") or {}).get("usage") or {}
+            prompt = int(usage.get("input_tokens") or 0)
+            cache_read = int(usage.get("cache_read_input_tokens") or 0)
+            cache_write = int(usage.get("cache_creation_input_tokens") or 0)
+            output = int(usage.get("output_tokens") or 0)
+        elif kind == "content_block_start":
+            block = event.get("content_block") or {}
+            index = int(event.get("index") or 0)
+            blocks[index] = _Block(
+                kind=str(block.get("type") or ""),
+                id=str(block.get("id") or ""),
+                name=str(block.get("name") or ""),
+            )
+        elif kind == "content_block_delta":
+            index = int(event.get("index") or 0)
+            entry = blocks.setdefault(index, _Block(kind="text"))
+            delta = event.get("delta") or {}
+            delta_kind = delta.get("type")
+            if delta_kind == "text_delta":
+                piece = str(delta.get("text") or "")
+                if piece:
+                    texts.append(piece)
+                    on_token(piece)
+            elif delta_kind == "thinking_delta":
+                reasoning.append(str(delta.get("thinking") or ""))
+            elif delta_kind == "input_json_delta":
+                entry.text += str(delta.get("partial_json") or "")
+                if on_tool_delta is not None:
+                    on_tool_delta(
+                        ToolCallDelta(
+                            index=index, id=entry.id, name=entry.name, arguments=entry.text
+                        )
+                    )
+        elif kind == "message_delta":
+            reason = (event.get("delta") or {}).get("stop_reason")
+            if isinstance(reason, str) and reason:
+                stop_reason = reason
+            usage = event.get("usage") or {}
+            output = int(usage.get("output_tokens") or output)
+        elif kind == "error":
+            error = event.get("error") or {}
+            error_type = str(error.get("type") or "error")
+            raise ProviderUnavailableError(
+                f"anthropic stream error {error_type}: {str(error.get('message') or '')[:200]}",
+                transient=error_type in ("overloaded_error", "api_error"),
+            )
+        elif kind == "message_stop":
+            break
+    calls: list[ToolCall] = []
+    for _index, block in sorted(blocks.items()):
+        if block.kind != "tool_use":
+            continue
+        try:
+            arguments = json.loads(block.text) if block.text.strip() else {}
+        except json.JSONDecodeError:
+            arguments = {}
+        calls.append(
+            ToolCall(
+                id=block.id or new_call_id(),
+                name=block.name,
+                arguments=arguments if isinstance(arguments, dict) else {},
+            )
+        )
+    return StreamedMessage(
+        text="".join(texts),
+        reasoning="".join(reasoning),
+        tool_calls=tuple(calls),
+        usage=Usage(
+            prompt_tokens=prompt + cache_read + cache_write,
+            completion_tokens=output,
+            cached_tokens=cache_read,
+        ),
+        stop_reason=stop_reason,
+    )
+
+
 class AnthropicProvider:
     def __init__(
         self,
@@ -251,6 +382,65 @@ class AnthropicProvider:
         latency_ms = int((time.monotonic() - started) * 1000)
         return parse_messages_response(
             request.model_id, self.provider.id, response, latency_ms
+        )
+
+    async def complete_stream(
+        self,
+        request: ChatRequest,
+        on_token: Callable[[str], None],
+        should_stop: Callable[[], bool] | None = None,
+        on_tool_delta: Callable[[ToolCallDelta], None] | None = None,
+    ) -> ChatResponse:
+        """The same call over SSE: text reaches the screen as it is written.
+
+        Streaming also lets the stream guard see a tool call while it is being
+        written, which a whole-answer call cannot. A gateway that does not
+        stream gets the plain call instead; an error status is classified like
+        any other answer.
+        """
+        _, model_name = parse_model_id(request.model_id)
+        payload = build_messages_payload(model_name, request)
+        payload["stream"] = True
+        started = time.monotonic()
+        sent: list[str] = []
+
+        def emit(token: str) -> None:
+            sent.append(token)
+            on_token(token)
+
+        def read() -> StreamedMessage:
+            return read_message_stream(
+                self.broker.fetch_stream(
+                    f"{self.provider.base_url}/messages",
+                    body=json.dumps(payload).encode("utf-8"),
+                    headers=self._headers(),
+                    timeout=self.timeout,
+                ),
+                emit,
+                should_stop,
+                on_tool_delta,
+            )
+
+        try:
+            streamed = await asyncio.to_thread(read)
+        except ProviderStreamError as exc:
+            self._decode(exc.status, exc.body, exc.retry_after)
+            raise
+        except ProviderUnavailableError:
+            raise
+        except Exception:
+            if sent:
+                on_token(STREAM_RESET)
+            return await self.complete(request)
+        return ChatResponse(
+            text=streamed.text,
+            tool_calls=streamed.tool_calls,
+            usage=streamed.usage,
+            model_id=request.model_id,
+            provider_id=self.provider.id,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            reasoning=streamed.reasoning,
+            stop_reason=streamed.stop_reason,
         )
 
     def _headers(self) -> dict[str, str]:
