@@ -238,3 +238,26 @@ def pair_safe_start(messages: Sequence[Message], start: int) -> int:
     while start < len(messages) and messages[start].role == "tool":
         start += 1
     return start
+
+
+def split_system(messages: Sequence[Message]) -> tuple[list[str], list[Message]]:
+    """The leading system prompt apart from the conversation that follows it.
+
+    APIs with a single top-level ``system`` field (Anthropic, Gemini) used to
+    collect *every* system message there, so a memory note added on turn five
+    jumped to the top of the prompt — out of place, and a new system prefix
+    (a full prompt-cache miss) on every turn that added one. Only the leading
+    run is the system prompt; a later one stays where it was, as a reminder.
+    """
+    system: list[str] = []
+    index = 0
+    while index < len(messages) and messages[index].role == "system":
+        system.append(messages[index].content)
+        index += 1
+    rest = [
+        Message(role="user", content=f"<system-reminder>\n{m.content}\n</system-reminder>")
+        if m.role == "system"
+        else m
+        for m in messages[index:]
+    ]
+    return system, rest

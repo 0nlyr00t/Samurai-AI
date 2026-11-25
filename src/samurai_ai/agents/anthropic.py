@@ -23,6 +23,7 @@ from samurai_ai.agents.provider import (
     ToolCall,
     Usage,
     new_call_id,
+    split_system,
     wire_messages,
 )
 from samurai_ai.domain.execution import SecretRedactor, ToolExecutionError
@@ -112,27 +113,46 @@ def _attach_images(messages: list[dict[str, Any]], images: tuple[ImagePart, ...]
         return
 
 
+#: a prompt-cache breakpoint; Anthropic caches nothing without one
+_CACHE = {"type": "ephemeral"}
+
+
+def _mark_cached(message: dict[str, Any]) -> None:
+    blocks = _blocks(message["content"])
+    if not blocks:
+        return
+    blocks[-1] = {**blocks[-1], "cache_control": _CACHE}
+    message["content"] = blocks
+
+
 def build_messages_payload(model_name: str, request: ChatRequest) -> dict[str, Any]:
-    system_parts: list[str] = []
+    """The request, with cache breakpoints on tools, system and the newest turn.
+
+    Tools and the system prompt are the stable prefix; the breakpoint on the
+    last message lets the next round read everything before it from cache, so
+    a tool loop pays full price only for the turn it just added.
+    """
+    system_parts, conversation = split_system(wire_messages(request))
     messages: list[dict[str, Any]] = []
-    for message in wire_messages(request):
-        if message.role == "system":
-            system_parts.append(message.content)
-        else:
-            _append_merged(messages, _wire_message(message))
+    for message in conversation:
+        _append_merged(messages, _wire_message(message))
     if request.images:
         _attach_images(messages, request.images)
+    if messages:
+        _mark_cached(messages[-1])
     payload: dict[str, Any] = {
         "model": model_name,
         "max_tokens": request.max_tokens or 4096,
         "messages": messages,
     }
     if system_parts:
-        payload["system"] = "\n\n".join(system_parts)
+        payload["system"] = [
+            {"type": "text", "text": "\n\n".join(system_parts), "cache_control": _CACHE}
+        ]
     if request.temperature is not None:
         payload["temperature"] = request.temperature
     if request.tools:
-        payload["tools"] = [
+        tools: list[dict[str, Any]] = [
             {
                 "name": tool.name,
                 "description": tool.description,
@@ -140,6 +160,8 @@ def build_messages_payload(model_name: str, request: ChatRequest) -> dict[str, A
             }
             for tool in request.tools
         ]
+        tools[-1]["cache_control"] = _CACHE
+        payload["tools"] = tools
     return payload
 
 
@@ -170,8 +192,12 @@ def parse_messages_response(
         text="\n".join(texts),
         tool_calls=tuple(tool_calls),
         usage=Usage(
-            prompt_tokens=int(usage.get("input_tokens") or 0),
+            # input_tokens counts only the uncached tail; the window holds all three
+            prompt_tokens=int(usage.get("input_tokens") or 0)
+            + int(usage.get("cache_read_input_tokens") or 0)
+            + int(usage.get("cache_creation_input_tokens") or 0),
             completion_tokens=int(usage.get("output_tokens") or 0),
+            cached_tokens=int(usage.get("cache_read_input_tokens") or 0),
         ),
         model_id=model_id,
         provider_id=provider_id,

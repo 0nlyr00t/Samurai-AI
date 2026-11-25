@@ -124,12 +124,71 @@ def test_anthropic_sanitises_foreign_ids_consistently() -> None:
 
 
 def test_anthropic_plain_turns_keep_their_shape() -> None:
-    history = (Message(role="user", content="a"), Message(role="assistant", content="b"))
+    history = (
+        Message(role="user", content="a"),
+        Message(role="assistant", content="b"),
+        Message(role="user", content="c"),
+    )
     messages = build_messages_payload("m", _request(history))["messages"]
-    assert messages == [
+    assert messages[:2] == [
         {"role": "user", "content": "a"},
         {"role": "assistant", "content": "b"},
     ]
+    # only the newest turn becomes blocks, to carry the cache breakpoint
+    assert messages[2]["content"] == [
+        {"type": "text", "text": "c", "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+def test_only_the_leading_system_prompt_is_lifted() -> None:
+    history = (
+        Message(role="system", content="core"),
+        Message(role="user", content="go"),
+        Message(role="system", content="memory: port 22"),
+        Message(role="assistant", content="ok"),
+    )
+    payload = build_messages_payload("m", _request(history))
+    assert payload["system"][0]["text"] == "core"
+    messages = payload["messages"]
+    assert messages[0] == {"role": "user", "content": "go"}
+    assert messages[1] == {
+        "role": "user",
+        "content": "<system-reminder>\nmemory: port 22\n</system-reminder>",
+    }
+    contents = build_generate_content_payload(_request(history))
+    assert contents["systemInstruction"]["parts"][0]["text"] == "core"
+    assert "memory: port 22" in contents["contents"][1]["parts"][0]["text"]
+
+
+def test_cache_usage_is_reported() -> None:
+    from samurai_ai.agents.anthropic import parse_messages_response
+
+    response = parse_messages_response(
+        "m",
+        "p",
+        {
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {
+                "input_tokens": 10,
+                "cache_read_input_tokens": 900,
+                "cache_creation_input_tokens": 90,
+                "output_tokens": 5,
+            },
+        },
+        0,
+    )
+    assert response.usage.prompt_tokens == 1000
+    assert response.usage.cached_tokens == 900
+    gemini = parse_generate_content_response(
+        "m",
+        "p",
+        {
+            "candidates": [{"content": {"parts": [{"text": "x"}]}}],
+            "usageMetadata": {"promptTokenCount": 100, "cachedContentTokenCount": 60},
+        },
+        0,
+    )
+    assert gemini.usage.cached_tokens == 60
 
 
 def test_gemini_payload_replays_calls_with_signatures() -> None:
