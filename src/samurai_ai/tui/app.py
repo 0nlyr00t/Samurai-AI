@@ -1489,11 +1489,17 @@ class SamuraiApp(
 
     def _apply_proposed_plan(self) -> None:
         """Turn the model's proposal into the operation's plan and approve it."""
-        from samurai_ai.domain.kernel import PlanTask, RiskClass
+        from samurai_ai.domain.kernel import PlanTask, RiskClass, TaskOutcomeKind
+        from samurai_ai.domain.workload import is_document_objective
 
         if self.operation is None:
             self._write_line("[error] " + self.translator.t("status.no-operation"))
             return
+        outcome = (
+            TaskOutcomeKind.EVIDENCE
+            if is_document_objective(self._operation_goal(self.operation.id))
+            else TaskOutcomeKind.FINDING
+        )
         proposal = getattr(self, "_proposed_plan", None)
         if not proposal:
             self._write_dim(self.translator.t("plan.no-proposal"))
@@ -1515,6 +1521,7 @@ class SamuraiApp(
                     depends_on=tuple(
                         str(dep) for dep in entry.get("depends_on", []) if str(dep)
                     ),
+                    outcome=outcome,
                 )
             )
         current = self.kernel.get_current_plan(self.operation.id)
@@ -2429,6 +2436,16 @@ class SamuraiApp(
             self.goals.resume_finalization(goal.id)
             self._start_chat(self.translator.t("finalize.prompt"))
             return
+        goal = self._current_goal()
+        if goal is not None and goal.block_code:
+            self._write_dim(
+                self.translator.t(
+                    "chat.finalization-detail",
+                    code=goal.block_code,
+                    recovery=goal.recovery,
+                ),
+                process=False,
+            )
         snapshot = self._finalization_service().snapshot(self.operation.id)
         eligible = ", ".join(snapshot.eligible_fact_ids) or "-"
         unresolved = ", ".join(snapshot.unresolved_ids) or "-"

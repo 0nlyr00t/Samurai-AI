@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from samurai_ai.domain.goal import DEFAULT_BUDGET_SECONDS, DEFAULT_BUDGET_STEPS, GoalState
+from samurai_ai.domain.goal import (
+    DEFAULT_BUDGET_SECONDS,
+    DEFAULT_BUDGET_STEPS,
+    GoalError,
+    GoalState,
+)
 from samurai_ai.domain.operations import Operation, OperationMode
 from samurai_ai.domain.scope import ScopeContract
 from samurai_ai.services.goals import GoalNotFoundError, GoalService
@@ -64,6 +69,49 @@ def test_second_goal_is_queued_and_promoted_on_complete(tmp_path) -> None:  # ty
     service.complete(first.id)
     promoted = service.get(second.id)
     assert promoted.state is GoalState.ACTIVE
+
+
+def test_goal_lineage_preserves_the_original_evidence_window(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, _repo, _operations, operation = make_service(tmp_path)
+    root = service.create(operation.id, "research the documentation")
+    service.complete(root.id)
+
+    child = service.create(
+        operation.id,
+        root.objective,
+        parent_goal_id=root.id,
+    )
+
+    assert child.parent_goal_id == root.id
+    assert service.evidence_since(child) == root.created_at
+    independent = service.create(operation.id, "a different objective")
+    assert independent.parent_goal_id == ""
+    assert service.evidence_since(independent) == independent.created_at
+    other = _operations.create(
+        "Another operation", OperationMode.RED_TEAM, ScopeContract(includes=("example.com",))
+    )
+    with pytest.raises(GoalError, match="same operation"):
+        service.create(other.id, "borrow proof", parent_goal_id=root.id)
+
+
+def test_block_metadata_survives_restart_and_clears_on_resume(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, _repo, _operations, operation = make_service(tmp_path)
+    goal = service.create(operation.id, "probe")
+
+    blocked = service.block(
+        goal.id,
+        "finalization_required",
+        code="budget_exhausted",
+        recovery="/goal extend 40 1800",
+    )
+    assert blocked.block_code == "budget_exhausted"
+    assert blocked.recovery == "/goal extend 40 1800"
+    assert service.get(goal.id).block_code == "budget_exhausted"
+
+    resumed = service.resume(goal.id)
+    assert resumed.block_reason == ""
+    assert resumed.block_code == ""
+    assert resumed.recovery == ""
 
 
 def test_clock_only_advances_while_active(tmp_path) -> None:  # type: ignore[no-untyped-def]

@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 
-from samurai_ai.domain.goal import Goal, GoalState
+from samurai_ai.domain.goal import (
+    DEFAULT_BUDGET_SECONDS,
+    DEFAULT_BUDGET_STEPS,
+    Goal,
+    GoalState,
+)
 from samurai_ai.services.goals import GoalNotFoundError, GoalService
 
 _JSON = "--json"
@@ -106,8 +111,13 @@ def _create(args: argparse.Namespace, goals: GoalService, json_output: bool) -> 
         args.operation_id,
         args.objective,
         finish_line=args.finish_line,
+        budget_steps=args.budget_steps
+        if args.budget_steps is not None
+        else DEFAULT_BUDGET_STEPS,
+        budget_seconds=args.budget_seconds
+        if args.budget_seconds is not None
+        else DEFAULT_BUDGET_SECONDS,
         queue=args.queue,
-        **_budgets(args),
     )
     _emit(goal, json_output)
     return 0

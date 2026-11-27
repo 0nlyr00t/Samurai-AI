@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import datetime
 
 from samurai_ai.domain.completion import CompletionCriterion, CompletionCriterionError
 from samurai_ai.domain.goal import (
@@ -51,9 +52,14 @@ class GoalService:
         budget_steps: int = DEFAULT_BUDGET_STEPS,
         budget_seconds: int = DEFAULT_BUDGET_SECONDS,
         queue: bool = False,
+        parent_goal_id: str = "",
     ) -> Goal:
         """Create a goal; ``queue`` puts it behind the current one."""
         self._require_operation(operation_id)
+        if parent_goal_id:
+            parent = self.get(parent_goal_id)
+            if parent.operation_id != operation_id:
+                raise GoalError("a follow-up goal must stay in the same operation")
         try:
             # a typo in a requirement must fail now, not at the finish line
             CompletionCriterion.parse(finish_line)
@@ -67,6 +73,7 @@ class GoalService:
             budget_steps=budget_steps,
             budget_seconds=budget_seconds,
             state=state,
+            parent_goal_id=parent_goal_id,
         )
         self.goals.add(
             goal,
@@ -99,6 +106,17 @@ class GoalService:
     def reached(self, operation_id: str) -> bool:
         """A completed goal stays reached after it leaves the active-goal view."""
         return any(goal.state is GoalState.COMPLETE for goal in self.goals.list(operation_id))
+
+    def evidence_since(self, goal: Goal) -> datetime:
+        """Start of the proof window, following only explicit follow-up links."""
+        current = goal
+        seen: set[str] = set()
+        while current.parent_goal_id:
+            if current.id in seen:
+                raise GoalError(f"goal lineage contains a cycle at {current.id}")
+            seen.add(current.id)
+            current = self.get(current.parent_goal_id)
+        return current.created_at
 
     # --- transitions ------------------------------------------------------
 
@@ -138,12 +156,50 @@ class GoalService:
             },
         )
 
-    def block(self, goal_id: str, reason: str) -> Goal:
+    def block(
+        self,
+        goal_id: str,
+        reason: str,
+        *,
+        code: str = "",
+        recovery: str = "",
+    ) -> Goal:
         goal = self.get(goal_id)
         expected = goal.version
         self._accrue(goal)
         goal.block(reason)
-        return self._save(goal, expected, "goal.blocked", {"reason": goal.block_reason})
+        goal.block_code = code.strip()[:64]
+        goal.recovery = recovery.strip()[:500]
+        return self._save(
+            goal,
+            expected,
+            "goal.blocked",
+            {
+                "reason": goal.block_reason,
+                "code": goal.block_code,
+                "recovery": goal.recovery,
+            },
+        )
+
+    def annotate_block(self, goal_id: str, *, code: str, recovery: str) -> Goal:
+        """Add recovery metadata to an existing wait without another transition."""
+        goal = self.get(goal_id)
+        if goal.state is not GoalState.BLOCKED:
+            raise GoalError(f"cannot annotate a block from {goal.state.value}")
+        expected = goal.version
+        goal.block_code = code.strip()[:64]
+        goal.recovery = recovery.strip()[:500]
+        goal.touch()
+        return self._save(
+            goal,
+            expected,
+            "goal.blocked",
+            {
+                "reason": goal.block_reason,
+                "code": goal.block_code,
+                "recovery": goal.recovery,
+            },
+        )
 
     def complete(self, goal_id: str) -> Goal:
         return self._finish(goal_id, complete=True)

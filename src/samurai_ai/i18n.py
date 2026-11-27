@@ -881,6 +881,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.goal-judge-failed": "[goal] judge unavailable, falling back to the counter",
         "chat.finalization-required": "[goal] operator finalization required: /finalize",
+        "chat.finalization-detail": "[goal] {code}: {recovery}",
         "chat.domain-summary": (
             "[summary] findings={findings} · hypotheses={closed}/{total} · artifacts={artifacts}"
         ),
@@ -1990,6 +1991,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat.goal-judge-failed": "[цель] оценщик недоступен, работает счётчик",
         "chat.finalization-required": "[цель] нужна финализация оператором: /finalize",
+        "chat.finalization-detail": "[цель] {code}: {recovery}",
         "chat.domain-summary": (
             "[итог] findings={findings} · hypotheses={closed}/{total} · artifacts={artifacts}"
         ),

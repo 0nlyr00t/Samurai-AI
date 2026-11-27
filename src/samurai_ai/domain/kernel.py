@@ -113,6 +113,13 @@ def _validate_requirements(value: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(requirements)
 
 
+class TaskOutcomeKind(StrEnum):
+    """Evidence a task must produce; the default preserves attack-task guards."""
+
+    FINDING = "finding"
+    EVIDENCE = "evidence"
+
+
 class PlanTask(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
@@ -123,6 +130,7 @@ class PlanTask(BaseModel):
     risk_class: RiskClass = RiskClass.R0
     depends_on: tuple[str, ...] = ()
     required_artifacts: tuple[str, ...] = ()
+    outcome: TaskOutcomeKind = TaskOutcomeKind.FINDING
 
     @field_validator("id")
     @classmethod

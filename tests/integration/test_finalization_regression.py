@@ -248,6 +248,43 @@ def test_open_intent_blocks_fresh_task_completion(
     assert intent.open
 
 
+def test_evidence_task_can_close_with_positive_facts_and_no_vulnerability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SAMURAI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SAMURAI_VAULT_KEY", "ab" * 32)
+    services = cli._make_services(None)
+    operations, kernel = services[0], services[1]
+    operation = operations.create(
+        "Document answer lab", OperationMode.BUG_BOUNTY, ScopeContract(includes=("docs.internal",))
+    )
+    kernel.create_plan(
+        operation.id,
+        "Documentation review",
+        [PlanTask(id="answer", title="Answer the documented question", outcome="evidence")],
+        [],
+    )
+    kernel.start_task(operation.id, "answer")
+    graph = GraphService(operations, kernel, GraphRepository(operations.repository.database))
+    root = graph.origin(operation.id, "answer", "Documentation")
+    intent = graph.open_intent(operation.id, "answer", "Read the API reference", root.id)
+    artifact = kernel.register_artifact(
+        operation.id, ArtifactKind.COMMAND_OUTPUT, "documented API response", task_id="answer"
+    )
+    graph.start_intent(intent.id)
+    graph.record_fact(intent.id, "the documented retry intervals are 1m, 5m, 30m", (artifact.id,))
+    graph.close_intent(intent.id, "done")
+
+    plan = kernel.complete_task(operation.id, "answer", no_finding="no vulnerability sought")
+
+    assert plan.task_by_id("answer").status is TaskStatus.DONE
+
+    kernel.reset_task(operation.id, "answer")
+    kernel.start_task(operation.id, "answer")
+    plan = kernel.complete_task(operation.id, "answer")
+    assert plan.task_by_id("answer").status is TaskStatus.DONE
+
+
 def test_no_finding_cannot_override_positive_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

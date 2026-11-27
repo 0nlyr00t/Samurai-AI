@@ -267,6 +267,8 @@ def test_a_do_nothing_turn_does_not_report_completed(tmp_path: Path) -> None:
             assert app._last_turn_reason is TerminalReason.BLOCKED
             assert app.goals.current(operation.id) is not None
             assert app.goals.current(operation.id).block_reason == "finalization_required"
+            assert app.goals.current(operation.id).block_code == "judge_continue"
+            assert app.goals.current(operation.id).recovery
             retries = [
                 message
                 for message in app._chat_history
@@ -310,6 +312,113 @@ def test_new_message_resumes_blocked_finalization(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_completed_goal_follow_up_keeps_proof_lineage(tmp_path: Path) -> None:
+    stack = _minimal_stack(tmp_path)
+    stack[2].set_locale("en")
+    operation = stack[0].create(
+        "Goal lineage", OperationMode.BUG_BOUNTY, ScopeContract(includes=("target.dev",))
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.domain.kernel import ArtifactKind
+        from samurai_ai.tui.app import SamuraiApp
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            objective = "Read the documentation and answer all 10 questions"
+            app.operation = app.service.set_goal(operation.id, objective, automatic=True)
+            parent = app.goals.create(operation.id, objective)
+
+            task_id = app._graph_task("Answer the documented question")
+            root = app.graph.origin(operation.id, task_id, "Documentation")
+            intent = app.graph.open_intent(
+                operation.id, task_id, "Find the documented answer", root.id
+            )
+            artifact = stack[1].register_artifact(
+                operation.id, ArtifactKind.COMMAND_OUTPUT, "documented answer", task_id=task_id
+            )
+            app.graph.start_intent(intent.id)
+            app.graph.record_fact(intent.id, "the answer is proven", (artifact.id,))
+            app.graph.close_intent(intent.id, "done")
+            app.goals.complete(parent.id)
+
+            app._adopt_goal("continue")
+            child = app.goals.current(operation.id)
+            assert child is not None
+            assert child.parent_goal_id == parent.id
+            assert app.goals.evidence_since(child) == parent.created_at
+            assert app._missing_proof(operation.id) == ()
+
+            app.goals.cancel(child.id)
+            app._adopt_goal("continue")
+            independent = app.goals.current(operation.id)
+            assert independent is not None
+            assert independent.parent_goal_id == ""
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
+class _ClosingProvider:
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["test-model"]
+
+    async def complete(self, request):  # type: ignore[no-untyped-def]
+        from samurai_ai.agents.provider import ChatResponse, Usage
+
+        self.requests.append(request)
+        text = (
+            "stop"
+            if request.max_tokens is not None and request.max_tokens <= 8
+            else "closing"
+        )
+        return ChatResponse(
+            text=text,
+            usage=Usage(prompt_tokens=1, completion_tokens=1),
+            model_id=request.model_id,
+            provider_id="gpt",
+            latency_ms=1,
+        )
+
+
+def test_finalizing_continue_allows_only_closing_tools(tmp_path: Path) -> None:
+    provider = _ClosingProvider()
+    stack = _chat_stack(tmp_path, provider)
+    operation = stack[0].create(
+        "Closing boundary", OperationMode.BUG_BOUNTY, ScopeContract(includes=())
+    )
+
+    async def exercise() -> None:
+        from samurai_ai.tui.app import SamuraiApp
+
+        app = SamuraiApp(*stack, operation.id)
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            goal = app.goals.create(operation.id, "research example.co.uk")
+            app.goals.begin_finalization(goal.id)
+            await app._chat("continue please", "gpt/test-model@v1", None)
+            offered = [
+                spec.name
+                for request in provider.requests
+                for spec in getattr(request, "tools", ())
+            ]
+            assert "shell_exec" not in offered
+            assert "open_intent" not in offered
+            assert app.goals.current(operation.id).block_code == "proof_missing"
+            await pilot.press("ctrl+c")
+            await pilot.press("ctrl+c")
+
+    asyncio.run(exercise())
+
+
 def test_exhausted_goal_still_requires_explicit_budget_extension(tmp_path: Path) -> None:
     provider = _NarratingProvider()
     stack = _chat_stack(tmp_path, provider)
@@ -330,6 +439,8 @@ def test_exhausted_goal_still_requires_explicit_budget_extension(tmp_path: Path)
             await app._chat("continue please", "gpt/test-model@v1", None)
             assert provider.calls == before
             assert app.goals.current(operation.id).block_reason == "finalization_required"
+            assert app.goals.current(operation.id).block_code == "budget_exhausted"
+            assert "/goal extend" in app.goals.current(operation.id).recovery
             assert not any(
                 event.event_type == "goal.resumed"
                 for event in stack[0].events(operation.id)

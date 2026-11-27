@@ -18,9 +18,16 @@ from samurai_ai.agents.blackboard import Blackboard
 from samurai_ai.agents.provider import Message
 from samurai_ai.domain.agents import AgentError, AgentPlanError, AgentRun, AgentRunStatus
 from samurai_ai.domain.execution import SecretRedactor
-from samurai_ai.domain.kernel import PlanTask, RiskClass, StageGate, TaskStatus
+from samurai_ai.domain.kernel import (
+    PlanTask,
+    RiskClass,
+    StageGate,
+    TaskOutcomeKind,
+    TaskStatus,
+)
 from samurai_ai.domain.subagent_report import SubagentReport, build_report
 from samurai_ai.domain.swarm import AgentSpecialization
+from samurai_ai.domain.workload import is_document_objective
 
 #: A subagent hands back what it learned, not a transcript.
 _SPAWN_MAX_NOTES = 8
@@ -94,6 +101,11 @@ class SessionController:
             id=f"sub-{uuid4().hex[:8]}",
             title=instruction[:200],
             risk_class=RiskClass.R2,
+            outcome=(
+                TaskOutcomeKind.EVIDENCE
+                if is_document_objective(instruction)
+                else TaskOutcomeKind.FINDING
+            ),
         )
         self.kernel.create_plan(
             operation_id,

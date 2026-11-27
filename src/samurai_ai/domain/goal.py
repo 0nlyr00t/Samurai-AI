@@ -76,6 +76,12 @@ class Goal(BaseModel):
     spent_seconds: int = Field(default=0, ge=0)
     state: GoalState = GoalState.ACTIVE
     block_reason: str = ""
+    #: stable machine detail behind the compatible broad block_reason
+    block_code: str = Field(default="", max_length=64)
+    #: concrete next action shown to the operator
+    recovery: str = Field(default="", max_length=500)
+    #: previous goal whose proven facts remain valid for this follow-up
+    parent_goal_id: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     version: int = Field(default=1, ge=1)
@@ -120,6 +126,8 @@ class Goal(BaseModel):
             # the model validator rejects a stray reason on a non-blocked goal,
             # and assignments validate, so clear it before changing the state
             self.block_reason = ""
+            self.block_code = ""
+            self.recovery = ""
         self.state = target
 
     def begin_finalization(self) -> None:
@@ -143,6 +151,8 @@ class Goal(BaseModel):
         if GoalState.BLOCKED not in _TRANSITIONS[self.state]:
             raise GoalStateError(f"cannot block goal in state {self.state}")
         self.block_reason = reason.strip()[:MAX_OBJECTIVE]
+        self.block_code = ""
+        self.recovery = ""
         self.state = GoalState.BLOCKED
         self.touch()
 

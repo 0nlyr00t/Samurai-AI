@@ -33,6 +33,7 @@ from samurai_ai.domain.kernel import (
     RiskClass,
     StageGate,
     TaskEvidenceError,
+    TaskOutcomeKind,
     TaskStateError,
     TaskStatus,
 )
@@ -218,7 +219,15 @@ class KernelService:
             raise TaskEvidenceError(
                 f"task {task_id} has open intents: {', '.join(open_intents)}"
             )
-        if no_finding.strip() and self._task_has_positive_facts(task_id):
+        if no_finding.strip() and self._task_has_finding(operation_id, task_id):
+            raise TaskEvidenceError(
+                f"task {task_id} already has a finding; no_finding contradicts it"
+            )
+        if (
+            no_finding.strip()
+            and task.outcome is TaskOutcomeKind.FINDING
+            and self._task_has_positive_facts(task_id)
+        ):
             raise TaskEvidenceError(
                 f"task {task_id} has positive artifact-backed facts; "
                 "no_finding cannot override evidence"
@@ -228,6 +237,10 @@ class KernelService:
                 f"task {task_id} has no evidence: run a tool, record a fact with an "
                 "artifact id, or propose a finding — or close it with force"
             )
+        if task.outcome is TaskOutcomeKind.EVIDENCE:
+            # An evidence-backed answer or recon map is a complete result even
+            # when it contains no vulnerability finding.
+            return
         if not no_finding.strip() and not self._task_has_finding(operation_id, task_id):
             raise TaskEvidenceError(
                 f"task {task_id} produced no finding: propose_finding with an artifact "

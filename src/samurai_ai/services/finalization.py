@@ -159,7 +159,7 @@ class FinalizationService:
             self.graph.for_operation(operation_id),
             self.kernel.kernel.list_findings(operation_id),
             self.kernel.kernel.list_artifacts(operation_id),
-            since=goal.created_at if goal is not None else None,
+            since=self.goals.evidence_since(goal) if goal is not None else None,
         )
 
     def missing_proof(self, operation_id: str) -> tuple[str, ...]:

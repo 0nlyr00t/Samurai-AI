@@ -135,7 +135,10 @@ Retry-бюджет ограничен, исчерпание оставляет `
 artifact, атомарное оформление результата/finding и итоговый вывод, но не новые
 attack tools или исследования. Разрешена одна write-only попытка и один итоговый
 ответ; незакрытая работа или неясный verdict переводит goal в
-`BLOCKED/finalization_required` и ждёт оператора без model calls. Явное
+`BLOCKED/finalization_required` и ждёт оператора без model calls. Additive
+`block_code` и `recovery` различают исчерпанный budget, verdict судьи,
+недостающее доказательство и открытую работу; журнал и `/finalize` показывают
+их, не меняя совместимый block reason. Явное
 `/finalize resume` продолжает closing path после разрешения блокеров; новое
 сообщение оператора в чате при оставшемся budget означает продолжить
 исследование и переводит goal в ACTIVE. Исчерпание budget не обходится этим
@@ -146,9 +149,18 @@ attack tools или исследования. Разрешена одна write-
 `FinalizationService.snapshot` перечисляет eligible artifact-backed facts,
 unresolved hypotheses и pending execution/approvals. Finding создаётся только из
 eligible fact; record result → finding/evidence → close intent выполняется в одном
-UnitOfWork с rollback. Завершение plan task запрещено с открытыми intents, а
-`no_finding` не может перечеркнуть positive artifact-backed facts. Для оформления
-существующих узлов новый план и `/applyplan` не требуются.
+UnitOfWork с rollback. Завершение plan task запрещено с открытыми intents.
+`PlanTask.outcome=finding` сохраняет запрет `no_finding` при positive
+artifact-backed facts, чтобы подтверждённую уязвимость нельзя было стереть.
+`outcome=evidence` для document/recon требует тех же закрытых intents и bound
+evidence, но допускает ответ без vulnerability finding. `no_finding` означает
+отсутствие уязвимости, а не отсутствие результата; существующий finding
+противоречит ему при любом outcome. Для оформления существующих узлов новый план
+и `/applyplan` не требуются.
+
+Цель после COMPLETED может быть follow-up с `parent_goal_id` той же операции.
+`evidence_since` идёт по этой цепочке с защитой от цикла, поэтому продолжение
+не обнуляет доказательное окно. Независимая цель lineage не получает.
 
 ## Граница
 

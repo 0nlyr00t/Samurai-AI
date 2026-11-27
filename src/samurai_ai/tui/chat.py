@@ -72,6 +72,7 @@ from samurai_ai.domain.kernel import (
     KernelError,
     PlanTask,
     RiskClass,
+    TaskOutcomeKind,
     TaskStatus,
 )
 from samurai_ai.domain.memory import MAX_MEMORY_TITLE_CHARS, MemoryKind
@@ -105,6 +106,7 @@ from samurai_ai.domain.stream_rules import (
 )
 from samurai_ai.domain.swarm import AgentSpecialization
 from samurai_ai.domain.traffic import TrafficError
+from samurai_ai.domain.workload import is_document_objective
 from samurai_ai.execution.native import MissingBinaryError
 from samurai_ai.i18n import Translator
 from samurai_ai.services import goal_judge, title_smith
@@ -180,6 +182,14 @@ _REVIEWER_BATCH_CHARS = 24_000
 #: exists gets judged before it may end; this many times per turn at most
 _MAX_COMPLETION_JUDGES = 2
 _MAX_HYPOTHESIS_NUDGES = 2
+
+_BLOCK_RECOVERY = {
+    "budget_exhausted": "/goal extend 40 1800, then continue",
+    "judge_continue": "review the finish line and the missing proof",
+    "judge_unavailable": "retry with /finalize resume",
+    "proof_missing": "record bound proof, then /finalize resume",
+    "work_open": "close the listed work, then /finalize resume",
+}
 
 
 def _id_list(raw: object) -> tuple[str, ...]:
@@ -1492,9 +1502,26 @@ class ChatController:
             Message(role="user", content=self.translator.t("chat.stagnant-note", direction=shape))
         )
 
+    def _strategist_allowed(self, operation_id: str) -> bool:
+        """Auxiliary attack work needs a relevant objective and a real reserve."""
+        goal = self.goals.current(operation_id)
+        objective = (
+            goal.objective if goal is not None else self._operation_goal(operation_id)
+        )
+        if is_document_objective(objective):
+            return False
+        if goal is None:
+            return True
+        if goal.state is not GoalState.ACTIVE:
+            return False
+        return goal.steps_left > 5 and goal.seconds_left > 60
+
     async def _maybe_spawn_strategist(self, fact_summary: str) -> None:
         """fact.confirmed → the strategist re-reads the map and proposes vectors."""
         if self.operation is None or self._strategist_spawned_turn:
+            return
+        if not self._strategist_allowed(self.operation.id):
+            self._strategist_spawned_turn = True
             return
         self._strategist_spawned_turn = True
         instruction = self.translator.t("strategist.review-task", fact=fact_summary[:200])
@@ -2626,14 +2653,37 @@ class ChatController:
         self._flush_guard_text_reminder()
 
     def _block_finalization(
-        self, operation_id: str, response: ChatResponse | None = None
+        self,
+        operation_id: str,
+        response: ChatResponse | None = None,
+        *,
+        code: str = "work_open",
     ) -> TerminalReason:
         if response is not None:
             self._present_final_response(response)
         goal = self.goals.current(operation_id)
-        if goal is not None and goal.state is not GoalState.BLOCKED:
-            self.goals.block(goal.id, "finalization_required")
+        if goal is not None:
+            if goal.exhausted and code == "work_open":
+                code = "budget_exhausted"
+            recovery = _BLOCK_RECOVERY[code]
+            if goal.state is GoalState.BLOCKED:
+                self.goals.annotate_block(goal.id, code=code, recovery=recovery)
+            else:
+                self.goals.block(
+                    goal.id,
+                    "finalization_required",
+                    code=code,
+                    recovery=recovery,
+                )
         self._write_dim(self.translator.t("chat.finalization-required"), process=False)
+        self._write_dim(
+            self.translator.t(
+                "chat.finalization-detail",
+                code=code,
+                recovery=_BLOCK_RECOVERY[code],
+            ),
+            process=False,
+        )
         return TerminalReason.BLOCKED
 
     def _write_domain_summary(self, operation_id: str) -> None:
@@ -2697,7 +2747,14 @@ class ChatController:
                 ) is TerminalReason.COMPLETED:
                     # remembered: the next turn must know what proof is missing
                     self._report_unproven(operation_id, remember=True)
-                return self._block_finalization(operation_id)
+                return self._block_finalization(
+                    operation_id,
+                    code={
+                        CompletionDecision.CONTINUE: "judge_continue",
+                        CompletionDecision.UNPROVEN: "proof_missing",
+                        CompletionDecision.UNAVAILABLE: "judge_unavailable",
+                    }.get(decision, "work_open"),
+                )
         reason = self._completion_reason(operation_id, runs_at_start, findings_at_start)
         if reason is TerminalReason.COMPLETED:
             self._mark_goal_reached(operation_id)
@@ -3125,7 +3182,20 @@ class ChatController:
         existing = self._operation_goal(self.operation.id)
         if existing:
             if self.goals.current(self.operation.id) is None:
-                self.goals.create(self.operation.id, existing)
+                history = self.goals.list(self.operation.id)
+                previous = history[-1] if history else None
+                parent_id = (
+                    previous.id
+                    if previous is not None
+                    and previous.state is GoalState.COMPLETE
+                    and previous.objective == existing
+                    else ""
+                )
+                self.goals.create(
+                    self.operation.id,
+                    existing,
+                    parent_goal_id=parent_id,
+                )
             return
         objective = (self.operation.objective or "").strip()
         derived = objective or " ".join(text.split())[:300]
@@ -3881,7 +3951,17 @@ class ChatController:
                 if task.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
                     return str(task.id)
             raise GraphInvariantError(self.translator.t("graph.no-free-task"))
-        task = PlanTask(id=f"chat-{uuid4().hex[:8]}", title=title[:200], risk_class=RiskClass.R2)
+        outcome = (
+            TaskOutcomeKind.EVIDENCE
+            if is_document_objective(self._operation_goal(self.operation.id))
+            else TaskOutcomeKind.FINDING
+        )
+        task = PlanTask(
+            id=f"chat-{uuid4().hex[:8]}",
+            title=title[:200],
+            risk_class=RiskClass.R2,
+            outcome=outcome,
+        )
         self.kernel.create_plan(
             self.operation.id, self.translator.t("graph.plan-title"), [task], []
         )
